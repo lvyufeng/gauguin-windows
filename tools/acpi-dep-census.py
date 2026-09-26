@@ -326,7 +326,10 @@ def main():
     hid.DEFAULT_TREE = tree
     hid.DEFAULT_CACHE = cache
 
-    all_files = hid.table_files(tree)
+    # `keep_self=True`: this tool drops our table itself, by the stem of
+    # `--asl`, and that is the rule its `--keep-self` framing is written
+    # against. The module's own filter would make the flag a no-op.
+    all_files = hid.table_files(tree, keep_self=True)
     # The platform directory our table is filed under is its own stem, the same
     # rule the other two tools drop by.
     drop = None if args.keep_self else \

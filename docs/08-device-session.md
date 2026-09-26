@@ -30508,3 +30508,80 @@ P3 plan leans on and which this defect could have been hiding. It was not.
 | corrects | the tool's output, and the five prose counts in its own docstring; it also corrects the assumption that Step 4.58's and Step 4.94's numbers are reproducible today by re-running the tools, because an unfiltered glob makes the answer depend on how much of the DSDT we have written |
 | does not close | the `_HID` work itself, which is unchanged; the plan's own P3 item-1 status line, which lists "the pins of the two TSENS controllers" as open when the corpus's 65 tables contain no TSENS device at all, and which is the next thing to reconcile against the tree; the device-side half of everything |
 | not an action | nothing was built, flashed or written to any partition; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN are untouched; the porting goal is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and P5's peripherals not begun |
+
+## Step 4.148 — step 4.147's fix was correct in the module it was written in and silently deleted the second framing of the four tools that load that module, each of which prints both framings *because* the difference between them is its own subject
+
+Step 4.147 gave `tools/acpi-hid-census.py`'s `table_files()` a filter: our own
+generated `Platforms/Xiaomi/gauguin/DSDT.aml` is no longer part of the corpus,
+by absolute path. That is right for the module, and it was done in the wrong
+place for four of its five consumers. `table_files()` is not a private helper.
+Four tools in `tools/` `load()` this module to get the corpus and then do their
+**own** exclusion, each with its own `--asl` and its own `--keep-self`:
+
+| tool | how it drops our table |
+|---|---|
+| `tools/acpi-dep-census.py` | the directory stem of `--asl`, matched against `os.path.dirname(rel)` |
+| `tools/acpi-adc-blob-census.py` | the same stem rule |
+| `tools/acpi-usb-pair-census.py` | the same stem rule, with a comment saying so |
+| `tools/acpi-order-votes.py` | `-{drop}-` in the *disassembled* basename, which is the `.dsl` `iasl` writes |
+
+With the file already gone before the drop runs, each of those drops has nothing
+to drop. Measured 2026-09-27 on the state committed as Step 4.147: all four
+printed the same corpus with and without `--keep-self`, and the flag that turns
+the exclusion off turned nothing off. `tools/acpi-dep-census.py` and
+`tools/acpi-dep-census.py --keep-self` were byte-identical in their corpus line
+and their tables — `corpus: 65 tables` twice — where the plan's own record of
+that tool says the second framing is *"I2C/IC 55 nodes and 43 `{PEP0}` → 58 and
+46, UART 34 and 31 → 35 and 32"*.
+
+That is the same defect Step 4.147 had just fixed, one level out, and it has the
+same tell: every one of those four tools documents a second framing in its
+docstring and in its `--keep-self` help text, and after 4.147 none of them could
+print it. The prose promised a number the code could no longer produce.
+
+The fix keeps the filter and makes it opt-out. `table_files(tree,
+keep_self=False)` returns the raw glob when asked, with the reason and the four
+callers named in its docstring, and each of the four now passes
+`keep_self=True` and drops our table by its own rule as before. Re-run:
+
+| tool | default | `--keep-self` |
+|---|---|---|
+| `acpi-dep-census.py` | `corpus: 66 … 1 left out as our own` → 65 tables | 66 tables |
+| `acpi-usb-pair-census.py` | 65 tables, "THE COUNTS BELOW EXCLUDE THE FILE BEING WRITTEN" | 66 tables |
+| `acpi-adc-blob-census.py` | 20 tables | 21 tables |
+| `acpi-order-votes.py` | 57 tables, 700 pairs, 12,312 votes | 58 tables, 741 pairs, 13,058 votes |
+
+and the plan's line-21 figures reproduce exactly — `I2C / IC 55  43` and
+`UART 34  31` in the dropped framing against `58  46` and `35  32` in the
+kept one. Two consequences are worth stating rather than leaving implicit.
+First, **no default count changes**: the numbers these tools print by default
+were already the 65-table numbers, because the pre-4.147 stem drop and the new
+path filter remove the same single file. What differs in the default framing is
+the header line — `corpus: 66 tables` plus `1 left out as our own` instead of a
+bare `corpus: 65` — and in `acpi-order-votes.py` the stderr line that names the
+`.dsl` it declined to count, which had also gone quiet. Second, the plan's
+figures for `acpi-order-votes.py` in the Step 4.88 paragraph — 57 tables/558
+pairs/9,840 votes against 58/595/10,440 — are that window's, not today's; the
+pairs have grown with the ASL, and only the *shape* of the difference is the
+same.
+
+`tools/acpi-hid-census.py` itself is unchanged in behaviour: its own default is
+the 65-table corpus, it has no second framing to lose, and it still prints
+`65 reference tables under …` with `TLMM 11 describe` and `QCOM0A0C 2x`.
+
+One stale reference is corrected in the same commit, because it names a step
+that carries no such analysis. Step 4.147's edits to `docs/00-plan.md` — the P3
+item-1 status line at 465 and the parenthesis at 544 — were written to say "see
+Step 4.148", on the assumption that the reconciliation would be numbered one
+past the step having been written at that moment. They were also never staged
+into `58fdce0`, so they ship here, one commit after the step whose `docs/08`
+section holds the reconciliation they point at. Both now say **4.147**, which is
+where the thermal-zone and TSENS findings are written up.
+
+| | |
+|---|---|
+| instrument | every consumer of `table_files()` found by `grep -rn table_files tools/*.py`, then each run in both framings and diffed; the plan's line-21 figures read off `acpi-dep-census.py`'s own output rather than restated |
+| shows | step 4.147's filter, applied inside the shared module, made `--keep-self` a no-op in all four tools that load it — identical output with and without the flag; the filter is right for `acpi-hid-census.py` and wrong as a default for a caller with its own drop rule; restored, the four again print two framings and the plan's `55/43 → 58/46`, `34/31 → 35/32` reproduce exactly |
+| corrects | the four tools' behaviour, and the docstring of `table_files()`; it also corrects `docs/00-plan.md`'s "Step 4.148" forward reference, which named a step that carries no such analysis and which ships in this commit rather than in the step it should point at |
+| does not close | the `_HID` work and every measurement in the plan, which are unchanged — no default count moved; the still-unreproducible-or-not question of whether the other three tools' recorded figures from their own windows survive a re-run today, which this step did not check beyond `acpi-order-votes.py`'s shape; the device-side half of everything |
+| not an action | nothing was built, flashed or written to any partition; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN are untouched; the porting goal is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and P5's peripherals not begun |

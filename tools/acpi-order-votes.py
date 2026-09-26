@@ -312,7 +312,9 @@ def corpus_nodes(census, asl_nodes, drop=None):
     that already existed, moving the score and the ceiling together.
     """
     tables = {}
-    for aml in census.table_files(census.DEFAULT_TREE):
+    # Raw glob: `corpus_nodes` drops our table itself, by `-{drop}-` in the
+    # disassembled name, and `--keep-self` is the flag that turns it off.
+    for aml in census.table_files(census.DEFAULT_TREE, keep_self=True):
         dsl = census.disassemble(aml, census.DEFAULT_CACHE)
         if not dsl:
             print(f"  !! iasl could not read {aml}", file=sys.stderr)

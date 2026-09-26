@@ -408,7 +408,8 @@ def main():
     if not os.path.isdir(tree):
         print(f"no such tree: {tree}", file=sys.stderr)
         return 1
-    tables = mod.table_files(tree)
+    # Raw glob: this tool drops our table itself, by the stem of `--asl`.
+    tables = mod.table_files(tree, keep_self=True)
     # The platform directory the corpus files this table under is its own stem,
     # the same rule tools/acpi-order-votes.py drops by.
     drop = None if args.keep_self else os.path.splitext(os.path.basename(args.asl))[0]

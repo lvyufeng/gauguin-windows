@@ -598,7 +598,7 @@ def devices_in(dsl):
     return out
 
 
-def table_files(tree):
+def table_files(tree, keep_self=False):
     """Every ACPI table in the reference tree, not just each platform's DSDT.
 
     The first draft of this tool read `*/DSDT.aml` alone and concluded that two
@@ -627,14 +627,31 @@ def table_files(tree):
     reason that has nothing to do with the corpus. The same class of mistake is
     why `acpi-dep-census.py` was rewritten at Step 4.94 and why the cache key
     below is the tree and not the path.
+
+    `keep_self=True` returns the raw glob, and exists because four tools in
+    `tools/` load this module to get the corpus and then do their *own*
+    dropping, each with its own `--keep-self`: `acpi-dep-census.py`,
+    `acpi-order-votes.py`, `acpi-adc-blob-census.py` and
+    `acpi-usb-pair-census.py`. Their drop is by the stem of the `--asl` they
+    are handed, which is a different rule from this one and is the rule their
+    prose is written against. Excluding the file here as well makes theirs a
+    no-op: after Step 4.147 all four printed the same corpus with and without
+    `--keep-self`, which silently deleted the second framing each of them
+    documents - `acpi-dep-census.py`'s "I2C/IC 55 nodes and 43 `{PEP0}` -> 58
+    and 46" is the difference, and it is exactly what a no-op stops printing.
+    So the filter is this module's default and is opt-out for a caller that
+    has its own. Corrected in Step 4.148.
     """
     self_aml = os.path.join(tree, "Platforms", "Xiaomi", "gauguin", "DSDT.aml")
     pats = ["Platforms/*/*/", "Silicon/Qualcomm/*/"]
-    return sorted(set(
+    found = sorted(set(
         p for pre in pats
         for pat in ("DSDT*.aml", "SSDT*.aml")
-        for p in glob.glob(tree + "/" + pre + pat)
-        if os.path.abspath(p) != os.path.abspath(self_aml)))
+        for p in glob.glob(tree + "/" + pre + pat)))
+    if keep_self:
+        return found
+    return [p for p in found
+            if os.path.abspath(p) != os.path.abspath(self_aml)]
 
 
 def census(tree, cache):
