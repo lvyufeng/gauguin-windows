@@ -30,7 +30,11 @@ gauguin's own block addresses.
     python3 tools/acpi-hid-census.py --blocks          # gauguin's block list
     python3 tools/acpi-hid-census.py --drivers DIR     # which INFs bind these
 
-Measured 2026-09-25, 66 reference tables. Three defects were found and fixed in
+Measured 2026-09-25, **65** reference tables - the 66th file under this tree is
+`Platforms/Xiaomi/gauguin/DSDT.aml`, which this build generates from
+`tools/acpi/gauguin.asl`, and `table_files` excludes it: a corpus that counts the
+table being written scores our own choices back to us, and the numerators below
+were always measured against the 65. Three defects were found and fixed in
 the drafts of this file, and all three made a negative answer look stronger
 than the corpus supports:
 
@@ -53,7 +57,7 @@ ships `DSDT_MTP` (152 `Device` nodes) and `DSDT_Minimal` (8) and no plain
 `DSDT.aml` at all, so the trim-only glob read none of Lahaina's device list in
 any form - and Lahaina is the platform whose `GIO0` sits on gauguin's exact
 TLMM window and length. Three of the four new TLMM references are variants.
-Counted by name rather than by address, `GIO0` appears in 21 of the 66 tables
+Counted by name rather than by address, `GIO0` appears in 21 of the 65 tables
 and `SPMI` in 22.
 
 The second error is the join key, and the way it failed is worth copying down
@@ -61,7 +65,7 @@ because it is not the obvious one. **An address is a weak key, because a
 reference's `_CRS` is often much coarser than the block it declares.** The
 corpus's `SPMI` node claims `0x0C400000` for `0x02800000` - forty megabytes -
 and gauguin's arbiter at `0x0C440000` sits inside that region. So an equality
-test says "no device here" about a block that 22 of these 66 tables describe,
+test says "no device here" about a block that 22 of these 65 tables describe,
 and it does so with the same confidence whether the corpus is empty or full.
 Containment, not equality, is the test that matches how `_CRS` is written; what
 carries across SoCs even better is the device *name* - every reference table
@@ -604,12 +608,33 @@ def table_files(tree):
     variants are where Qualcomm writes the *complete* device list. Lahaina's
     `DSDT.aml` has 24 devices; Lahaina's `DSDT_MTP` has 152, including the
     `GIO0` node on gauguin's exact TLMM window.
+
+    **The one file this excludes is the one being written.** `Platforms/Xiaomi/
+    gauguin/DSDT.aml` is generated from `tools/acpi/gauguin.asl` by this tree's
+    own build, so counting it makes every question here self-referential in the
+    direction that flatters the answer: a block we have already described gains
+    a reference, and a name we chose comes back as a name the corpus agrees on.
+    It is not hypothetical. The corpus is 66 files of which one is ours, and six
+    of our forty-odd nodes were being read back as evidence - `GIO0`, `SPMI`,
+    `UAR2`, `I2C8`, `I2C9` and `IC11` - which inflated TLMM from 11 references
+    to 12, SE3 from 3 to 4, SE7 from 3 to 4, and gave SE0u and SE5 a third
+    "distinct name" apiece that exists in no other table. Measured 2026-09-27.
+
+    Because the effect grows with our own work - every node added to
+    `gauguin.asl` adds a reference to its own block - this filter is what makes
+    two runs of this tool comparable across time. Step 4.58's counts were taken
+    before `UAR2` existed and today's unfiltered run reads one higher for a
+    reason that has nothing to do with the corpus. The same class of mistake is
+    why `acpi-dep-census.py` was rewritten at Step 4.94 and why the cache key
+    below is the tree and not the path.
     """
+    self_aml = os.path.join(tree, "Platforms", "Xiaomi", "gauguin", "DSDT.aml")
     pats = ["Platforms/*/*/", "Silicon/Qualcomm/*/"]
     return sorted(set(
         p for pre in pats
         for pat in ("DSDT*.aml", "SSDT*.aml")
-        for p in glob.glob(tree + "/" + pre + pat)))
+        for p in glob.glob(tree + "/" + pre + pat)
+        if os.path.abspath(p) != os.path.abspath(self_aml)))
 
 
 def census(tree, cache):
@@ -677,7 +702,7 @@ def collect_by_name(tree, cache):
     node declares `0x0C400000` for `0x02800000` - forty megabytes - while
     gauguin's arbiter sits at `0x0C440000` inside that region, so a reader
     testing for equality reports "no reference device at this address" about
-    a block 22 of the 66 tables describe. Qualcomm's reference tables name
+    a block 22 of the 65 tables describe. Qualcomm's reference tables name
     their devices by function, and *that* is the key that carries.
     """
     byname = {}
@@ -730,7 +755,7 @@ GENERATIONS = [
 
 # What each of gauguin's twelve blocks is in the index tables' vocabulary. The
 # two TSENS windows have no kind because the corpus has no thermal-sensor device
-# at all - 66 tables, no `TSEN`, no `_HID` ending in a thermal index, and no
+# at all - 65 tables, no `TSEN`, no `_HID` ending in a thermal index, and no
 # device at either of gauguin's windows. Windows on these platforms gets its
 # thermal zones from `ThermalZone` objects named `QCOM<family><zone>`, whose
 # zone indices are their own per-generation table and which read the PMIC
