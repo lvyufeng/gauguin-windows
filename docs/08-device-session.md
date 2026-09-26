@@ -27761,3 +27761,105 @@ The two classes therefore disagree about the enable seed, and the difference bet
 | corrects | step 4.134's and step 4.135's treatment of `rpmh_image_os.c:175` as the failed statement — it is the line of the shared helper `0x6108`, identical for all 66 of this driver's assert sites, and it cannot distinguish the check at `0x4e74` from the one at `0x5074` or from any of the other eight in the two walk routines; what distinguishes them is the frame chain, which step 4.135 had and step 4.134 did not, so both steps' sites stand while the sentence that names the statement moves. Also corrected: step 4.135's *"the `DebugLib.c +78` row comes from an unlocated sibling helper"* and its *"why a call that `0x6320` validated hands back words lying past that element"* framing — the helper is not a sibling of anything, it is the assert path of the check itself, four frames deep; and step 4.135's implicit treatment of `p7`/`p8` as the same invocation as its own panels, when the probes carry neither `--el3-zero-mem` nor the tool's other options and therefore form their own class. Step 4.135's site, its seed result, and its panel reading are unchanged |
 | does not close | where in `PdcDxe`'s logic `pdclog.c:63`, `pdcTcs.c:146`/`147` and `pdc_seq.c:390` sit, and which of the four the seeded run actually reached — its own frame chain has not been captured, and only a stack dump from a `PdcDxe`-stage run would say; why the probe class and the panel class disagree about the enable seed, whose only identified difference is the tool's `--el3-zero-mem`; what the `ERROR: C90000002:V03000007 I0 <GUID>` row is and which module prints it — its format is in neither the payload's plain text nor either driver, so it is DXE-core code inside the payload's compressed volume, and `Loading driver at 0x%11p EntryPoint=0x%11p` is likewise absent from the payload raw though the tree has it at `DebugPeCoffExtraActionLib.c:50`; whether the NULL format is written in the driver's source or is an artifact of the build, which the image cannot settle and which would need the driver's source; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written into any image; **the `mov x1, xzr` at `0x6120` and its `PdcDxe` counterparts are untouched**, and no patch to them is proposed here — patching them is a device-facing action and is not taken; no QEMU run was made this step, so every reading is off a committed image, off a disassembly of one, or off the two stack dumps step 4.135 captured; and no device is attached to this machine. The tracked tree gains this document alone. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun. What the finding does change is how any future capture must be read — a driver assert in this firmware set is indistinguishable on the wire from a DebugLib assert, on the phone's screen as much as in QEMU |
+
+## Step 4.137 — step 4.136's "the probe class and the panel class disagree" is withdrawn: `site-probe8.py` loaded its enable blob at the *wrong* offset, and with the blob at the right one the same probe advances into `PdcDxe` exactly as panel D did — and the frame chain that gets there is now named instruction by instruction
+
+Step 4.136 ended with a paragraph saying the two ad-hoc probes and the five panels "disagree about the enable seed", and left that disagreement open. It is not a disagreement. Re-read this step, `site-probe8.py` loads **two** blobs:
+
+```
+13: argv += ["-device","loader,file=/tmp/rsc-enable.bin,addr=0x46c02d18,force-raw=on"]
+```
+
+and `0x46c02d18` is the **wrong** offset — the one panel C (`rscC-enable`) used and the one the record has already shown does nothing. The two files differ in nothing else:
+
+```
+79eb7289e99667fd6c4c4da0d1abb84ab14e287710937b521cd762b2ed70999e  /tmp/rsc-enable.bin    (5,376 B)
+79eb7289e99667fd6c4c4da0d1abb84ab14e287710937b521cd762b2ed70999e  /tmp/rsc-enable2.bin   (5,376 B)
+```
+
+So `p8` was `p7` plus panel C's null experiment, and their identity (`f00e1f9e…` for both register dumps, `69ff8fff…` for both stacks) **confirms panel C**, the same way `rscC-enable`'s row-for-row identity with `rscA-control` does. It is evidence for the record, not against it, and step 4.136 read it backwards.
+
+The class difference 4.136 proposed is not there either. The probes' stub is `/tmp/qemu-el3-lc5j822m/el3.bin`, **16,432 B with `s2_l2.inc` beside it** — the stage-2 half compiled in; stubs built without `--el3-zero-mem` are 4,120 B and carry no `s2_l2.inc` (`/tmp/qemu-el3-0ho6rayi`, `/tmp/qemu-el3-89hx0an8`). And their machine string, `virt,secure=on,virtualization=on,gic-version=2`, is character-for-character what the tool composes for `--el3-stub --el3-zero-mem` at `tools/qemu-panel-read.py:1020`+`:1048`. The probes and the panels are the **same class of invocation**; they differ only in whether the final state is read with `pmemsave` or off the console in memory.
+
+### The experiment that settles it, and its result
+
+`/tmp/site-probe9.py` is `site-probe8.py` with one address changed — `addr=0x46c20d18`, the offset panel D used — and it moves immediately:
+
+| run | seeds | `info registers` | stack | PC | where it rests |
+|---|---|---|---|---|---|
+| `p7` (this step's control) | word at `0x46c2000c` | `f00e1f9e…` | `69ff8fff…` | `0x9c46b7b4` | `RpmhDxe`+`0x97b4`, chain through `0x5078` |
+| `p8` | word + enable at **`0x46c02d18`** | `f00e1f9e…` | `69ff8fff…` | `0x9c46b7b4` | identical to `p7` — the wrong offset does nothing, as in panel C |
+| `p9` | word + enable at **`0x46c20d18`** | `4a4e92bc…` | `d0f71e47…` | `0x9c4ea0a4` | `PdcDxe`+`0x40a4`, i.e. past `RpmhDxe` entirely |
+
+So the probe class reproduces panel D's advancement, and `PdcDxe` is where the advanced run stops in both. There is no discrepancy to leave open; step 4.136's paragraph and the matching `does not close` item are struck.
+
+### The advanced run's state, and the base it names
+
+`p9-regs.txt` gives `X21 = 0x9c4eac31`, `X22 = 0x9c4ed000`, `X30 = 0x9c4ea0a0`, `X29 = 0x9ffce610`, `SP = 0x9ffce600`. The base is not assumed: `PdcDxe`'s `DebugVPrint` null path computes its two literals as `adrp x0, 0x4000` + `add x0, x0, #0xc31` (`0x154c`) and `adrp x2, 0x4000` + `add x2, x2, #0xc3c` (`0x1554`), so the strings' **RVAs are `0x4c31` and `0x4c3c`**, and read out of `device/dxe/PdcDxe.efi` they are exactly
+
+```
+PdcDxe.efi 0x4c31 = b'DebugLib.c'
+PdcDxe.efi 0x4c3c = b'Format != ((void *) 0)'
+```
+
+`X21 - 0x4c3c` and `X19(=0x9c4eac31) - 0x4c31` both give **base `0x9c4e6000`**, and two further facts agree with it without being made to: `X22 = base + 0x7000`, which is the data page `0x2024`'s `adrp x19, 0x7000` names, and `PC = base + 0x40a4`, which is the address of an instruction that exists and is a self-loop. So the advanced run's assert is again the DebugLib NULL-format one — this time `PdcDxe`'s own copy of it — and not one of the four reporters step 4.136 hunted for.
+
+### The chain, frame by frame, out of `p9-stack.bin`
+
+Walking `x29` from `0x9ffce610` (dump base `0x9ffb0000`) gives five frames in `PdcDxe` and then the dispatcher, and every saved `x30` lands on the instruction after a `bl` that is really there:
+
+| frame | saved `x29` | saved `x30` | in | because |
+|---|---|---|---|---|
+| 0 | `0x9ffce850` | `0x9c4e7614` | `PdcDxe`+`0x1614` | return of `bl 0x4084` at `0x1610`, inside `DebugAssert` |
+| 1 | `0x9ffceb70` | `0x9c4e755c` | `PdcDxe`+`0x155c` | return of `bl 0x1564` at `0x1558` — `DebugVPrint`'s null-format block |
+| 2 | `0x9ffcebb0` | `0x9c4e850c` | `PdcDxe`+`0x250c` | return of `bl 0x1460` at `0x2508` — the fifth inline NULL-format site |
+| 3 | `0x9ffcebd0` | `0x9c4e8008` | `PdcDxe`+`0x2008` | return of `bl 0x2004` |
+| 4 | `0x9ffcec00` | `0x9c4e7214` | `PdcDxe`+`0x1214` | the driver's own entry below the dispatcher |
+| 5–7 | — | `0x9cd02654`, `0x9cd06560`, `0x9ccf9c5c` | another module at `0x9cd00000` | the DXE dispatcher |
+
+The gaps check too: frame 0's `x29 = SP + 0x10` is `0x4084`'s own `sub sp, sp, #0x20` / `stp x29, x30, [sp, #0x10]`, and frame 1 is `0x240` above it, which is `DebugAssert`'s `sub sp, sp, #0x210` plus its `stp x28, x21, [sp, #-0x30]!`.
+
+**So `PdcDxe`'s assert is the DebugLib's, exactly as `RpmhDxe`'s is, and which of its five inline sites fired is readable off frame 2's return address: `0x250c`, the site whose block starts at `0x24f4`.** That site's own reporter — the one whose message the console never shows — is at `0x2514`/`0x2518`/`0x251c`:
+
+```
+2514: add x0, x0, #0xb8c   ; "pdc_seq.c"
+2518: mov w1, #0x182        ; 386
+251c: add x2, x2, #0xa99    ; "0"
+```
+
+### The resting place, which is not the same kind of place as `RpmhDxe`'s
+
+`RpmhDxe`'s run rests at `DebugVPrint`'s own dead loop, `0x19d8`. `PdcDxe`'s rests at `0x40a4`, in a **halt routine that `DebugAssert` calls at the end of its report**:
+
+```
+4090: adrp x8, 0x4000          ; 4084: sub sp, sp, #0x20 / stp x29,x30,[sp,#0x10]
+4094: mov  w1, wzr
+4098: ldr  w0, [x8, #0xc20]    ; w0 = the global at 0x4c20
+409c: bl   0x4b74              ; the checked store: IoLibArm.c:543, "(Address & 3) == 0"
+40a0: str  xzr, [sp, #0x8]
+40a4: ldr  x8, [sp, #0x8]      ; <- PC
+40a8: cbz  x8, 0x40a4          ; spin forever
+```
+
+`DebugAssert` reaches it from `0x1610`, and `0x4b74` is `IoLib`'s misaligned-store assert — read out of the image, its literals are `0x67f5 = b'IoLibArm.c'` and `0x6813 = b'(Address & 3) == 0'`, matching its own test `and x9, x0, #3 / cbz x9, 0x4ba8`. So a `PdcDxe`-stage assert halts through a **second** function, and the resting PC by itself cannot tell the two drivers' asserts apart — only the register file and the frame chain can. That is the same lesson as step 4.136's, one level further down.
+
+### What step 4.136 got right, re-verified, and the one number in it that was inherited rather than counted
+
+Re-run against the committed images and the committed disassemblies, all of 4.136's `RpmhDxe` numbers hold: **66** `bl 0x6108` and **53** `bl 0x19e0` in `RpmhDxe.efi`; the seven outer-walk sites at `0x4e40`, `0x4e60`, `0x4e74`, `0x4e88`, `0x4ea4`, `0x4f10`, `0x4f38` and the three walker sites at `0x4fc4`, `0x5028`, `0x5074`; the literals `0xa696 'DebugLib.c'`, `0xa6a1 'Format != ((void *) 0)'`, `0xa6b8 'ASSERT %a +%d: %a\n'`, `0xb4d4 '0'`, `0xbdea 'rpmh_image_os.c'`, `0xa65d 'Rpmh Sleep callback registration failed, Status '`.
+
+`PdcDxe`'s quoted listing holds as well — `0x2094` is `orr w0, wzr, #0x80000000`, `0x2098` `mov x1, xzr`, `0x209c`-`0x20a4` the three zero argument registers, `0x20a8` the `bl 0x1460`, then `0x20b4 add x0, x0, #0xaa3`, `0x20b8 add x2, x2, #0xa99`, `0x20bc orr w1, wzr, #0x3f`, `0x20c0 bl 0x1564`, `0x20c4 b 0x20c4` — and the censuses are **21** `bl 0x1460` and **51** `bl 0x1564` in the image, of which exactly **five** carry the five-register NULL form: `0x2094`, `0x233c`, `0x2370`, `0x24ac` and `0x24f4` (the fifth 4.136 could not name). What 4.136 called "at least four different source files" was inherited from the previous window and not counted; the census gives **three**, read out of the image:
+
+```
+0x5aa3 = b'pdclog.c'    0x5b5d = b'pdcTcs.c'    0x5b8c = b'pdc_seq.c'    0x5a99 = b'0'
+   0x2094 -> pdclog.c:63        0x233c -> pdcTcs.c:146      0x2370 -> pdcTcs.c:147
+   0x24ac -> pdc_seq.c:390      0x24f4 -> pdc_seq.c:386      (all description "0")
+```
+
+| | |
+|---|---|
+| instrument | `/tmp/site-probe8.py` and this step's `/tmp/site-probe9.py` read as text — both also kept, with `p9`'s three dumps, in `work/out/qemu-probe-4.137/` (`site-probe9.py` `7cb66dd6…`, `p9-regs.txt` `4a4e92bc…`, `p9-stack.bin` `d0f71e47…`, `p9-ctx.bin` `9c7e6d17…`, `p9-pool.bin` `f5a5fd42…`) — with the two enable blobs hashed (`79eb7289…` each) and the load addresses compared against the five panels' `--extra` lines; the probe stub `/tmp/qemu-el3-lc5j822m/el3.bin` weighed against two no-stage-2 stubs (16,432 B with `s2_l2.inc` versus 4,120 B without) and the probe machine string compared to `tools/qemu-panel-read.py:1020`+`:1048`; one new QEMU run (`site-probe9.py`, 85 s, monitor-captured `info registers` and `pmemsave` of the stack) and its dump hashed; a frame-chain walk of `p9-stack.bin`; the three earlier dumps `p4`/`p7`/`p8` re-walked for the same six return addresses; and `device/dxe/PdcDxe.efi` read statically at `0x1460`-`0x1644`, `0x4084`-`0x40b4`, `0x4b74`-`0x4bac` and `0x24f0`-`0x2528` with every literal read out of the image by byte offset. Nothing was built for the device, nothing was flashed, no partition was written, no stub or firmware source was modified, no patch was written, and no device is attached to this machine |
+| shows | that step 4.136's "the probe class and the panel class disagree about the enable seed" is an artifact of one loader address: `site-probe8.py`'s enable blob went to `0x46c02d18`, the offset panel C used, and `p7` ≡ `p8` is therefore panel C's null result repeated, not a contradiction of panel D; that the two classes are the same class — same stage-2 stub, same machine string — and differ only in whether the final state is read by `pmemsave` or off the console; that with the blob at `0x46c20d18` the same probe (`p9`, registers `4a4e92bc…`, stack `d0f71e47…`) advances past `RpmhDxe` into `PdcDxe`, reproducing panel D; that the advanced run's base is `0x9c4e6000`, derived from the two literal RVAs `0x4c31`/`0x4c3c` and confirmed by `X22 = base + 0x7000` and by `PC` landing on a real instruction; that the run stops on **`PdcDxe`'s own copy of the DebugLib NULL-format assert**, with `DebugVPrint` at `0x1460`, its null block at `0x1544`-`0x155c`, and `DebugAssert` at `0x1564` with the same three register moves as `RpmhDxe`'s; that the frame chain names the failing inline site as the fifth one, `0x24f4`/`0x2508`, whose never-printed reporter is `pdc_seq.c:386`; that the CPU's resting place in a `PdcDxe`-stage assert is a *second* function, the halt routine at `0x4084` that `DebugAssert` calls at `0x1610` and that spins at `0x40a4` after storing zero to `[sp,#8]` and calling `IoLib`'s misaligned-store check `0x4b74`; and that `PdcDxe`'s five NULL-format sites name three source files and not four |
+| adds | the resolution of step 4.136's open disagreement, in the direction of the panels, and the first identification of what stops the advanced run on the driver side: a `PdcDxe` assert, reported through the DebugLib, at the fifth of its five sites; the `PdcDxe` base `0x9c4e6000`, which the record had not had, and with it the fact that `X19`/`X21` in a `PdcDxe` capture are the file and description strings at `+0x4c31` and `+0x4c3c`; the two `PdcDxe` disassembly facts step 4.136 could not supply — the fifth site's identity (`0x24f4`, `pdc_seq.c:386`) and the halt routine `0x4084` with its `IoLibArm.c:543` checked store — plus the image censuses 21/51; the finding that the resting PC does **not** distinguish the two drivers' asserts (`RpmhDxe` halts in `DebugVPrint`, `PdcDxe` in its own halt routine) so provenance must come from the frame chain or the register file; and a re-verified `RpmhDxe` census (66 `bl 0x6108`, 53 `bl 0x19e0`, ten named walk sites, six literal bytes) that leaves step 4.136's `RpmhDxe` half intact |
+| corrects | step 4.136's final paragraph and its matching `does not close` item — "the two classes therefore disagree about the enable seed, and the difference between them is the tool's `--el3-zero-mem` and whatever else it adds" is withdrawn in full: there is one class, and `p8`'s identity with `p7` is panel C's own result. Also corrected: step 4.136's "five times inline … in at least four different source files", an inherited count not taken from the image, which is **three** files; and step 4.136's implicit assumption that a `PdcDxe`-stage capture would rest in the same kind of dead loop as `RpmhDxe`'s. Step 4.136's account of the NULL-format mechanism, its `0x6108` reading, its `RpmhDxe` counts and its `PdcDxe` listing are unchanged and re-verified here |
+| does not close | why `X19` and `X21` in the `p9` capture hold the file and description pointers in the reverse order from the one `DebugAssert`'s prologue writes (`0x157c: mov x19, x2`, `0x1588: mov x21, x0`) while the `RpmhDxe` capture's order matches its own prologue — the two are the same pair of strings either way, and the discrepancy is recorded rather than explained; which of the five `PdcDxe` sites a *phone* run would reach, since this one reached `0x24f4` under two fabricated seeds and a real `RpmhDxe` may fail before, after, or elsewhere; whether `RpmhDxe`'s `EFI_UNSUPPORTED` sleep-callback row and `PdcDxe`'s assert are also what stop the *device*, which needs the phone and not QEMU; what the `ERROR: C90000002:V03000007 I0 <GUID>` row is and which module prints it; whether the `mov x1, xzr` that puts the NULL in the format argument is written that way in the driver's source or is a build artifact; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written into any image; **the `mov x1, xzr` at `RpmhDxe`'s `0x6120` and its five `PdcDxe` counterparts are untouched**, and no patch to them is proposed here — patching them is a device-facing action and is not taken; the one new QEMU run is on this machine, in a temporary directory, against a payload already committed to the record, and it changes no artifact under version control; and no device is attached to this machine. The tracked tree gains this document alone. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun. What it does change is the record's own reliability on this point — one wrong loader address in an ad-hoc probe had been read as a property of two whole classes of run |
