@@ -27863,3 +27863,186 @@ Re-run against the committed images and the committed disassemblies, all of 4.13
 | corrects | step 4.136's final paragraph and its matching `does not close` item — "the two classes therefore disagree about the enable seed, and the difference between them is the tool's `--el3-zero-mem` and whatever else it adds" is withdrawn in full: there is one class, and `p8`'s identity with `p7` is panel C's own result. Also corrected: step 4.136's "five times inline … in at least four different source files", an inherited count not taken from the image, which is **three** files; and step 4.136's implicit assumption that a `PdcDxe`-stage capture would rest in the same kind of dead loop as `RpmhDxe`'s. Step 4.136's account of the NULL-format mechanism, its `0x6108` reading, its `RpmhDxe` counts and its `PdcDxe` listing are unchanged and re-verified here |
 | does not close | why `X19` and `X21` in the `p9` capture hold the file and description pointers in the reverse order from the one `DebugAssert`'s prologue writes (`0x157c: mov x19, x2`, `0x1588: mov x21, x0`) while the `RpmhDxe` capture's order matches its own prologue — the two are the same pair of strings either way, and the discrepancy is recorded rather than explained; which of the five `PdcDxe` sites a *phone* run would reach, since this one reached `0x24f4` under two fabricated seeds and a real `RpmhDxe` may fail before, after, or elsewhere; whether `RpmhDxe`'s `EFI_UNSUPPORTED` sleep-callback row and `PdcDxe`'s assert are also what stop the *device*, which needs the phone and not QEMU; what the `ERROR: C90000002:V03000007 I0 <GUID>` row is and which module prints it; whether the `mov x1, xzr` that puts the NULL in the format argument is written that way in the driver's source or is a build artifact; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written into any image; **the `mov x1, xzr` at `RpmhDxe`'s `0x6120` and its five `PdcDxe` counterparts are untouched**, and no patch to them is proposed here — patching them is a device-facing action and is not taken; the one new QEMU run is on this machine, in a temporary directory, against a payload already committed to the record, and it changes no artifact under version control; and no device is attached to this machine. The tracked tree gains this document alone. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun. What it does change is the record's own reliability on this point — one wrong loader address in an ad-hoc probe had been read as a property of two whole classes of run |
+
+## Step 4.138 — `PdcDxe`'s fifth assert is not a table defect: the table has one entry, it is named `display`, and the check that fires is a capacity read at `resource + 0x1008` where `resource = 0x2a0000 + 0xb000000 = 0xd2a0000` — an address QEMU's own memory tree has no region for, so the read is zero and the `b.ls` at `0x2794` takes the failing branch
+
+Step 4.137 ended by naming the site the advanced run reaches — `0x24f4`, whose never-printed reporter is `pdc_seq.c:386` — and by asking what in `0x2450`'s logic fires it. This step answers that from the image alone, and the answer is not what the shape of the code suggested: the walk does not die on a NULL, a short table or a malformed entry. It dies on the **first hardware-dependent check it performs**, a capacity read from the PDC resource block, because in this machine model the address the driver computes for that block is not backed by anything and reads back zero — the same shape as step 4.135's RSC register model answering `0`.
+
+### The table the loop walks, and where it comes from
+
+`0x2450`'s first act is `bl 0x23a4` at `0x2464`, and `0x23a4` is a thunk — `14000135  b 0x2878` — so what it calls is the builder:
+
+```
+2878: adrp x8, 0x7000
+287c: adrp x11, 0x7000
+2880: adrp x9, 0x7000
+2884: ldr  w8, [x8, #0x328]     ; w8 = [0x7328]
+2888: adrp x10, 0x7000
+288c: add  x11, x11, #0x2c8    ; 0x72c8
+2890: str  x11, [x9, #0x6d0]    ; [0x76d0] = 0x72c8    <- the table's base
+2894: str  w8, [x10, #0x6d8]    ; [0x76d8] = [0x7328]  <- the table's count
+2898: ret
+```
+
+Statically both globals are zero — `[0x76d0] = [0x76d8] = 0` in `PdcDxe.efi` — and `[0x7328] = 1`. So the driver installs its own table at run time and the loop's pair is `(base = 0x9c4ed2c8, count = 1)`: **one entry**, the one at RVA `0x72c8`. `0x2450` reads them back the way the builder wrote them:
+
+```
+2478: ldr  w8, [x21, #0x6d8]    ; count
+247c: cmp  w20, w8
+2480: b.hs 0x24e0               ; i >= count -> return
+2484: ldr  x8, [x22, #0x6d0]    ; base
+2488: umaddl x19, w20, w23, x8  ; w23 = 0x60 (set at 0x2474) -> elem
+248c: mov  x0, x19
+2490: bl   0x23a8               ; prepare
+2494: cbnz w0, 0x24f4           ; nonzero -> assert pdc_seq.c:386
+2498: orr  w1, wzr, #0x1
+249c: mov  x0, x19
+24a0: bl   0x2418               ; start
+24a4: add  w20, w20, #0x1
+24a8: cbz  w0, 0x2478           ; 0 -> next element
+24ac: ...                       ; nonzero -> assert pdc_seq.c:390
+```
+
+The element — one `0x60`-byte record, read out of the image at `0x72c8`:
+
+| field | value | what reads it |
+|---|---|---|
+| `+0x00` | `0x5bb3` | `b'display'` — the only string in the element, and the element's name |
+| `+0x08` | `0x7288` | non-NULL test at `0x23bc`; the sub-descriptor `{+0x00 = 0x76dc, 4, +0x10 = 0x76e0, 0x10}` that `0x2528` writes out |
+| `+0x10` | `0x72a8` | the sequence array: `+0x18 = 1` entry of stride `0x20`, and entry 0 is `{+0x00 = 0x7270, +0x08 = 0x10018}` |
+| `+0x18` | `1` | the entry count `0x25f4` loops over (`ldr x8, [x19, #0x18]` at `0x26a0`) |
+| `+0x20` | `0x2a0000` | the resource's base offset, turned into the resource address by `0x26d0` |
+| `+0x28` | `0xb4a0000` | passed to the per-step encoder as `x1` (`0x2664`) |
+| `+0x30`, `+0x40` | `0` | the optional second address (`0x26d0`'s `[+0x40] = [+0x30]` branch is not taken) |
+| `+0x58` | `0` | the running command-RAM offset, 16-bit, read at `0x266c` and written at `0x267c`/`0x268c` |
+
+The two arrays the sub-descriptor names are **all zeros** in the image — 4 bytes at `0x76dc` and 16 dwords at `0x76e0` — and `0x2528` writes them into the resource at `[x0 + 0x4560 + i*4]` (`0x2748`) and `[x0 + 0x45a0 + i*4]` (`0x2770`), where `x0` is the resource address. So the element's *configuration* is a set of zeros by design here, and nothing about it is what fails.
+
+### The path from the loop to the assert, instruction by instruction
+
+`0x23a8` is the prepare pass, and every one of its checks that reads the element itself passes:
+
+```
+23b8: cbz  x19, 0x2408          ; elem == NULL          -> -1
+23bc: ldr  x8, [x19, #0x8]      ; 0x7288
+23c0: cbz  x8, 0x2408
+23c4: ldr  x9, [x19, #0x10]     ; 0x72a8
+23c8: cbz  x9, 0x2408
+23cc: ldr  x10, [x19, #0x20]    ; 0x2a0000
+23d0: cbz  x10, 0x2408
+23d4: mov  x0, x19
+23d8: bl   0x26d0               ; resolve the resource address
+23dc: cbnz w0, 0x240c
+23e0: mov  x0, x19
+23e4: bl   0x289c               ; 0 iff [+0x38] != 0
+23e8: cbnz w0, 0x240c
+23ec: mov  x0, x19
+23f0: bl   0x2528               ; write the config arrays, then read [+0x1004]
+23f4: cbnz w0, 0x240c
+23f8: ...  ldp / ldr x19, [sp], #0x20
+2404: b    0x25f4               ; tail call — its return value is 0x23a8's
+```
+
+`0x26d0` is where the resource address appears:
+
+```
+26d0: cbz  x0, 0x26f8           ; NULL -> w8 = -2
+26d4: ldr  x8, [x0, #0x20]      ; 0x2a0000
+26d8: mov  w10, #0xb000000
+26dc: ldr  x9, [x0, #0x30]      ; 0
+26e0: add  x11, x8, x10         ; 0x2a0000 + 0xb000000 = 0xd2a0000
+26e4: mov  w8, wzr
+26e8: str  x11, [x0, #0x38]     ; *** the resource address ***
+26ec: cbz  x9, 0x26fc           ; the optional second address is not taken
+26f0: str  x9, [x0, #0x40]
+26f8: (NULL) orr w8, wzr, #0xfffffffe
+26fc: mov  w0, w8               ; returns 0
+```
+
+and `0x289c` then passes *because `0x26d0` has just written that field*: `cbz x0` → `-1`; `ldr x8, [x0, #0x38]` → `cbz x8, 0x28b0` (`-1`); otherwise `0`. `0x2528` passes too, and for a reason worth spelling out: after writing the zeros it calls `0x2778`, which reads a field of the resource itself —
+
+```
+2778: ldr  w8, [x0, #0x1004]
+277c: ubfx w0, w8, #12, #4      ; bits [15:12]
+2780: ret
+```
+
+— and `0x25b0`'s `cbz w0, 0x25a0` returns `0` precisely when that field is zero; only a nonzero field takes the allocate-and-zero path (`bl 0x4898` with the size `field << 3`, then `bl 0x48b8` with `(ptr, 0, size)`). So the one check that reads the resource and *succeeds* does so for the same reason the next one fails.
+
+`0x25f4` walks the sequence array — count `[+0x18] = 1`, entry base `[+0x10]`, stride `0x20` — and for entry 0:
+
+```
+2614: ldr  x8, [x19, #0x10]
+261c: add  x22, x8, x21, lsl #5     ; x22 = entry 0
+2620: ldrh w4, [x22, #0x8]          ; 0x10018 & 0xffff = 0x18, nonzero
+2624: cbz  w4, 0x26b4               ; not taken
+2660: ldr  x0, [x19, #0x38]         ; 0xd2a0000 — the resource address
+2664: ldr  x1, [x19, #0x28]         ; 0xb4a0000
+2668: ldr  x3, [x22]                ; the entry's key, 0x7270
+266c: ldrh w2, [x19, #0x58]         ; 0 — the running offset
+2670: bl   0x2784                   ; program one step
+2674: and  w8, w0, #0xffff
+2678: cbz  w8, 0x26bc               ; zero -> return 0xfffffffc
+```
+
+and `0x26bc`'s `orr w0, wzr, #0xfffffffc` is the `-4` that comes back up: `0x25f4` → `0x23a8` (whose `cbnz w0` at `0x23f4` returns it) → `0x2450`'s `cbnz w0, 0x24f4` at `0x2494` → the assert at `0x24f4`, `pdc_seq.c:386`.
+
+### The check that fires, and the address it reads
+
+`0x2784` begins with a read of the resource's command-RAM capacity and compares it with the offset the walk has already used:
+
+```
+2784: ldr  w10, [x0, #0x1008]      ; *** the capacity register ***
+2788: lsr  w13, w10, #14
+278c: and  w8, w13, #0x3fc         ; a byte count, in units of 4
+2790: cmp  w8, w2, uxth            ; against the running offset (0)
+2794: b.ls 0x27a8                  ; capacity <= offset -> fail
+2798: ...                          ; the success path encodes the step
+27a8: mov  w0, wzr                 ; the failure returns 0
+27ac: b    0x2874                  ; the common return
+```
+
+With `[0xd2a1008]` reading `0`, `w8 = 0`; with `[elem + 0x58] = 0`, `w2 = 0`; `0 <= 0` takes `b.ls` at `0x2794`, `0x27a8` returns `0`, and `0x25f4`'s `cbz w8` turns that into `-4`. **The walk fails on the very first step of the very first element, and the failure is a capacity comparison against zero, not a table condition.**
+
+### The address, checked against the machine model instead of assumed
+
+That the read is zero because nothing is there is not an assumption: QEMU's own memory tree says so. A fresh `qemu-system-aarch64` with this project's machine string (`-M virt,secure=on,virtualization=on,gic-version=2 -cpu max -m 4096`, no payload) answers `info mtree -f` with 7,432 bytes, and no region in it contains `0x0d2a0000`, `0x0d2a1004` or `0x0d2a1008` — **no region at all overlaps `0xd000000`-`0xd400000`**. So both reads `PdcDxe` makes of this resource (`+0x1004`, `+0x1008`) land on unassigned memory and return zero, which is what makes `0x2778`'s field zero and `0x2784`'s comparison fail.
+
+The whole resource address is the driver's own arithmetic, read off one instruction: `mov w10, #0xb000000` at `0x26d8` added to the element's `+0x20 = 0x2a0000` at `0x26e0`. Whether the *phone* decodes `0xd2a0000` is a separate question this step cannot answer from an image — but the QEMU half is now a reading rather than an inference.
+
+### Frame 4's `0x1450` is a thunk, and what the routine behind it opens
+
+Step 4.137's frame table has frame 4's saved `x30` at `PdcDxe`+`0x1214` and asked what instruction returns there. `0x1210` is `94000090  bl 0x1450`, and `0x1450`'s body is two branches:
+
+```
+1450: b 0x145c
+145c: b 0x1f58
+```
+
+so the call enters `0x1f58` and returns to `0x1214`, exactly the saved value — the same kind of thunk as `0x23a4`, and the reason `0x2004`'s `bl 0x2450` is four frames down and not five. `0x1f58` is a driver path that opens two protocols through `[0x7340]`'s `+0x140` (`gBS->LocateProtocol`) and then calls members of what it located: `x0 = 0x7078`, out `0x76a0`, then `blr [x0 + 0x8]` and `blr [x0 + 0x18]`; then `x0 = 0x7068`, out `0x76a8`, then `blr [x0 + 0x8]` — before `bl 0x2018`, `bl 0x2164` and finally `bl 0x2450`. Both GUIDs are in the tree, at `work/uefi/Mu-Silicium/Silicon/Qualcomm/QcomPkg/QcomPkg.dec`:
+
+```
+0x7078 = B0760469-970C-487A-A4B5-28DB7B45CEF1  = gEfiChipInfoProtocolGuid   (QcomPkg.dec:70)
+0x7068 = 157A5C45-21B2-43C5-BA7C-822FEE5FE599  = gEfiPlatformInfoProtocolGuid (QcomPkg.dec:67)
+```
+
+So the PDC sequence that dies is entered from a routine that has already located **ChipInfo** and **PlatformInfo** and read from them — the platform-identification path, not a display driver. Neither GUID is `B43C22DB-…` (`PdcDxe`'s file GUID) or `CB29F4D1-…` (`RpmhDxe`'s), so the two GUID families the record has been juggling are file GUIDs and protocol GUIDs, and they do not overlap. The three source files the assert sites name (`pdclog.c`, `pdcTcs.c`, `pdc_seq.c`) are **not** in this tree — the PDC driver is present here only as prebuilt binaries under `Binaries/*/QcomPkg/Drivers/PdcDxe/` — so the disassembly remains the only evidence, and nothing in this step is read from source.
+
+### Step 4.137's open row on `X19`/`X21` is withdrawn — it was my own transcription
+
+Step 4.137 recorded, as open, that "`X19` and `X21` in the `p9` capture hold the file and description pointers in the reverse order from the one `DebugAssert`'s prologue writes". The capture does not say that. `p9-regs.txt` reads `X19 = 0x9c4eac3c` (= base + `0x4c3c`) and `X21 = 0x9c4eac31` (= base + `0x4c31`), and three independent facts agree that this is the right order:
+
+* the call site — `0x154c: add x0, x0, #0xc31` loads **`0x4c31`** into `x0` and `0x1554: add x2, x2, #0xc3c` loads **`0x4c3c`** into `x2`, before `bl 0x1564`;
+* the prologue — `0x157c: mov x19, x2` and `0x1588: mov x21, x0`, so `x19` takes the `x2` string and `x21` the `x0` string;
+* the formatted text — `DebugAssert` passes `x3 = x21` into the formatter at `0x15d4`, and the text on the `p9` stack and on every panel row reads `ASSERT DebugLib.c +78: …`, so the `x0`/`x21` string is the **file**;
+
+and the bytes settle which literal is which: `0x4c31 = b'DebugLib.c'`, `0x4c3c = b'Format != ((void *) 0)'`, `0x4c53 = b'ASSERT %a +%d: %a\n'`. So `x19` = the description `0x4c3c` and `x21` = the file `0x4c31`, the capture matches the prologue, and `RpmhDxe`'s capture matches its own for the same reason. There was no discrepancy to explain; step 4.137's row was written from a transposed pair of values, and this step withdraws it in full.
+
+| | |
+|---|---|
+| instrument | `device/dxe/PdcDxe.efi` read statically (`/tmp/pdc.asm`, 5,652 lines of `llvm-objdump -d --arch-name=aarch64`) at `0x1440`-`0x1460`, `0x1524`-`0x1640`, `0x1f40`-`0x2020`, `0x23a4`-`0x2450`, `0x2450`-`0x2554`, `0x25f4`-`0x26d0`, `0x2724`-`0x27a0`, `0x27a8`-`0x2800`, `0x2878`-`0x28b4` and `0x11f0`-`0x1220`, with every field, literal and global read out of the image by byte offset (`0x7260`-`0x7340`, `0x76d0`-`0x76e0`, `0x4c31`/`0x4c3c`/`0x4c53`, `0x5a99`/`0x5aa3`/`0x5b5d`/`0x5b8c`); `work/out/qemu-probe-4.137/p9-regs.txt` (`4a4e92bc…`) re-read for its register file; `work/out/qemu-probe-4.137/p9-stack.bin` (`d0f71e47…`) re-read back into the frame-4 record; **one new QEMU run** with the project's own machine string and no payload, its `info mtree -f` captured to `/tmp/mtree4138.txt` (7,432 bytes) and parsed for the three addresses; and a tree search for the two literal GUIDs (`QcomPkg.dec:67`, `QcomPkg.dec:70`) and for the three source files the assert sites name (absent). Nothing was built for the device, nothing was flashed, no partition was written, no stub or firmware source was modified, no patch was written, and no device is attached to this machine |
+| shows | that `PdcDxe`'s element table is installed at run time by the builder thunk `0x23a4` → `0x2878` (`[0x76d0] = 0x72c8`, `[0x76d8] = [0x7328]`), is **one entry** long, and that the single element is named `display` (`0x5bb3`), so the first resource the PDC sequencer attempts is the display's; that the element's own fields all satisfy `0x23a8`'s four NULL tests (`+0x08 = 0x7288`, `+0x10 = 0x72a8`, `+0x20 = 0x2a0000`), that its two configuration arrays (4 bytes at `0x76dc`, 16 dwords at `0x76e0`) are all zeros by design and are written to `resource + 0x4560 + i*4` and `resource + 0x45a0 + i*4`, and that nothing about the element is what fails; that `0x26d0` computes the resource address as `elem[+0x20] + 0xb000000 = 0x2a0000 + 0xb000000 = 0xd2a0000` and stores it in `elem[+0x38]`, which is why the next check, `0x289c`'s `[+0x38] != 0`, passes by construction; that `0x2528` passes only because the resource is absent — its `0x2778` reads bits [15:12] of `[resource + 0x1004]`, gets `0`, and `0x25b0`'s `cbz` takes the zero path; that the failing check is `0x2784`'s `ldr w10, [x0, #0x1008]` with `(w10 >> 14) & 0x3fc` compared against `elem[+0x58]` at `0x2794`, whose fail path `mov w0, wzr` at `0x27a8` becomes `0x25f4`'s `-4` (`0x26bc`), which `0x23a8` propagates and `0x2450`'s `cbnz w0, 0x24f4` at `0x2494` turns into the assert at `pdc_seq.c:386`; that **QEMU's memory tree has no region at `0x0d2a0000`, `0x0d2a1004` or `0x0d2a1008`, nor anywhere in `0x0d000000`-`0x0d400000`**, so both reads return zero and the failure is the machine model's absence of the PDC block rather than a defect in the driver's data; that frame 4's `0x1450` is a two-branch thunk to `0x1f58`, which is what makes `0x2004`'s `bl 0x2450` four frames down, and that `0x1f58` locates `gEfiChipInfoProtocolGuid` (`0x7078`) and `gEfiPlatformInfoProtocolGuid` (`0x7068`) through `gBS` before reaching the walk; and that step 4.137's `X19`/`X21` row has no subject — the capture's `X19 = base + 0x4c3c` and `X21 = base + 0x4c31` are the description and the file in the prologue's own order, confirmed by the call site, the prologue and the `ASSERT DebugLib.c +78:` text |
+| adds | the identity of the resource the advanced run dies on — `display`, the only element of a one-entry table — and with it the first concrete thing this record can point at that a *Windows* port would have to satisfy: the PDC's command RAM for the display resource must be present and must report capacity, or the sequencer asserts at `pdc_seq.c:386` before it ever reaches the port's own code; the resource address `0xd2a0000` as one instruction's arithmetic (`0x26d8`'s `mov w10, #0xb000000` plus `0x2a0000`); the image's own element layout and the two zero configuration arrays; the two protocol GUIDs by name from the tree (`gEfiChipInfoProtocolGuid`, `gEfiPlatformInfoProtocolGuid`) and the fact that the PDC sequence is entered from the platform-identification path; the two thunks `0x23a4` and `0x1450`, which explain two frame-table entries that step 4.137 could only list; and the QEMU memory-tree reading, which converts "the address is unmapped" from an assumption into a capture |
+| corrects | step 4.137's `does not close` item beginning "why `X19` and `X21` in the `p9` capture hold the file and description pointers in the reverse order from the one `DebugAssert`'s prologue writes" — withdrawn: the capture's values are in the prologue's order and the row was written from a transposed pair; step 4.137's implicit expectation that the fifth site's failure would be a table or entry condition, which the static element rules out; and this step's own earlier summary of `PdcDxe`'s table as "one fully populated element at the four pointer offsets the check reads", which is true of the element but was read before `0x26d0`'s `+0x38` write and `0x2528`'s `+0x1004` read were understood, so the phrase "the assert is reached by the loop's second condition or a deeper check" is replaced by the single named comparison at `0x2794`. Nothing in step 4.137's frame table, base derivation (`0x9c4e6000`), site identification (`0x24f4`, `pdc_seq.c:386`), halt-routine reading (`0x4084`/`0x40a4`) or census (21 `bl 0x1460`, 51 `bl 0x1564`, five NULL-format sites) changes; nor does step 4.136's `RpmhDxe` half |
+| does not close | whether the same comparison fails on the *device* — this run's resource address is read in a machine model that has nothing at `0xd2a0000`, and the phone is the only place that can say whether its own PDC block answers `+0x1008` with capacity; whether `RpmhDxe`'s `EFI_UNSUPPORTED` sleep-callback row and `PdcDxe`'s assert are also what stop the *device*, which needs the phone and not QEMU; which of the five `PdcDxe` sites a real run reaches, since this one reached the fifth under two fabricated seeds; what the `ERROR: C90000002:V03000007 I0 <GUID>` row is and which module prints it; whether the `mov x1, xzr` that puts the NULL in the format argument is written that way in the driver's source or is a build artifact, which the image cannot settle and the sources are not in this tree to check; what the 24-byte key at `0x7270` and the entry field `0x10018` mean, which only the driver's source or the phone would name; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written into any image; **the `mov x1, xzr` at `PdcDxe`'s five NULL-format sites is untouched**, and no patch to them is proposed — patching them is a device-facing action and is not taken, and neither is any patch to the capacity read, which is the driver's own check on hardware the phone has and this machine model does not; the one new QEMU run carries no payload, boots nothing and writes to no file under version control, its memory tree captured to `/tmp`; and no device is attached to this machine. The tracked tree gains this document alone. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun. What it does change is that the record now knows, from the image, *which* resource stops `PdcDxe` and *which* comparison stops it — a PDC block that must exist for the display resource, on a path the PDC driver walks before any of this port's code runs |
