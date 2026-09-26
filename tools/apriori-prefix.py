@@ -38,6 +38,16 @@ a slot map has assumed the answer. That is worth printing because
 candidates REFUTED for it (see `--letters` below, which reproduces the
 comparison and says what it is worth).
 
+The scope of that claim, added after step 4.142's correction was itself
+corrected: it holds for a slot map that is a *hypothesis*, and the map this
+tool's own table fixes is not one. Only `seen` values 48 and 49 give 46
+promotions, and they give the *same* 46 entries - the array is 70 entries with
+entry 0 the core file and the other 69 all present, so a promoted set is fixed
+by the prefix alone and the letters can be read through it. What the letters
+still cannot do is *choose* between two candidate batches, which is what
+`--letters` tests and what `tools/fv-census.py`'s closing block got wrong in
+the other direction.
+
 Usage:
     tools/apriori-prefix.py <img>                  # every prefix that gives 46
     tools/apriori-prefix.py <img> --seen 80        # one prefix, explicitly

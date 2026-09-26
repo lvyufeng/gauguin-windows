@@ -20,12 +20,16 @@ non-zero `missing` would explain an `unhit` without any walk stopping. Measured
 on the current build it is **zero**, so every one of the 70 entries has a file and
 the misses are about what the walk discovered, not about what the volume holds.
 
-What this tool is not: a decoder of the SEQ letters. `tools/apriori-prefix.py`
-says why at length - the slot-to-entry map is the thing under test, so indexing
-the observed string by it assumes the answer, and the panel's 46 characters are
-consistent with every batch of 46. This tool counts the array; naming which
-entries were promoted needs `P2 APRI`'s `bytes=`/`entries=`/`sum=` and `P2 DIAG`'s
-GUID list off the panel.
+What this tool is not: a decoder of the SEQ letters. It counts the array, and
+that count is what makes the letters readable: with `tools/apriori-prefix.py`'s
+prefix table beside it, 70 entries, entry 0 unmatchable and only `seen` 48 and
+49 giving 46 - and those two giving the same 46 - fix the promoted batch
+without any assumption about the slot map. A map that is a *hypothesis* cannot
+be indexed by (that is `tools/apriori-prefix.py`'s claim, and it holds); a map
+the length and the volume *determine* can be. What the panel is still needed
+for is the *status* behind each letter, which is `P2 WHY` and `P2 ERR`, and the
+*confirmation* of the batch, which is `P2 APRI`'s `bytes=`/`entries=`/`sum=`
+and `P2 DIAG`'s GUID list.
 
 Usage:
     tools/fv-apriori.py                       # the build the payloads come from
@@ -157,8 +161,11 @@ def main():
         if not missing else
         "entries with no file can never be promoted - count them first, they "
         "explain misses without any walk stopping"))
-    print("  and this tool does not say WHICH 46 were promoted: the slot map is "
-          "the thing under test (tools/apriori-prefix.py)")
+    print("  and this tool alone does not say WHICH 46 were promoted: with "
+          "tools/apriori-prefix.py's prefix table it does, since entries=%d with "
+          "entry 0 unmatchable and only seen 48/49 giving 46 - and those two "
+          "agreeing - leaves one batch, which is the map the SEQ letters can be "
+          "read through" % entries)
 
 
 if __name__ == "__main__":
