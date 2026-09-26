@@ -29202,3 +29202,396 @@ previous step read out of a core dump is a model's value.
   now names the two on-device facts that would tell whether the phone agrees:
   whether the interface slot is filled before `UFSDxe` runs, and whether the
   attach succeeds when it is.
+
+## Step 4.142 — the third call is `HALIOMMU`'s own attach, it returns `4`, and the buffer it calls too small is this model's zeroed SMMU window: the protocol *was* installed before `UFSDxe` looked (so step 4.141's "nothing installs it here" is withdrawn), the slot it could not find is `UFSDxe`'s private cache and not the protocol database, the count behind the failure is read at `0x15000024` — the board's own declared `SMMU` base plus `0x24` — and the device's `P2 SEQ` line says `HALIOMMU` started there while `UFSDxe` never loaded
+
+Step 4.141 ended with four things it could not close, and all four are closed
+here, three of them by reading the two images statically rather than by running
+anything: the attach's own error code; the pointer `LocateProtocol` produced and
+what the located interface's word 1 writes into the slot; the count that makes the
+attach fail; and whether the IOMMU protocol is installed in this model at all,
+which 4.141 declared unanswerable — *"which this model cannot answer because
+nothing installs it here"* — and which is answered by the fact that
+`gBS->LocateProtocol` **succeeds** in the very run 4.141 was reading.
+
+### The located interface is `HALIOMMU`'s, and it is already installed
+
+`UFSDxe`'s routine at `U+0x24d8` reads its cached interface slot at `0x24f4`
+(`ldr x8, [x20, #1016]`, the `adrp`/`add` pair resolving to `U+0x193f8`), finds it
+zero, and locates the protocol itself:
+
+```
+2528: adrp x9, 0x19000   ; 252c/2530: x0 = U+0x18218 (the IOMMU GUID)
+2534: ldr  x10, [x9, #1792]      ; gBS
+2538: add  x2, sp, #0x10         ; out-parameter for the interface
+253c: mov  x1, xzr
+2540: ldr  x8, [x10, #320]       ; gBS->LocateProtocol
+2544: blr  x8
+2548: mov  x19, x0
+254c: cbz  x19, 0x2588           ; <-- TAKEN when the locate succeeded
+2550-2560: print U+0x1417d with the status, then b 0x2618
+```
+
+The probe's own transcript settles which side of that branch the run took. At
+`UFSDxe+0x2598` — four instructions *past* `0x2588`, which is only reachable by
+falling out of the `cbz` — it reads `iface ptr x11 = 0x9c502098   [x11+8] =
+0x9c4fa4cc   [x11] = 0x1`, and derives `HALIOMMU base 0x9c4f9000`. So the locate
+returned `EFI_SUCCESS`, the out-parameter held `0x9c502098`, and that pointer's
+two words are `1` and `base + 0x14cc`. The image agrees word for word: file offset
+`0x9098` holds `.quad 1`, `0x90a0` holds `.quad 0x14cc`, `0x90a8` holds
+`.quad 0x1500`. **The IOMMU protocol is installed and locatable at the moment
+`UFSDxe` runs, in this model**, and what it hands back is `HALIOMMU`'s own
+descriptor — the word at `x11 + 8` is a function inside `HALIOMMU.efi`, which the
+probe confirmed by watching it execute at `0x9c4fa4ec`.
+
+That last address is the store itself. `0x14cc`'s whole body is:
+
+```
+14cc: sub  sp, sp, #0x20
+14d0: adrp x8, 0x9000            ; resolved page 0x9000, PC page 0x1000
+14d4: add  x8, x8, #0xb0         ; base + 0x90b0
+14d8/14dc: x0 = [sp, #24]
+14e0: mov  x1, x0                ; the argument, twice — a debug-build relic
+14e4: adrp x9, 0x9000
+14e8: add  x9, x9, #0xb0         ; base + 0x90b0
+14ec: str  x9, [x0]              ; *argument = base + 0x90b0
+14f0/14f4: two dead stores of x8 and x1
+14f8: add  sp, sp, #0x20
+14fc: ret
+```
+
+and the probe caught exactly it: `stop 4 … watch:9c3983f8; pc=0x9c4fa4ec
+WATCH@0x9c3983f8 x0=0x9c3983f8`, then `after s: pc=0x9c4fa4f0 slot=0x9c5020b0` —
+the next instruction is `0x14f0`, and the slot now holds `0x9c5020b0`, which is
+`0x9c4f9000 + 0x90b0` to the byte. Three independent readings of the same number:
+the store's own `adrp`/`add` arithmetic, the slot's measured value, and the runtime
+base recovered from every `HALIOMMU` stop in the run (`0x9c4fa4ec − 0x14ec =
+0x9c4fb26c − 0x226c = 0x9c5020b0 − 0x90b0 = 0x9c4f9000`).
+
+**And the slot is `UFSDxe`'s own cache, not the protocol database.** `0x24f4`
+reads it, `0x259c` writes it through the located interface, and `0x25a0` re-reads
+it and branches *back to `0x24fc`* — the same test. So step 4.141's reading of the
+first arm, *"the interface slot `[U+0x193f8]` was NULL: no other driver had
+installed the IOMMU protocol by the time `UFSDxe` started"*, is wrong in its
+premise: a NULL cache says the driver had not cached the interface yet, which is
+true of every driver on its first pass, and the very next thing the same function
+does is locate the protocol successfully. Nothing about the phone follows from it
+either way.
+
+### The three calls `UFSDxe` makes through the table, and the table
+
+`0x2594` passes `x0 = &slot`, the located interface's word 1 fills the slot with
+its table, and from then on all three calls index that table:
+
+| call site | index | `HALIOMMU` offset | table word in the image | role, per `UFSDxe`'s own failure text |
+| --- | --- | --- | --- | --- |
+| `0x2504` (`ldr x10,[x8]; blr x10`, `x8` = the slot) | `[0]` | `0x18c0` | `0x90b0` | create domain — `UFS IOMMU domain create failed\n` |
+| `0x25b4` (`ldr x11,[x12,#64]`) | `[8]` | `0x311c` | `0x90f0` | configure — `UFS IOMMU domain configure failed\n` |
+| `0x25f4` (`ldr x12,[x13,#16]`) | `[2]` | `0x1b2c` | `0x90c0` | attach — `UFS IOMMU domain attach ARID 0x%x failed\n` |
+
+Four site-to-word matches, each one a different offset: the slot's own word 0 is
+`0x18c0` and `0x2504` calls it; `pre`-index `0x2` is `0x1b2c` and `0x25f4` calls
+it; index 8 is `0x311c` and `0x25b4` calls it; and the located descriptor's word 1
+is `0x14cc`, which is what the probe watched fill the slot. The table at `0x90b0`
+is ten words long — `0x18c0, 0x1974, 0x1b2c, 0x29cc, 0x2e94, 0x3244, 0x32d4,
+0x3378, 0x311c, 0x3398` — and word 10 onward is not pointers (`0x9100` holds
+`.quad 0x49ef56d78ec2bd8d`, `0x9110` four zero words), so this is the interface's
+full method count and not a slice of a larger table.
+
+The attach call is the one that fires, and it is four-argument, which is how the
+caller and the callee can be tied together without a stop on the `blr`:
+
+```
+25d8: ldr  x13, [x20, #1016]      ; the slot
+25e0: ldr  x0, [sp, #24]          ; the domain object the create call filled
+25e4: x1 = U+0x141f3              ; "\_SB_.UFS0" — the UFS device path name
+25e8: mov  w2, wzr
+25ec: mov  w3, wzr
+25f0: ldr  x12, [x13, #16]        ; word 2 of the table
+25f4: blr  x12
+25f8: cbz  w0, 0x2614             ; <-- NOT taken: the attach returned non-zero
+260c: mov  x19, #0x8000000000000007
+```
+
+and `HALIOMMU+0x1b2c`'s prologue stores exactly four incoming registers —
+`1b40: str x0,[x8,#8]`, `1b44: str x1,[x8]`, `1b48: stur w2,[x29,#-44]`,
+`1b4c: stur w3,[x29,#-48]` — with the `w2` landing in the slot the driver later
+hands to `0x2750` as the ARID (`204c: ldur w2, [x29, #-44]`). The ARID is
+`0`, which is why the failure text prints `ARID 0x0`; that zero is `UFSDxe`'s own
+argument and not a value read back from the device.
+
+### The count is read at `0x15000024`
+
+`0x1b2c` walks to the bank search in five steps, and the disassembly reads:
+
+```
+1e18: x8 = the domain object      ; 1e20: w9 = *(u32 *)domain
+1e28: cbnz w9, 0x1f54             ; domain[+0] != 0 -> 21 (RETURN_ABORTED)
+1e2c: x8 = the node               ; 1e30: x0 = *(x8)          <- the address
+1e34: x9 = the domain             ; 1e38: w1 = *(u32 *)domain
+1e3c: add  x2, x8, #0xc           ; &node[+0x0C], the out-parameter
+1e40: bl   0x2234                 ; the bank search
+1e44: x8 = the node
+1e4c: w1 = *(u32 *)(x8 + 12)      ; node[+0x0C] again
+1e50: cmn  w1, #0x1
+1e54: str  x0, [sp, #64]
+1e58: b.ne 0x1e78                 ; a bank was found -> continue
+1e5c: orr  w8, wzr, #0x4          ; <-- the arm this run takes
+1e6c: orr  w8, wzr, #0x4
+1e70: stur w8, [x29, #-20]        ; the function's result
+1e74: b    0x209c
+```
+
+Inside `0x2234` the first argument is stored and then read back **as 32 bits** —
+`2240: stur x0,[x29,#-8]` and `2260: ldur w0,[x29,#-8]` — and passed to `0x3b1c`
+with the frame slot `x29 − 0x20` as its out-parameter (`2264: sub x1, x29, #0x20`,
+`2268: bl 0x3b1c`). `0x3b1c` calls the `(u32)` loader with `w1 = 0` and `w2 = 0x24`
+(`3b3c: mov w9, #0x24`, `3b4c: bl 0x3590`), and `0x3590` is
+`ldr w0, [x0 + x1 + x2]`. So the value the loop is bounded by is
+**`*(u32 *)(arg32 + 0x24)`**, and `arg32` is not a mystery: probe 15's own frame
+read at `pc=0x9c4fb26c` printed `ret addr [x29-8] = 0x15000000`, and `[x29-8]` is
+precisely where `2240` stores that argument. The address is
+`0x15000000 + 0x24 = 0x15000024`, i.e. **the board's own declared `SMMU` window
+plus `0x24`** — `uefi/Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c:95`
+is `{"SMMU", 0x15000000, 0x00200000, AddDev, MMIO, UNCACHEABLE, MmIO, NS_DEVICE}`,
+exactly one 2 MB window at that base.
+
+The address is not a literal anywhere in `HALIOMMU.efi`: the byte pattern for
+`0x15000000` occurs once in the whole 45,056-byte image, at offset `0x90a6`, and
+only as the unaligned overlap of the two adjacent table words `0x14cc` and
+`0x1500`. The driver assembles addresses from two 16-bit halves held in its own
+objects (`200c`–`2018`: `ldr w10,[x8,#4]; lsl w10,w10,#16; subs w10,w10,#0x10,lsl#12;
+orr w9,w9,w10`), which is why a 32-bit constant sweep finds nothing. What the
+model can say is what the run measured: the pointer the driver treats as the SMMU
+register block is `0x15000000`, and the field at `+0x24` that it treats as a count
+of context banks is the one it reads there. The loop that would consume it is
+`0x2298`'s `bl 0x382c` — called once per bank with the bank index in `w1` — and it
+is the branch at `0x2288` (`cmp w8, w9` / `b.cs 0x23b8`) that skips it entirely
+when the byte is zero, which is what probe 15's `stop 3` at `0x9c4fb288` shows
+with `count local [x29-32]&0xff = 0x0`.
+
+### `4` is `RETURN_BAD_BUFFER_SIZE`, and the arms around it are the driver's own vocabulary
+
+`0x1b2c` has one result local, `[x29, #-20]`, and the epilogue returns it —
+`209c: ldur w8,[x29,#-20]`, `20a0: mov w0,w8`. Every arm stores a `RETURN_*` code
+there, unencoded (this driver's style, unlike `UFSDxe`'s `movk`-built `EFI_*`):
+
+| site | code | `RETURN_*` | guard, where it was read |
+| --- | --- | --- | --- |
+| `0x1b90` | `3` | `RETURN_UNSUPPORTED` | the caller's pointer or its `[0]` is NULL (`0x1b78`/`0x1b80`) |
+| `0x1bbc` | `2` | `RETURN_INVALID_PARAMETER` | the object's type word is already `1` (`0x1ba4`) |
+| `0x1be8` | `20` | `RETURN_ALREADY_STARTED` | `0x4be0` returned non-zero (`0x1bdc`) |
+| `0x1c58` | `24` | `RETURN_PROTOCOL_ERROR` | `(domain[+0x20] & 0xc00001) != 0x800000` (`0x1c14`, `0x1c44`) |
+| `0x1c88` | `19` | `RETURN_NOT_STARTED` | the `count << 5` array allocation `0x3f5c` returned NULL (`0x1c7c`) |
+| `0x1cd4` | `20` | `RETURN_ALREADY_STARTED` | `0x4ce0` (the array fill) failed (`0x1cbc`) |
+| `0x1d64` | `2` | `RETURN_INVALID_PARAMETER` | no entry's first word matched the ARID (`0x1d0c` → `0x1d48`) |
+| `0x1da0` | `20` | `RETURN_ALREADY_STARTED` | `0x4ea8(entry[+0x10])` failed (`0x1d88`) |
+| `0x1df4` | `[sp,#192]` | propagated | the node builder `0x20b4` returned non-zero, or the node is NULL (`0x1dd4`/`0x1de0`) |
+| **`0x1e70`** | **`4`** | **`RETURN_BAD_BUFFER_SIZE`** | **the bank search left `node[+0x0C]` at `-1` (`0x1e50`)** |
+| `0x1f68` | `21` | `RETURN_ABORTED` | `node[+0]` non-zero (`0x1e28`) |
+| `0x1fc0` | `0` | `RETURN_SUCCESS` | the `0x2604` status was `5` (`0x1fa4`), and `domain[+0x30]` is bumped |
+| `0x1fd0` | `[sp,#192]` | propagated | the `0x2604` status, returned as-is |
+| `0x206c` | `[sp,#192]` | propagated | same status, after `0x2750(node, x1, ARID)` ran |
+| `0x2098` | `0` | `RETURN_SUCCESS` | the full success arm: `0x17b8`, `domain[+0x30]++`, print |
+
+(`RETURN_INVALID_PARAMETER = ENCODE_ERROR (2)`, `…UNSUPPORTED (3)`, `…BAD_BUFFER_SIZE
+(4)`, `…DEVICE_ERROR (7)`, `…OUT_OF_RESOURCES (9)` at
+`work/uefi/Mu-Silicium/Mu_Basecore/MdePkg/Include/Base.h:1036–1117`; `NOT_STARTED`
+`19`, `ALREADY_STARTED` `20`, `ABORTED` `21` and `PROTOCOL_ERROR` `24` follow in the
+same list.) The `-1` that the failing arm tests is seeded by one place only —
+`21c0: mov w10, #0xffffffff` / `21c4: str w10, [x8, #12]` inside the node builder
+`0x20b4` — so `cmn w1, #0x1` at `0x1e50` is a sentinel test: *the bank search did
+not resolve a bank*, and the driver's word for that is "the buffer was not the
+proper size for the request", `4`.
+
+Two things about the table are worth naming because they are not what a reader
+would guess. `20` is used three times for three different callees' failures — this
+driver's generic "the thing below me did not work" — and the arm at `0x1f68`'s
+guard is the *opposite* of a failure test (`cbnz w9, 0x1f54` on `node[+0]`), so an
+`ABORTED` there would be a state assertion, not an I/O error. And the `0x1fc0` arm
+treats status `5` (`RETURN_BUFFER_TOO_SMALL`) as success, which is the driver
+saying "already sized" and returning `0`.
+
+### Why the register reads zero here, and what that says about the phone
+
+`0x15000024` is zero in this run because **this model does not have SMMU
+registers at all**. `tools/qemu-el3-stub.S` gives every 2 MB block that covers a
+declared region below `0x40000000` its own 2 MB of untouched RAM below the
+payload, by installing stage-2 translation with `HCR_EL2` and a table built by
+`tools/qemu-panel-read.py`'s `l2_plan` — and the region the board names `SMMU` is
+one such block, exactly 2 MB, at `0x15000000`. The chain is short and fully
+measured:
+
+- `VTTBR_EL2 = 0x48002000`; L1 at `0x48002000` holds `.quad S2_L2 | 0x3`; L2 at
+  `0x48003000`; and the 2 MB block entry for index 168 is at `0x48003540` and
+  reads `0x466007fd`.
+- So VA `0x15000000` resolves to **PA `0x46600000`**, and its `+0x24` to
+  `0x46600024` — inside the same zeroed pool block.
+- `0x46600000` is not a coincidence: `MemoryMapLib.c:95` declares exactly one
+  2 MB `AddDev` region below `0x40000000` at that base, `l2_plan` assigns pool
+  blocks densely in sorted order from `ZERO_MEM_POOL_BASE = 0x40000000` at one
+  `STAGE2_BLOCK = 0x200000` per block, the plan has 55 blocks, and block 168 is
+  the last of them — 52nd of 55 — so `0x40000000 + 52 × 0x200000 = 0x46600000`.
+  `block_for_ipa` in the same tool `die()`s if a block is not in the plan, so the
+  block's membership is asserted by the tool that built the run; and blocks 167
+  and 169 are *not* in the plan, so the neighbouring 2 MB of VA space is not
+  redirected anywhere.
+- The byte-level evidence agrees. An offline numpy scan of the four 1 GiB
+  `pmemsave` dumps finds exactly one descriptor in the whole of RAM whose
+  `[51:12]` field names `0x46600000` — at `0x0048003540`, i.e. the entry above —
+  and it lives in the stage-2 table region, not in the stage-1 tables. The
+  previously "unresolved" descriptor reading `0x60000015000000` was this same
+  entry approached with stage 1's level count: stage 2 here has three levels
+  (`VTCR_EL2` sets the block size, not `TCR_EL1`), and the five-level walk the
+  earlier window ran invented a level that does not exist.
+
+So the zero at `0x15000024` is a property of `--el3-zero-mem` and not of the
+gauguin board. On the phone that window is a real SMMU register block, and the
+same read would return whatever the block's `+0x24` field holds — which is the
+one thing this model cannot supply and does not pretend to.
+
+### The device's own line, and what it says about this path
+
+The `P2 SEQ` line read off the device on 2026-09-23 —
+`ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL`, 46 characters — has one letter
+per Apriori *match*, and the payload's own patch defines them
+(`uefi/patches/mu-basecore-local.patch:378-384`): `'s'` = *EntryPoint returned
+`EFI_SUCCESS`*, `'S'` = *EntryPoint returned an error*, `'L'` = *`CoreLoadImage`
+failed, so the EntryPoint was never called*, `'?'` = promoted but never reached.
+Under the table's slot-to-Apriori identity (slot *k* = Apriori *k + 1*), the two
+entries this step is about are:
+
+- **slot 14 = Apriori 15 = `HALIOMMU` = `s`** — on the phone, `HALIOMMU`'s
+  `DriverEntry` ran and returned `EFI_SUCCESS`.
+- **slot 27 = Apriori 28 = `UFSDxe` = `L`** — on the phone, `CoreLoadImage`
+  failed for `UFSDxe`, so its `DriverEntry` never ran, `UFSSmmuConfig` was never
+  called, and no `P2Record` entry exists for it.
+
+That is the answer to the question 4.141 called unanswerable, and it is an answer
+in the opposite direction from the model's: **the phone starts the IOMMU driver
+and never starts `UFSDxe`**, so the attach this step explains in such detail does
+not run there at all. The status behind the `L` is kept in `mP2ApriSt` and printed
+by the digest as a class letter — `'R'` `OUT_OF_RESOURCES`, `'N'` `NOT_FOUND`,
+`'X'` `SECURITY_VIOLATION`, `'D'` `DEVICE_ERROR` (`patches/mu-basecore-local.patch:440-444`)
+— so the owed `P2 WHY` row is what would name the class of `UFSDxe`'s load
+failure, and it is one of the five readings the device still owes.
+
+The caveat this conclusion inherits is the one the table itself states: the
+slot-to-Apriori identity holds if the array was read short (step 4.132's **R1**)
+and fails if the *discovered list* was short (**R2**), and the row that decides is
+`P2 STATS`'s `apriori=` denominator, which has never been transcribed. Under R1
+the two rows above are `HALIOMMU` and `UFSDxe`; under R2 they are whichever
+drivers occupy those positions in the run's actual match order. One
+corroboration, not a proof: R1's reading of slots 18–20 as `RpmhDxe`, `PdcDxe`
+and `ClockDxe` failing agrees with the model, which walks into `PdcDxe` and stops
+in `ClockDxe` on its own (`ClockDriver.c:260`, step 4.139).
+
+- **instrument**: two images read statically and byte-wise —
+  `uefi/Binaries/gauguin/QcomPkg/Drivers/HALIOMMUDxe/HALIOMMU.efi` (45,056 B,
+  sha256 `61deaf79…`) and `uefi/Binaries/gauguin/QcomPkg/Drivers/UFSDxe/UFSDxe.efi`
+  (114,688 B, sha256 `c8bc07eb…`) — with `aarch64-linux-gnu-objdump -D -b binary -m
+  aarch64 --adjust-vma=0x0` (whose `adrp` rendering is the *resolved* page, which is
+  what makes `adrp x8,0x9000` at `0x14d0` mean `base+0x90b0` and not `0x9000`), and
+  with a plain byte reader for the protocol table at `0x90b0`, the descriptor at
+  `0x9098` and a sweep of the whole image for 32-bit constants; sixteen QEMU runs
+  under `tools/qemu-panel-read.py`'s machine string, payload, four seeds and
+  monitor/gdb pair, kept as `work/out/qemu-probe-4.141/ufs-probe{12..27}.py` with
+  their logs (sha256 `c09c9593…`, `2b66385e…`, `4a0e1e28…`, `50217f60…`, `8eaa0131…`,
+  `d3b9a3ae…`, `57c639c2…`, `2c094614…`, `86f64264…`, `0c76e533…`, `df233a6c…`,
+  `51ef0cdf…`, `d957b21e…`, `5b3e604a…`, `b768e290…`, `4e151591…`), of which probe
+  13 is the one that catches the slot store (`watch:9c3983f8` at `pc=0x9c4fa4ec`,
+  then `after s: pc=0x9c4fa4f0 slot=0x9c5020b0`) and probe 15 the one that reads the
+  located interface (`iface ptr x11 = 0x9c502098   [x11+8] = 0x9c4fa4cc   [x11] = 0x1`,
+  `=> HALIOMMU base 0x9c4f9000`) and the bank search's frame (`ret addr [x29-8] =
+  0x15000000`, `count local [x29-32]&0xff = 0x0`); two offline scans over the four
+  1 GiB `pmemsave` dumps (`scan-pool-4.142.py`, 1,200 B, sha256 `49772833…`, and
+  `scan-chain-4.142.py`, 1,191 B, sha256 `24ebe180…`); plus `tools/qemu-el3-stub.S`
+  (`s2_l1`/`s2_l2`), `tools/qemu-panel-read.py`'s `low_regions`, `l2_plan`,
+  `block_for_ipa` and its `ZERO_MEM_POOL_BASE`/`STAGE2_BLOCK` constants,
+  `MemoryMapLib.c:95`, `Base.h:1036–1117` and `patches/mu-basecore-local.patch:359,378-384,440-444`.
+  Nothing was built for the device, nothing was flashed, no partition was written,
+  no stub or firmware source was changed and no patch was written into any image;
+  every write is to `/tmp`, to `work/out/qemu-probe-4.141/` and to this record, and
+  `work/` is untracked.
+- **shows**: that the IOMMU protocol **is** installed and locatable in this model
+  when `UFSDxe` runs — `0x254c`'s `cbz x19, 0x2588` is taken, the probe reads the
+  out-parameter as `0x9c502098`, and the image's own words there are
+  `.quad 1, 0x14cc, 0x1500` — so the NULL slot at `0x24f4` is `UFSDxe`'s cold cache
+  rather than missing firmware; that the interface's word 1 is the routine at
+  `0x14cc`, whose single store at `0x14ec` writes `base + 0x90b0` into
+  `U+0x193f8`, which is the store the probe watched and the slot value the run
+  ends with (`0x9c5020b0 = 0x9c4f9000 + 0x90b0`, three ways); that the table at
+  `+0x90b0` is ten methods long and `UFSDxe`'s three calls index it at `[0]`
+  (`0x18c0`, create), `[2]` (`0x1b2c`, attach) and `[8]` (`0x311c`, configure),
+  which is how the failing call is identified as `0x1b2c` without a stop on the
+  `blr`; that the attach's first argument is read back as a 32-bit address and its
+  `+0x24` read as a count — `2240`/`2260`/`2268`, `0x3b1c` → `0x3590` with
+  `w2 = 0x24` → `ldr w0,[x8]` — and that the address is `0x15000000`, probe 15's
+  own `ret addr [x29-8] = 0x15000000`, i.e. the base of the one 2 MB region the
+  board names `SMMU`; that the count is zero and the loop at `0x2284`/`0x2288` is
+  skipped, so `node[+0x0C]` keeps the `-1` that `0x21c0`/`0x21c4` seeded and the
+  `cmn` at `0x1e50` takes the arm that stores `4`; that `4` is
+  `RETURN_BAD_BUFFER_SIZE` and that this driver stores bare `RETURN_*` codes (15
+  stores, 3/2/20/24/19/20/2/20/propagated/4/21/0/2 propagated/0) where `UFSDxe`
+  builds `EFI_*` with `movk`; and that the whole of `0x15000000`–`0x15200000` is
+  the stub's stage-2 pool block at PA `0x46600000` — `chain142`'s walk
+  `0x48002000 → 0x48003000 → 0x48003540 = 0x466007fd`, one descriptor in 4 GiB
+  naming that address and it is in the stage-2 table, and `l2_plan`'s own
+  arithmetic (`0x40000000 + 52 × 0x200000`) leaving blocks 167 and 169 unassigned.
+- **adds**: the arm table for `HALIOMMU+0x1b2c`, read in full with each guard's
+  source line; the `-1` sentinel's single seeder; the `0x3b1c` → `0x3590` →
+  `*(u32 *)(arg32 + 0x24)` chain that gives the count an address; the measured
+  location the driver treats as its SMMU register block; the four site-to-word
+  matches that tie `UFSDxe`'s three calls to the ten-word table; the
+  `0x1fc0` arm that maps `RETURN_BUFFER_TOO_SMALL` to success; and the reading of
+  the device's own `P2 SEQ` letters against the payload's own definitions —
+  `HALIOMMU` `s`, `UFSDxe` `L` — which is the first time this record has turned
+  that line into a statement about a *specific* driver's path.
+- **corrects**: step 4.141's *"the interface slot `[U+0x193f8]` was NULL: no other
+  driver had installed the IOMMU protocol by the time `UFSDxe` started"* — the slot
+  is `UFSDxe`'s private cache, filled by the same function four instructions later,
+  and the protocol is present; step 4.141's *"The machine model manufactures the
+  empty slot"* — the model manufactures nothing about the slot, it manufactures the
+  *register content* behind the failing call, by redirecting the declared `SMMU`
+  window to zeroed pool RAM; step 4.141's `does not close` row in three parts — the
+  attach's error code is `4` and is derived above, the pointer `LocateProtocol`
+  produced is `0x9c502098 = HALIOMMU + 0x9098` and its word 1 writes
+  `HALIOMMU + 0x90b0` into the slot, and "whether `HALIOMMUDxe` installs the IOMMU
+  protocol before `UFSDxe` starts there, which this model cannot answer because
+  nothing installs it here" is answered twice over — the model does install and
+  locate it, and the device's `P2 SEQ` line says `HALIOMMU`'s entry returned
+  `EFI_SUCCESS`; and the earlier window's `0x60000015000000` descriptor anomaly,
+  which was a stage-1 walk of a stage-2 address and is now a derived, not an open,
+  number. Nothing in step 4.141's chain of stops changes: probes 12–15 reproduce
+  every stop it used, and `UFSDxe`'s three arms keep their `EFI_NOT_STARTED`,
+  `EFI_UNSUPPORTED` and `EFI_DEVICE_ERROR` values.
+- **does not close**: what fills the bank table on a machine that has one — the
+  driver reads a count and calls `0x382c` per bank, and no probe has yet run on a
+  machine where the count is non-zero, so the per-bank path (`0x228c`–`0x23b8`,
+  `0x382c`, and what `0x2604`/`0x2750` do with the assembled address) is read but
+  never executed; what `0x18c0` (create) and `0x311c` (configure) actually do, since
+  neither was disassembled in this step; which code path installs the protocol in
+  this model, since `LocateProtocol` succeeding proves an installation without
+  naming the installer; what `0x4be0`, `0x4ce0`, `0x4ea8`, `0x4c00`, `0x4c64`,
+  `0x64c8`, `0x8ccc`, `0x17b8`, `0x2604` and `0x2750` are; what `U+0x19400` holds;
+  `CmdDbDxe`'s own `P2Record[0]` of `0x8000000000000003`, still unexamined; the
+  second image to return `-7` at 10.6 s in these runs; and the R1/R2 identity
+  caveat that every device-side statement above inherits, which the unread
+  `P2 STATS`'s `apriori=` denominator decides. The five owed on-device readings
+  under *先读屏，再刷下一次*, the P3 gate and its display, USB-host and buttons
+  items, and P4 and P5 remain where they were — the device is still absent
+  (`adb devices -l` and `fastboot devices` both empty, no qcom USB device).
+- **not an action**: nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was changed and no patch was
+  written into any image. In particular the model's failure is **not** a defect
+  this step proposes to fix: `HALIOMMU` reads a register block the model does not
+  emulate, and the phone, which does have that block, never reaches the call —
+  so there is no code change to `HALIOMMU`, to `UFSDxe` or to the payload that
+  follows from this step, and none is made. What it does change is where the next
+  on-device question points: not at the IOMMU, whose driver the device reports as
+  having started successfully, but at why `CoreLoadImage` fails for `UFSDxe` — a
+  load failure, before any of the code in this step, whose class letter the owed
+  `P2 WHY` row would print. The porting goal is unchanged and unmet: the end state
+  is still a Windows tablet, the modem and the cameras are still undrivable, P3 is
+  unfinished and P4's `userdata`-destroying install and P5's peripherals are not
+  begun. `userdata`, the partition table and the firmware LUN remain untouched.
