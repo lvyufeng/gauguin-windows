@@ -28,10 +28,21 @@ since step 4.98 added four; the values below are what `probe-fingerprint.py IMG`
 prints now, not a column someone typed:
 
     boot-now-0923   FREE SEQ DIAG STATS WALK NOLOAD                        6/14
-    p2-4.20         the same six, plus APRI WHY ERR BIN RETRY             11/14
+    preread-0923d   the same six, plus WHY                                 7/14
+    p2-4.20         the first six, plus APRI WHY ERR BIN RETRY            11/14
     p2-variants     all fourteen                                         14/14
     p2-4.94         all fourteen                                         14/14
     p2-freewhy      all fourteen, P2 FWHY in the older spelling          14/14
+
+`preread-0923d` is the rung the four-rung version of this table left out, and it is
+the one that cannot be inferred from its neighbours: it is step 4.13's build, kept
+under the name that means "the image that was on the phone before the next one", and
+the record's own chain of payloads on `boot` puts it there from 4.13 until 4.25. It
+is the only image that carries `P2 WHY` and not `P2 ERR`, so it is the only rung
+where a panel showing a `WHY` line beside `SEQ` and no `ERR` below it is that build
+rather than a stalled run - and the "a panel with no `P2 ERR` is running
+`boot-now-0923`" gate two hundred lines down is exactly the inference this rung
+bounds. Measured 2026-09-27 with `probe-fingerprint.py IMG`.
 
     rung      row it is                    boot-now-0923
     --------  ---------------------------  -------------

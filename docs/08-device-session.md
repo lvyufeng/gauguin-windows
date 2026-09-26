@@ -30080,3 +30080,106 @@ mechanism where step 4.142 had only an ordering.
   porting goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying
   install and P5's peripherals not begun, and the end state still a Windows tablet
   whose modem and cameras are undrivable.
+
+## Step 4.144 — the fingerprint ladder re-measured is the ladder the tool documents,
+and it was missing the one rung that cannot be inferred from its neighbours:
+`preread-0923d` is 7/14 — the only build carrying `P2 WHY` without `P2 ERR` — and it
+is the image the record's own chain puts on `boot` from step 4.13 until 4.25, so the
+"a screen with no `P2 ERR` is running `boot-now-0923`" gate is bounded by it on one
+side and by `p2-4.20` on the other
+
+This step is a readiness pass, not a reading: the device is still absent, so what it
+can do is establish that everything staged for the next device window says what the
+record claims it says. Two independent instruments were run over the payloads of
+record. `tools/probe-fingerprint.py` is the project's own, deciding each of fourteen
+instruments by a `DEBUG` format string inside `DxeCore`; and a throwaway two-layer
+extractor (gzip for the Android boot image's kernel, then LZMA for the compressed FV
+inside it, `/tmp/p2strings.py`) was written for this step so that the same question
+could be asked without the tool — grep the decoded inner volume for the instrument
+strings directly. Both were run over the same six images and agree on all six.
+
+The ladder, measured 2026-09-27 and identical to the tool's documented table wherever
+that table has a row: `boot-now-0923` 6/14 (`FREE SEQ DIAG STATS WALK NOLOAD`),
+`p2-4.20` 11/14 (the six plus `APRI WHY ERR BIN RETRY`), and `p2-variants`,
+`Mu-gauguin-xhci-host-gzip` and `Mu-gauguin-stock-gzip` at 14/14 each. The two gates
+the record names behave as the record says: `--expect P2ErrRow` exits `1` on
+`boot-now-0923` and `0` on `p2-variants`.
+
+The one row the table did not have is `work/out/p2-silicon-gzip-preread-0923d.img` at
+**7/14** — `boot-now-0923`'s six plus `P2 WHY`, and nothing else. It is not a rung that
+can be inferred from the two beside it, and the reason is the axis the ladder is read
+along. The table's four rungs differ on `P2 ERR` from the second onwards, which makes
+`ERR`'s absence look like a synonym for "the oldest build"; but `WHY` and `ERR` were
+added at different times — `P2WhyLetter`/`P2MarkSeq` with `boot-now-0923`'s successor
+and the grouped `P2 ERR %r x%d` later still — so there is a whole build that can print
+the status *letters* beside `P2 SEQ` and cannot print the statuses *in words*. That
+build is step 4.13's, preserved under the name that means "the image that was on the
+phone before the next one", and the record's own table of payloads on `boot` puts it
+there from 4.13 until 4.25, i.e. across the whole interval in which `P2 FAIL` and
+`P2 WALK` were the instruments being argued about.
+
+What that bounds is a gate, not a number. The record states that "a panel showing
+`P2 SEQ` with no `P2 ERR` anywhere on it is running `boot-now-0923`, and nothing on
+that screen can name a status". The second clause is true of `preread-0923d` too — it
+carries no `P2 ERR` — and the first is not: a `P2 WHY` line printed immediately below
+`P2 SEQ`, which is where it prints, distinguishes the two outright, and a `P2 WHY`
+line whose 46 characters are all `L` is a reading `boot-now-0923` cannot produce. So
+the gate is worth keeping and worth stating with both ends: no `ERR` and no `WHY` is
+`boot-now-0923`; no `ERR` but a `WHY` is `preread-0923d`; `ERR` present and `P2Tick`
+absent is the `p2-4.20` class, which is the build the record's chain says `boot` has
+held from 09-24 15:04 onward.
+
+That last one is the consequential line for the next device window, because it is the
+only one of the three that is *recent*. `p2-4.20` carries `APRI`, `WHY`, `ERR`, `RETRY`
+and `BIN` and carries no `P2Tick` — so its screen can name a status but cannot print
+the per-attempt `K %d %c%c %d/%d free=%d %g` row, which is the instrument written
+precisely for the case the record keeps hitting, a run that stalls before the digest.
+What the record says was flashed at 09-24 15:04 is `p2-variants`, which does carry
+`P2Tick`; nothing since has been read back at a non-zero length, so which of the two
+is on `boot` now is a question for the next `--read` and not for this host.
+
+- **instrument**: `tools/probe-fingerprint.py` run over six images — the four ladder
+  rungs above plus `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` and
+  `work/out/p2-variants/Mu-gauguin-stock-gzip.img` (both 14/14) — with `--expect
+  P2ErrRow` run twice as the record's own gate (exit `1` on `work/out/boot-now-0923.img`,
+  `0` on `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`); and `/tmp/p2strings.py`,
+  written for this step, which decompresses the boot image's gzip kernel (3,145,840 B
+  at file offset `0x800`), finds the single LZMA section in it (`0x110a0`, 7,356,424 B
+  decoded for `p2-variants`) and greps the decoded volume for the instrument literals
+  directly, so the answer does not depend on the tool it is checking. No QEMU run, no
+  probe, no panel and no device: `adb devices -l` and `fastboot devices` are both empty
+  and no Qualcomm USB device is present. Nothing was built for the device, nothing was
+  flashed, no partition was written, no stub or firmware source was changed and no
+  patch was written into any image; the only writes are to `/tmp` and to this record,
+  and the one tool edit changes a docstring table and no computed output.
+- **shows**: that the ladder `tools/probe-fingerprint.py` documents is the ladder it
+  computes, on all six images, and that an independent decode of the same payloads
+  agrees; that `P2 SEQ`, `P2 WHY`, `P2 ERR`, `P2 WALK` and `P2 APRI` are all present in
+  the inner volume of `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, so the build
+  staged for the next window can print every owed row; and that the record's two gates
+  still separate the oldest rung from the newest.
+- **adds**: the `preread-0923d` rung — 7/14, `P2 WHY` present and `P2 ERR` absent — to
+  the ladder table, together with the reason it is not derivable from the rungs beside
+  it, namely that `WHY` and `ERR` were added at different times.
+- **corrects**: the four-rung table's implication that the oldest build is the only one
+  without `P2 ERR`, and with it the unqualified form of the record's own gate — a panel
+  with no `P2 ERR` is `boot-now-0923` *or* `preread-0923d`, and the `P2 WHY` line
+  printed directly below `P2 SEQ` is what tells them apart. Nothing else in the gate
+  changes: a `WHY` line whose characters are all `L` is still a reading `boot-now-0923`
+  cannot produce.
+- **does not close**: what is on `boot` now — the record's chain says `p2-variants` was
+  flashed at 09-24 15:04 and read back identical, and every readback since has come
+  back at zero bytes, so the question stays with the next `--read` under
+  **对照的那张必须在覆盖之前读**; the owed panel readings themselves (`P2 ERR`, `P2
+  APRI`'s `bytes=`/`entries=`/`sum=`, `P2 DIAG`'s GUID list, `P2 STATS`'s
+  `apriori=46/70`, `P2 WALK`'s `seen=`/`iter=`/`last=`, `P2 FREE`, `P2 RETRY`, the four
+  `P2 BIN` rows), none of which this host can supply; and everything step 4.143 left
+  open on the model side.
+- **not an action**: nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was changed and no patch was
+  written into any image. This step changes no claim about the model's failure and none
+  about the phone's derived batch; it establishes only that the instruments staged for
+  the next reading are the ones the record says they are. `userdata`, the partition
+  table and the firmware LUN remain untouched; the device is absent; the porting goal
+  is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and
+  P5's peripherals not begun.
