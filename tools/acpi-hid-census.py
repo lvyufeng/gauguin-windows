@@ -133,6 +133,15 @@ question in the other direction - whose driver set this is, read off which names
 it answers to. The same mechanism is what P5 means by "re-bind the WoA driver
 INF" for the GPU.
 
+Every `yes` row names the `.inf` that declares the id, which is not decoration.
+A covered block and a *collision* look identical in a `yes`, and the difference
+is only visible in the file: measured 2026-09-27, the SC7280/Kodiak set answers
+`yes` to `SE1`, `SE2`, `SE3`, `SE5` and `SE7` on `QCOM0A10`, and `QCOM0A10` is
+`qci2c7280.inf` - the **I2C** controller. Those five rows were coverage of the
+I2C engines, which gauguin already has, being read as coverage of SPI engines it
+does not. The set's `0F` is the same story in the other direction: `QCOM0A0F` is
+in it, and the file that declares it is `qcslimbus7280.inf`.
+
 Three ways this file fooled itself, recorded because all three agreed with the
 conclusion being reached at the time. The `isinstance(True, int)` sentinel in
 `devices_in`, which reported that *no* reference describes *any* of gauguin's
@@ -1019,7 +1028,18 @@ def cmd_drivers(args):
         print(f"  {n}/{total:<8} {gen:<36} {fam}")
         for label in sorted(want):
             mark = "yes" if label in hits else " - "
-            print(f"  {'':<10} {'':<36} {'':<7}  {mark} {label:<6} {want[label]}")
+            # The declaring file, because a `yes` cannot tell coverage from a
+            # collision and the file can. `qci2c7280.inf` beside an SPI engine's
+            # label is the collision, not the coverage.
+            owner = ""
+            if label in hits:
+                files = sorted(hids.get(hits[label], []))
+                if files:
+                    owner = "  " + files[0]
+                    if len(files) > 1:
+                        owner += f" +{len(files) - 1}"
+            print(f"  {'':<10} {'':<36} {'':<7}  {mark} {label:<6} "
+                  f"{want[label]}{owner}")
         print()
     top = best[0]
     if top[0] == top[1]:
@@ -1029,8 +1049,10 @@ def cmd_drivers(args):
         print("  collide on a partial set is not the same as a full one.")
     else:
         print(f"  Best is {top[0]} of {top[1]} under family {top[3]}. A partial match")
-        print("  is not a family: it can happen by collision, so look at the ids")
-        print("  the set lists above before believing any byte.")
+        print("  is not a family: it can happen by collision, so read the id the")
+        print("  set lists for each block AND the .inf beside it before believing")
+        print("  any byte - an id whose declaring driver is a different bus than")
+        print("  the block is a collision, and it covers nothing.")
     return 0
 
 

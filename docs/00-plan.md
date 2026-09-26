@@ -462,16 +462,22 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Step 4.147): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147 and 4.149): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the
 thirteen objects it produced are in the DSDT today. The pins of the two TSENS controllers were never
 writable: no TSENS device exists in any of the 65 reference tables, and Windows' thermal path is the
 `ThermalZone` objects themselves, which take their readings from the TSENS side *under* the PEP — so
-there is no TSENS ACPI node to write, and the negative is a measurement rather than a gap. What is
-genuinely open is **the SPI engines**: `SE0` at `0x00880000`, which the device tree says carries the
-Novatek touchscreen at 10 MHz, and `SE6` at `0x0098C000`, the IR blaster.
+there is no TSENS ACPI node to write, and the negative is a measurement rather than a gap. The third
+item, **the SPI engines**, is not open work either, and Step 4.149 measures why: `SE0` at
+`0x00880000` carries the Novatek touchscreen at 10 MHz and `SE6` at `0x0098C000` the IR blaster in
+*this unit's own overlay* (entry 13, Step 4.54 — the stock device tree calls the same two windows
+`i2c@880000` and `serial@98c000`), but the SC7280/Kodiak Windows driver set declares no SPI engine id
+and contains no SPI controller driver at all, so a node written for either would bind nothing. The
+ASL's deferral — "written when a slave with a driver arrives rather than on their own" — is therefore
+correct and its condition is *unmet by this set*, which is a different thing from item 1 being
+incomplete. Item 1 needs no further ACPI.
 Buttons are written as of Step 4.89 (`BTNS`, `ACPI0011`), the node that needed
 no shipped driver at all because the operating system supplies it, and the USB port is written
 as of Step 4.90 — the `RHUB`/`PRT1` pair under each of `URS0`'s two children, the node that
@@ -541,7 +547,8 @@ accessors that return the `\_SB`-scope state names `MUXC`, `CCST`, `DPPN`, `HPDS
 `HIRQ`, all of which were already in the table. Note that the DSDT is still smaller in
 scope than the list above — at the time of writing neither I2C nor buttons nor the thermal
 zones were in it (I2C closed at Step 4.87, buttons at 4.89 and the thermal zones at 4.73,
-so **the SPI engines are the only item of that list still out**; Step 4.147 corrects this
+so **the SPI engines are the only item of that list still out**, for the reason Step 4.149 measures
+rather than for a gap in the writing; Steps 4.147 and 4.149 correct this
 parenthesis as well) — and the `GIO0`
 controller is declared without the corpus's per-pin interrupt catalogue, because that
 catalogue is board data and this board's device tree does not carry it.

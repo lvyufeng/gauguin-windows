@@ -30585,3 +30585,124 @@ where the thermal-zone and TSENS findings are written up.
 | corrects | the four tools' behaviour, and the docstring of `table_files()`; it also corrects `docs/00-plan.md`'s "Step 4.148" forward reference, which named a step that carries no such analysis and which ships in this commit rather than in the step it should point at |
 | does not close | the `_HID` work and every measurement in the plan, which are unchanged — no default count moved; the still-unreproducible-or-not question of whether the other three tools' recorded figures from their own windows survive a re-run today, which this step did not check beyond `acpi-order-votes.py`'s shape; the device-side half of everything |
 | not an action | nothing was built, flashed or written to any partition; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN are untouched; the porting goal is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and P5's peripherals not begun |
+
+## Step 4.149 — the last open part of P3 item 1 is not open work: the driver set declares no SPI engine id and contains no SPI controller driver, so the two SPI windows the phone's own overlay configures would bind nothing, and `--drivers`' `8/10` was reading a collision
+
+Item 1 of P3 has one part left. The thermal zones closed at Step 4.73 and the
+TSENS pins were never writable (Step 4.147); what remains is the SPI engines,
+and `tools/acpi/gauguin.asl` defers them with a condition rather than a reason:
+*"Not here: the SPI engines, written when a slave with a driver arrives rather
+than on their own."* That is a testable sentence. The slave is known — this
+unit's overlay is entry 13 (`~/backup/gauguin/dt/`, Step 4.54) and it configures
+`spi@880000` with `touch_spi@0`, a Novatek NVT part at 10 MHz, and `spi@98c000`
+with `irled@0` — so the whole question is whether a *controller* driver is
+available. Measured 2026-09-27 against the only Windows set this project has,
+`~/work/woa-ref/inf-7280`, the SC7280/Kodiak package: it is not.
+
+**The encoding is the first thing to get right, because getting it wrong gives a
+confident false negative.** All 112 `.inf` files are UTF-16 with a BOM, and the
+tool's own `read_win_text()` docstring records that reading one as UTF-8 "does
+not fail - it succeeds and returns text whose every other byte is NUL", so a
+`grep` for a literal id sees nothing. This step's first pass used `grep` and got
+exactly that answer for `QCOM0A0E`; the search below is encoding-agnostic, run on
+raw bytes in three encodings at once, and agrees with a correct decode. The
+tool's own line for the set is `112 .inf files, 158 distinct ACPI hardware ids`
+and `157 of them are QCOM ids`, because it counts ids written in the `ACPI\…`
+form; a raw scan of the same files for the bare token finds **165 distinct
+`QCOM····`**, the wider net catching also the `_HID` defaults that extension
+INFs write into the registry — `qcsubsys_ext_adsp7280.inf`'s
+`HKR,Desktop\0,"_HID",%REG_SZ%,"QCOM0A0F"` is one — rather than ids a driver is
+installed on. Both counts agree on what matters here: `QCOM0A0E` occurs in none
+of the 112 files in any form.
+
+**The id it would have to carry is not a guess.** Within one table generation
+the low pair of `QCOM<family><index>` is fixed per function, and the corpus
+shows the SPI index directly — all twelve devices *named* `SPI*` across eleven
+of the 65 reference tables:
+
+| reference device | `_HID` | window | tables |
+|---|---|---|---|
+| `SPI1` | `QCOM140F` | `0x00880000` | `surya` |
+| `SPI3` | `QCOM090E` | `0x00988000` | `renoir` |
+| `SPI3`, `SPI5` | `QCOM250E` | `0x00988000`, `0x00990000` | `alioth` |
+| `SPI4` | `QCOM050F` | `0x0088C000` | `mh2`, `cepheus`, `nabu`, `pipa`, `vayu` |
+| `SPI5` | `QCOM0C0E` | `0x00A90000` | `Kailua` DSDT_MTP and DSDT_QRD |
+| `SPI9` | `QCOM021E` | `0x00A80000` | `caymanslm` |
+
+so the SPI index is `0E` in the `09`/`0C`/`25` generations, `0F` in `05`/`14`
+and `1E` in `02`. gauguin's family byte is `0A` (Steps 4.60 and 4.67,
+corroborated by the corpus and not only by ids), which makes the id `QCOM0A0E`.
+
+**The set names every one of gauguin's other buses in that decade, and not the
+SPI index.** Enumerating the 165 ids, 117 fall under family `0A`. Its lowest are
+
+    0A04         HalExtQCWdogTimer7280.inf
+    0A06         qccamfrontsensor7280.inf
+    0A07 .. 0A0A qcmbrg, qcremoteat, qcsmmu, qckmbam
+    0A0B  SPMI   qcspmi7280.inf
+    0A0C  TLMM   qcgpio7280.inf
+    0A0D         qcipcrouter7280.inf
+    0A0F         qcslimbus7280.inf          <- SLIMbus
+    0A10  I2C    qci2c7280.inf
+    0A11  ADC    qcadc7280.inf
+    0A12 .. 0A13 qcdiagcsi, qcdiagrouter
+    0A15         qcremotefs7280.inf
+    0A16  UART   qcuart7280.inf
+    0A17         qcpep.wd7280.inf
+
+`0A05`, `0A0E` and `0A14` are the three the set never uses, and of those only
+`0A0E` is an index another generation gives to something: it is SPI's in `09`,
+`0C` and `25`. The index the corpus uses for SPI in the older generations is
+taken too — `0F` is `qcslimbus7280.inf`, `ADSP\QCOM0A0F`, and an ADSP child's
+`_HID` in `qcsubsys_ext_adsp7280.inf`. And no 8-character id anywhere in the set
+ends in `0E`, so the index is not merely unclaimed here but unclaimed under
+every family byte.
+
+**Independently of ids, the set has no SPI controller driver.** `SpbCx`, which
+any SPB-class controller must depend on, appears in exactly two of the 112
+files: as a real `Dependencies = SpbCx` in `qci2c7280.inf`, the I2C controller,
+and as a commented-out line in `qcusbcucsi7280.inf`. No file mentions
+`SerialBus`. There is no `QcSpi`, no `qspi`, and no `.inf` whose `Class` is an
+SPB or SPI class — the 18 class spellings present across the set are Bluetooth,
+CAMERA, Camera, Computer, Display, Extension, Firmware, HIDClass, MEDIA, Media,
+Net, Ports, SYSTEM, Sensor, SoftwareComponent, System, USB and USBDevice, three
+of those pairs appearing in both cases. The one
+`HIDClass` file is `qchwnled7280.inf`, the HWN LED driver, so the set carries no
+touchscreen miniport either — the slave side is absent along with the bus.
+
+**`--drivers` said `8/10` because a `yes` cannot tell coverage from a
+collision.** Its modern row marked SE1, SE2, SE3, SE5 and SE7 as covered on
+`QCOM0A10` — which is `qci2c7280.inf`, the I2C controller — and SE0u on
+`QCOM0A16`, which is `qcuart7280.inf`, the UART. Every SE row in that table is a
+*different bus's* driver: the legacy row's five are `QCOM0A11`, which is
+`qcadc7280.inf`. The set's ten "blocks" are the eight SEs plus SPMI and TLMM,
+and the rows that are genuine bus matches are SPMI and TLMM; the rest are
+gauguin's own I2C and UART engines, which the DSDT already declares as `I2C8`,
+`I2C9`, `IC11` and `UAR2`. The tool printed its warning — "a partial match is
+not a family: it can happen by collision" — on the line below the table, and the
+table was read as a verdict anyway. So `--drivers` now prints the `.inf` that
+declares each id beside it, and its closing paragraph says to read that column,
+because an id whose declaring driver is a different bus than the block covers
+nothing. Re-run, the modern row reads `yes SE1 QCOM0A10 qci2c7280.inf`, and the
+collision is visible without opening a file.
+
+**What this does not touch.** The family byte `0A` is unaffected: it rests on
+`QCOM0A0B`, `0A0C`, `0A10` and `0A16` naming SPMI, the pin controller, I2C and
+the UART in *this board's own* drivers — `qcspmi7280`, `qcgpio7280`,
+`qci2c7280`, `qcuart7280` — and on the corpus agreeing (Step 4.67). The SPI rows
+were never load-bearing for it. Nor does it change any node in the DSDT: nothing
+here had been written. What it changes is the status of item 1, which is that
+its remainder needs no ACPI — the two windows would bind nothing until a set
+with an SPI controller exists, and that is a driver question, not a table
+question. The corpus says where such a set might come from: the SPI engines are
+named in `alioth` and `renoir` tables (`QCOM250E`, `QCOM090E`), so a Windows
+package for an SM8250 or SM6350 board would carry the QUP SPI miniport, and
+`--bind` against it would settle `SE0`/`SE6`'s ids in one run.
+
+| | |
+|---|---|
+| instrument | `tools/acpi-hid-census.py --drivers ~/work/woa-ref/inf-7280`, plus an independent encoding-agnostic scan of the same 112 `.inf` files for `QCOM0A0E`/`QCOM0A10`/`QCOM0A0F`/`QCOM250E`/`QCOM090E` as raw bytes in ASCII, UTF-16LE and UTF-16BE, and an enumeration of every family-`0A` id; the SPI ids taken from the 65 reference tables' own `SPI*` devices rather than from a block list |
+| shows | the set declares 158 `ACPI\…` hardware ids (165 raw `QCOM` tokens) and has no id ending in `0E`, with `0A0E` the missing member of the `0A0B`/`0A0C`/`0A0D`/`0A0F`/`0A10` run; it contains no SPI controller driver — `SpbCx` only in `qci2c7280.inf` and commented out in `qcusbcucsi7280.inf`, no `QcSpi`, no SPB/SPI class, no `HIDClass` touchscreen; every SE row of `--drivers`' coverage table is another bus's driver, so its `8/10` was collision and not coverage |
+| corrects | P3 item 1's remainder: the SPI engines are not unwritten work but unservable hardware under this driver set, so item 1 needs no further ACPI; the reading of `--drivers`' coverage column; and the plan's status line, which called them "genuinely open" |
+| does not close | the family byte, the existing nodes, the P2 gate and every device-side reading, all unchanged; whether a set with an SPI controller exists and which id it would name, which needs a different package to run `--bind` against; whether the two SPI windows should be declared *unserved* anyway so the absence is visible in Device Manager rather than absent from the namespace, which is a decision and not a measurement; the device-side half of everything |
+| not an action | nothing was built, flashed or written to any partition; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN are untouched; the porting goal is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and P5's peripherals not begun |
