@@ -27490,3 +27490,173 @@ done here.
 | corrects | step 4.128's *"Which* of the three it was is not established" — it is established, it is the one whose epilogue names line 175, and the registers and the stack establish it without the panel; step 4.128's *"the likeliest reached site is one of the two interface-slot checks"*, which is **withdrawn**: the reached site is inside `0x4d88`'s DRV walk and the wrapper at `0x6050` is not on the stack; step 4.128's sentence that *"the spin at `0x19d8` … is the pair the panel shows"*, which is wrong on the mechanism — `DebugAssert` prints, then calls `CpuDeadLoop` at `0x1a8c`, and `0x19d8` is the address it was *called* with and is never executed; step 4.128's description of the line-84 assert's branch, which is the other way round at the instruction level (`cbz w0, 0x6034` at `0x5ffc` sends a zero result to `0x6034`, which logs with the string `RpmhDriver` at `0xbdfa`; the assert at `0x6000` is the non-zero case); step 4.128's naming of `0x6014`/`0x6130`/`0x61a0` as three *call sites* of a NULL-format `DebugVPrint` — they are the assert branches of three helpers — while its count that exactly three exist stands and is confirmed here; and the records' framing of the `DebugLib.c +78` row as the firmware's failure, which it is only in the sense that a messenger can fail: the failure is the condition at `0x4e74`. Each of the three step-4.128 annotations is in place in that step's own section |
 | does not close | what `+0x18` and `+0x1c` of a context element are meant to hold, and why a call that `0x6320` validated hands back words lying past that element — the vendor's context struct being 0x18 bytes (the read out of the element by construction) and being larger (its index stride out of the element) are both consistent with everything measured, and `rpmh_image_os.c` is not on this disk; whether the same assert is what stops the *device*, which the record can only infer from the seven captures that end at the same row and not from a run it can see; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question and still needing a re-read of the phone's own screen; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written for the condition found; every reading is off the committed image, off the disassembly of it, or off QEMU runs on this host, and no device is attached to this machine. The tracked tree gains this document alone — the four probe artifacts, the two dumps and the two probe scripts are under `work/` and `/tmp/`, and `work/` is gitignored. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun |
+
+## Step 4.135 — the assert has two sites and the seed moves between them: the unseeded run dies at `0x4e74` on the config word the register model reads as zero, and a run that seeds that word dies one check later at `0x5074` — and seeding the eight RSC channel-enable bits as well lets `RpmhDxe` *finish* and the dispatcher load `PdcDxe`, the phone's own next driver, with its own GUID on the row
+
+Step 4.134 named the failed statement `rpmh_image_os.c:175`, reached from `bl 0x6108` at `0x4e74` in the DRV walk, on
+`cfg1 < entry->[+0x18]`, and closed by saying that on the evidence there the walk is "blocked by arithmetic in the driver
+itself … and one that a seeded word or a one-instruction patch can be used to step past". This step runs that experiment.
+The site in 4.134 is correct **for the run it read** — that run's own stack, still on this disk, carries `base+0x4e78` and
+nothing else — and this step's runs, seeded, die at a *different* `bl 0x6108`, `0x5074`, in the callee the first check
+calls into. And the second seed, on the eight channel-enable bits, is enough for `RpmhDxe` to return normally and for
+`PdcDxe` to be loaded — which is what the phone's own Apriori rows show happening next.
+
+### Two stacks, two death sites, and the seed is what moves between them
+
+`DebugAssert` ends in `CpuDeadLoop` (`0x9794`), whose prologue (`sub sp,#0x20` at `0x9794`, `add x29, sp, #0x10` at
+`0x979c`) makes the register dump's `X29` the innermost frame pointer, so `[x29]`/`[x29+8]` walk the chain upward. Walked
+that way, the prior step's capture (`work/out/qemu-probe-4.134/p4-stack.bin`, from `p5-regs.txt`'s `X29 = 0x9ffce580`)
+and this step's (`work/out/qemu-probe-4.135/p8-stack.bin`, `X29 = 0x9ffce510`) are:
+
+| | unseeded capture, `p4-stack.bin` | seeded capture, `p8-stack.bin` |
+|---|---|---|
+| innermost frame | `0x9ffce580` → ret `base+0x1a90` | `0x9ffce510` → ret `base+0x1a90` |
+| | `0x9ffce7c0` → ret `base+0x19d8` | `0x9ffce750` → ret `base+0x19d8` |
+| `DebugAssert`'s caller | `0x9ffceae0` → ret `base+0x6134` | `0x9ffcea70` → ret `base+0x6134` |
+| **the assert's own frame** | `0x9ffceaf0` → ret **`base+0x4e78`** | `0x9ffcea80` → ret **`base+0x5078`** |
+| next frame up | `0x9ffceb50` → ret `base+0x3808` | `0x9ffceaf0` → ret `base+0x4f48` |
+| | `0x9ffcebb0` → ret `base+0x14f4` | `0x9ffceb50` → ret `base+0x3808` |
+| | `0x9ffcebd0` → ret `base+0x1214` | `0x9ffcebb0` → ret `base+0x14f4`, then `0x1214` |
+| then | `0x9cd02654`, `0x9cd06560`, `0x9ccf9c5c`, … — outside the image | the same |
+
+Counting the two addresses in both 262,144-byte dumps: the unseeded stack holds `base+0x4e78` once and `base+0x5078`
+not at all; the seeded stack holds `base+0x5078` once, `base+0x4f48` once and `base+0x4e78` not at all. Both hold
+`base+0x3808` once. So step 4.134's site and this step's are not competing readings of one stack — they are the two
+sites the two seed states actually reach, and the walk passes the first and stops at the second once the first is
+satisfied. What 4.134 overstated is only its quantifier: it is the assert that ends every **unseeded** run.
+
+### The outer check at `0x4e74`, verbatim, and why the seed clears it
+
+```
+4e48: add  x1, sp, #0xc        ; &cfg1
+4e4c: add  x2, sp, #0x8        ; &cfg2
+4e50: ldr  w0, [x26]           ; id
+4e54: bl   0x6738              ; RscHalReadConfig(id, &cfg1, &cfg2)
+4e58: cmp  w0, #0x0 / 4e5c: cset w0, eq / 4e60: bl 0x6108
+4e64: ldr  w11, [sp, #0xc]     ; cfg1
+4e68: ldr  w12, [x26, #0x18]   ; entry->[+0x18]
+4e6c: cmp  w11, w12
+4e70: cset w0, hs              ; assert cfg1 >= entry->[+0x18]
+4e74: bl   0x6108              ← the unseeded run dies here
+4e78: … 4e7c-4e88: cfg2 against entry->[+0x1c]
+4e8c: ldr  x10, [x26, #0x28] / 4e98: ldr w16, [x11] / 4e9c: cmp w15(cfg1), w16
+4ea0: cset w0, hs / 4ea4: bl 0x6108   ; cfg1 against the master log's count
+4ea8: bl   0x68c0(id, 0xffff)         ; the send, which the seeded run reaches
+```
+
+`x26` is the entry pointer the walker was handed — `base+0xe1dc` in the live dump, i.e. `entry[0]+4`, so `[x26]` is the
+entry's id (`2`) and `[x26, #0x18]` is the entry's own `8`. The comparison is a **lower bound against a compile-time
+constant of the image's `.data`**: the live config word must be at least what the driver was built expecting. `RscHalReadConfig`
+(`0x6738`, read verbatim) is `cbz x21/x19` → −5, then `bl 0x6320(&gctx, id)` → its return, then
+`0x67cc: umaddl x9, w22, #0x18, x23` (`x23 = base+0xe850`, the context array) and `0x67d0: ldr w10, [x9, #0x18]` /
+`0x67d4: str w10, [x21]` with `0x67d8: ldr w9, [x9, #0x1c]` / `0x67dc: str w9, [x19]`. So `cfg1` and `cfg2` are exactly
+`gctx[id*0x18 + 0x18]` and `+0x1c` — step 4.134's identification of the *read* is confirmed at the instruction, and the
+two words it hands over are the pair the registration wrote there.
+
+That pair is itself a register read. `0x64e0` registers each map entry into a 0x18-stride array and then calls
+`0x6398(base, type)` and `0x644c(base, type)`; read verbatim, `0x6398` at `0x63bc`/`0x63c0` forms `base + (type<<16) + 0xc`,
+`0x63c8` loads it and `0x63cc` masks `& 0x3f` for type 0, while the type-2 path at `0x6404` takes `ubfx` of the same word's
+bits [12:6]; `0x644c`'s is `lsr #27` of it. So `gctx[id].+0x18` and `+0x1c` are fields of the RSC register at
+`base + (type<<16) + 0xc`, and the `8` and `0x10` the live context record `gctx[3]` holds in the seeded runs are
+`ubfx(x, #12, #6)` = 8 and `x >> 27` = 0x10 of the word this step wrote at `0x1822000c`. The prior step's
+`does not close` — "why a call that `0x6320` validated hands back words lying past that element" — is answered by that:
+the writer and both readers use the same expression `gctx + id*0x18 + 0x18`, so nothing lies past anything; the id-to-config
+stride is `+0x18` on both sides by construction, `0x6320` gates on `gctx[0].+0 == 1` **and** `gctx[id].+0x14 == 1` precisely
+so that the slot holding the pair is not itself treated as a registered context (this run's `gctx[3]` has `+0x14 = 0`), and
+what remains genuinely open is only whether two *adjacent* ids are ever both registered, which would make the arrangement
+overlap — no such pair exists on this cell, where the map has one entry and the context array's own count word
+(`gctx[0] = {+0 = 1, +4 = 1}`) says one.
+
+### The inner check at `0x5074`, and what the walker's callee returns
+
+The seeded runs stop in the function entered at `0x4f78`, in the loop at `0x4ff8`. Its third assertion is at `0x5074` and
+tests one thing:
+
+```
+5048: ldr  w0, [x26]           ; the entry's id = 2
+504c: ldrb w1, [x20, x22]      ; the channel byte this iteration stored at 0x5014
+5050: bl   0x6cb8              ; the request sender
+506c: cmp  w0, #0x0 / 5070: cset w0, eq / 5074: bl 0x6108
+```
+
+so it fails when `0x6cb8(id, ch)` returns non-zero, and `0x6cb8` read verbatim has five failure paths and one success:
+`0x6ce8 ldr w8, [gctx + id*0x18 + 0x18]` with `0x6cec cbz` and `0x6cf0 cmp w8, w20, uxtb`/`0x6cf4 b.ls` → **−2** when
+`gctx[id].+0x18 <= ch`; `0x6b5c`'s own error if it fails; `0x6d74 ldrb w10,[sp,#0xc]` / `0x6d7c cbz w10, 0x6db4` →
+`0x6dd8 orr w19, wzr, #0xfffffff7` = **−9** when the resource-enable byte is zero; `0x6320`'s −1 (id ≥ 0x10) or −6
+(bad magic or validity); and **−8** for a type other than 0 or 2. Success at `0x6de0` is the register write — type 2 →
+`base + ch*0x2a0 + (0xd14 | 0x20000)`, read-modify-write `(v & 0x1000000) | 0x10000`, `w19 = 0`.
+
+`0x6b5c` is the enable reader, and its address arithmetic is the one that decides this step:
+`0x6c38 ldp w8, w4, [x10, #0xc]` takes `w8 = gctx[id].+0xc` (the base) and `w4 = gctx[id].+0x10` (the type); type 0 at
+`0x6c54` reads `base + ch*0x2a0 + 0xd18`; type 2 at `0x6c70`–`0x6c7c` reads `base + ch*0x2a0 + (0xd18 | 0x20000)`. **The type
+is the high half of the register offset.** With this run's live `gctx[2] = {+0xc = 0x18200000, +0x10 = 2, +0x14 = 1}` the
+enable bit the first iteration reads is at `0x18220d18`, and the live state excludes every other failure: `gctx[3].+0 = 8`
+and `ch = 0` so −2 is out; the type is 2 so −8 is out; and `0x6320(&gctx, 2)` is `gctx[0].+0 == 1` (true) and
+`gctx[2].+0x14 == 1` (true), so −6 is out. What is left is −9: the enable bit reads zero because the register model
+returns zero there.
+
+### The runs
+
+Five runs of `tools/qemu-panel-read.py`, all `--kernel /tmp/phone-payload.raw --el3-stub --el3-zero-mem --el3-seed-smem
+--el3-seed-aop`, differing only in `--extra` loader lines, archived under `work/out/qemu-probe-4.135/`:
+
+| run | seed added beyond `--el3-zero-mem --el3-seed-smem --el3-seed-aop` | panel's last three rows | artifact |
+|---|---|---|---|
+| A `rscA-control` | none | `RpmhDxe.efi` / `ERROR … CB29F4D1-…` / `ASSERT DebugLib.c +78` | `rscA-control.txt` (`2600ee59…`) |
+| B `rscB-seeded` | `loader … addr=0x46c2000c` = `0x80008000` | identical to A, row for row | `rscB-seeded.txt` (`d614d338…`) |
+| C `rscC-enable` | B + a 5,376-byte blob at `addr=0x46c02d18` | identical to A again | `rscC-enable.txt` (`a20ed416…`) |
+| D `rscD-enable2` | B + that blob at `addr=0x46c20d18` | `Rpmh Sleep callback registration failed, Status = 0x8000000000000003` / `PdcDxe.efi` / `ERROR … B43C22DB-…` | `rscD-enable2.txt` (`fbfe4d9d…`) |
+| — `control` | B's machine without either seed (`--el3-zero-mem` only) | ends at `smem_target.c +435` | `control.txt` (`b46f1001…`) |
+
+Run C is the record's own mistake preserved: `0xd18` without the `type<<16` term is the **type-0** offset, this context's
+type is 2, and the run came back byte-identical to B — registers and context array included, `p8-regs.txt` and `p8-ctx.bin`
+being hash-identical to `p7-regs.txt` and `p7-ctx.bin` (`f00e1f9e…`, `66116ea8…`). That null result is what located the
+missing `0x20000`; the blob itself was never in doubt, and `0x46c02d18` read back `01 00 00 00` (`p8-pool.bin`,
+`16abab34…`).
+
+Run D is the one that moves. Its tail, against A's:
+
+```
+A:  243 |Loading driver at 0x0009C462000 EntryPoint=0x0009C463000 RpmhDxe.efi|
+    244 |ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766|
+    245 |ASSERT DebugLib.c +78: Format != ((void *) 0)|
+D:  716 |Loading driver at 0x0009C462000 EntryPoint=0x0009C463000 RpmhDxe.efi|
+    717 |Rpmh Sleep callback registration failed, Status = 0x8000000000000003|
+    718 |Loading driver at 0x0009C459000 EntryPoint=0x0009C45A000 PdcDxe.efi|
+    719 |ERROR: C90000002:V03000007 I0 B43C22DB-6333-490C-872D-0A73439059FD|
+    720 |ASSERT DebugLib.c +78: Format != ((void *) 0)|
+```
+
+`RpmhDxe` gets past the walk and out of its entry point: row 717 is a log line, not an assert, and its status
+`0x8000000000000003` is `EFI_UNSUPPORTED` from its own sleep-callback registration — the driver is not *working* under
+this instrument, it is *finishing*, which is the difference that matters. The dispatcher then loads `PdcDxe`, the next
+driver in the phone's own order (`docs/08-device-session.md:2272` has `ap19 RpmhDxe phys 33 L` and
+`ap20 PdcDxe phys 34 L`, the record's Apriori rows off the device), and the run dies inside *it* with the same
+`DebugLib.c +78` row. No earlier run under this instrument reached `PdcDxe` at all.
+
+### The two GUIDs, and the seed's honesty
+
+`CB29F4D1-7F37-4692-A416-93E82E219766` occurs in `device/dxe/RpmhDxe.efi` once and `RpmhDxe.ffs` twice;
+`B43C22DB-6333-490C-872D-0A73439059FD` occurs in `device/dxe/PdcDxe.efi` once and `PdcDxe.ffs` twice. So the `ERROR: … I0`
+row's GUID is read out of the image of the driver being dispatched, and it changed exactly when the loaded driver
+changed — an independent confirmation that the row names the driver that failed and not a fixed firmware identity.
+
+The seed's status is different from the other two in this instrument and better. The SMEM container and the AOP record
+are **invented** structures; the eight words of run D are a register's contents, and the register's contents on the
+phone are the RSC's own business, programmed before this firmware runs. It is still a claim — that all eight channels
+of drv 2 are enabled — and it is the claim that lets the driver read "enabled" where a register model reads zero. Two
+things keep it honest. First, it is not a free choice: `0x80008000` was picked to satisfy both candidate field functions
+at once (`ubfx #12,#6` → 8 and `>>27` → 0x10), and 8 and 0x10 are precisely the two constants the image's own `.data`
+demands at `entry[0].+0x18` and `+0x1c` — so the pass is a marginal one (`8 >= 8`, `0x10 >= 0x10`), and a word with a
+smaller field would have left the assert at `0x4e74` exactly where the unseeded run had it. Second, the value is
+cross-checked by the run: `gctx[3]` held `{+0 = 8, +4 = 0x10}` after the seeded run and `{0, 0}` before it, which is
+`0x6398`'s and `0x644c`'s arithmetic applied to the word that was written, and nothing else.
+
+| | |
+|---|---|
+| instrument | `device/dxe/RpmhDxe.efi` read statically (`/tmp/rpmh.asm`, 551,907 B) with every instruction above quoted verbatim and cross-checked against two live dumps; five runs of `tools/qemu-panel-read.py` on `/tmp/phone-payload.raw` (`d0919c00…`) under `--el3-stub --el3-zero-mem --el3-seed-smem --el3-seed-aop` and `--extra` loader lines, the two new ones writing `/tmp/rsc-word.bin` (4 B, `0x80008000` at `0x46c2000c`) and `/tmp/rsc-enable2.bin` (5,376 B, bit 0 of `0x46c20d18 + ch*0x2a0`, ch 0–7); two ad-hoc probes capturing `info registers` and `pmemsave` of the stack, the context array and the pool; a frame-chain walk of **both** 262,144-byte stack dumps — this step's and step 4.134's own, off `work/out/qemu-probe-4.134/p4-stack.bin`; and a byte search of the tree for the two GUIDs — nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written, and no device is attached to this machine |
+| shows | that `bl 0x6108` at **`0x4e74`** and `bl 0x6108` at **`0x5074`** are both real and belong to two different seed states — the unseeded stack (`p4-stack.bin`) holds `base+0x4e78` once and `base+0x5078` not at all, the seeded stack holds `base+0x5078` and `base+0x4f48` once each and `base+0x4e78` not at all, and both hold `base+0x3808` once — so step 4.134's site is right and its *"ends every QEMU run"* is what moves; that the outer check is `cfg1 >= entry->[+0x18]` against `RscHalReadConfig`'s own output (`0x4e48`–`0x4e54`, verbatim), and that `RscHalReadConfig` (`0x6738`) is `*out1 = [gctx + id*0x18 + 0x18]`, `*out2 = [+0x1c]` behind `0x6320`'s gate, confirming step 4.134's identification of the read at the instruction; that those two words are fields of the RSC register `base + (type<<16) + 0xc` — `0x6398`'s type-2 path taking bits [12:6] and `0x644c`'s taking [31:27] — so the pair is a register read, which is what step 4.134's `does not close` asked for; that the writer and both readers use the same `gctx + id*0x18 + 0x18` expression, so the pair does not lie past the element and the arrangement is by construction, with `0x6320`'s `gctx[id].+0x14 == 1` test existing precisely to exclude that slot from being a context (this run's `gctx[3].+0x14 = 0`); that the inner check is `0x6cb8(id, ch) == 0` at `0x5050`/`0x5074` and that `0x6cb8` has five failure codes — −2 for `gctx[id].+0x18 <= ch`, −9 for a clear enable bit, −8 for a type other than 0 or 2, and `0x6320`'s −1/−6 — with success being the read-modify-write `(v & 0x1000000) \| 0x10000` at `base + ch*0x2a0 + (0xd14 \| 0x20000)`; that the enable register is `base + (type<<16) + ch*0x2a0 + 0xd18` — **the type is the high half of the offset**, which is why the wrong-offset run came back hash-identical to its control; that the live state (`gctx[2] = {+0xc = 0x18200000, +0x10 = 2, +0x14 = 1}`, `gctx[3].+0 = 8`, `ch = 0`) excludes −2, −8 and −6 and leaves −9; and that with the eight enable bits seeded `RpmhDxe` **returns normally** and the dispatcher loads `PdcDxe` — the phone's own slot-20 driver, whose own GUID then appears on the `ERROR` row |
+| adds | the second seed's result: `Rpmh Sleep callback registration failed, Status = 0x8000000000000003`, then `Loading driver at 0x0009C459000 EntryPoint=0x0009C45A000 PdcDxe.efi` — the first run under this instrument whose tail matches the device's own Apriori order, where the record has `ap19 RpmhDxe` and `ap20 PdcDxe` both `L`; the reconciliation of the record's two stacks, which turns step 4.134's site and this step's into a *sequence* rather than a disagreement; `0x6cb8`'s and `0x6b5c`'s full failure taxonomy with each code read off the instruction that produces it (−2 at `0x6d34`/`0x6c04`, −9 at `0x6dd8`, −8 at `0x6cb0`, `0x6320`'s −1 at `0x6358` and −6 at `0x6390`); the rule that a drv register offset carries `type<<16` in its high half, found by the null result of the type-0 offset and confirmed by three separate instruction pairs (`0x6398`, `0x644c`, `0x6b5c`/`0x6cb8`); the reading that the walk's four comparisons at `0x4e6c`, `0x4e80`, `0x4e9c` are **lower bounds the live register value must meet**, against constants of the image's own `.data` — so the driver carries a copy of what the RSC is expected to report and checks the live value against it, which is why a seed reproducing those constants exactly (`8`, `0x10`) is what clears them; and the answer to step 4.134's largest open question, that the config pair is stored at `gctx[id].+0x18` by the writer and read there by both readers, gated by the validity byte so that the slot is never mistaken for a context |
+| corrects | step 4.134's title and `shows` row, where the assert "that ends every QEMU run" is `bl 0x6108` at `0x4e74`: it ends every **unseeded** run, and a run seeded at `0x1822000c` passes `0x4e74` and dies at `0x5074`, in the function entered at `0x4f78`, one frame lower — both sites are on this disk in the two runs' own stacks, so neither reading is withdrawn, only the quantifier; step 4.134's closing *"on the evidence here it is blocked by arithmetic in the driver itself"*, which this step refutes by doing the experiment 4.134 said was not done — the two quantities the walk wants are register reads the model answers with zero, and seeding them lets the driver finish; step 4.134's *"`cfg1` is 0 in both runs"*, true of the two runs it read and false of the seeded one, where the same call returns 8 — which is the whole reason the assert moves; and this step's own probe C, whose blob at `0x46c02d18` used the type-0 offset for a type-2 context and came back byte-identical, the mistake that located the `type<<16` term |
+| does not close | what is inside `PdcDxe` that asserts — the new row carries `PdcDxe`'s GUID and the `DebugLib.c +78` line, and naming its site needs that image's own disassembly, which has not been done; whether `RpmhDxe`'s `EFI_UNSUPPORTED` sleep-callback row and `PdcDxe`'s assert are also what stop the *device*, which the record can only infer from its captures; whether two adjacent context ids are ever both registered, which is the only way the `+0x18`-strided pair can overlap; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question and still needing a re-read of the phone's own screen; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written into any image; the only writes are to QEMU's address space, through `-device loader` lines this host ran, and they are register contents the platform's own RSC would hold rather than invented structures, which is what separates them from the SMEM and AOP seeds and is why they are still a claim about the phone and not a measurement of it; every reading is off the committed image, off a disassembly of it, or off QEMU runs on this host, and no device is attached to this machine. The tracked tree gains this document alone; the five panels, the two probes, the two blobs and the four dumps are under `work/out/qemu-probe-4.135/`, and `work/` is gitignored. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun |
