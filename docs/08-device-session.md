@@ -25830,7 +25830,7 @@ written, and the device was absent.
 | shows | that the AOP seed is written where the driver looks and reads back consistently, the mailbox word being a pointer (`0x42bf000c` holds `0x0c3f0014`, the record at `+8` holding `1` and `0x0c0330db`); that the ladder moves exactly one row — `K 17 SU 16/69` to `K 17 Ss 17/69` — and removes the payload's own `Error: Image at 0009C565000 start failed: Unsupported` row, so `EFI_UNSUPPORTED` was the absent AOP record; that rungs 3 and 4 stop in the same two rows seed 5 stopped in; and that the corrected SMEM seed removes the `smem_alloc` `404` row and leaves the `smem_get_addr` `402` row where it was |
 | adds | the `aop_words` unpacking with the guard the record's position needs and the one-block bound that replaces an assumption; the ladder table with each rung's stub hash and ceiling; the demonstration that `EFI_UNSUPPORTED` was the absent AOP record — not the build, which is the same payload bytes in both rungs that matter, and not SMEM's heap, which is still failing in the rung that removed the `U` **[sharpened in step 4.133: "the same payload bytes in both rungs" is the mirror against itself across two stubs, which the rung design already gives; the *build* confound step 4.126 named is mirror against phone, and it took the phone's own payload — found in step 4.132 — to run. That run agrees: the phone prints `Error: Image at 0009C56B000 start failed: Unsupported` under the SMEM seed and no `Error: Image` row at all with the AOP record, and `CmdDbDxe`'s PE32 is byte-identical in the two builds (sha256 `ea9cf6bf…`), so the conclusion here holds on both builds and not only on this one]**; the two SMEM corrections with the instructions that require them, and the measurement that they take the `404` row off and not the `402` one, which is half of what the stub's own comment predicted; and the `CB29F4D1-…` bytes found at RVA `0xE018` of `RpmhDxe.efi`'s `.data` against `RpmhDxe`'s `FILE_GUID` of `60F4DF83-…` |
 | corrects | the working note that read this step's runs as a new regression one Apriori entry past seed 5: rung 3's last twelve rows are seed 5's last twelve rows, text for text, and the ceiling did not move when the seed did; step 4.126's paragraph at `:25286-25288` claiming the file at `/tmp/gauguin-kernel.raw` is not the mirror's payload — it is, and `90b21643…` is `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`; the earlier reading that the AOP seed's read-back disagreement meant the seed was miswritten, when it was the read that unpacked three words from zero; the reading of `0x8e84` as an abort, which is the walker's `0xFFFFFFFE` "type" return — its other return, `0xFFFFFFFC` at `0x8e8c`, is what an empty descriptor produces, and the stub's own account has the flag-only seed reaching that one; the frame in which the `0xD830` descriptors are values a seed could supply, when that address is inside the driver's loaded image `.data` and the image's load writes it, so the descriptor has to be produced by the driver's initialiser and the seed's job is the TOC that initialiser reads; and step 4.126's experiment proposal, which this ladder shows would not have answered the question it was designed for |
-| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; why the `smem_get_addr` `402` row survives the corrected seed, with the block scan's `+2` id at `0x90C0` as the candidate and no run yet that separates it from the alternative; what `CmdDbDxe` does once started, since the command database at `0x80860000` is absent here; the second entry into the payload that seed 5's capture holds and rung 3's does not — the two-attempt stream and this step's one-attempt stream correlate with the `404` row's presence and with nothing else this step measured, and no mechanism is claimed; `SO`'s value, which needs `P2 WHAT`; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
+| does not close | the P3 gate and the owed panel reading of the flashed 4.74 set; why the `smem_get_addr` `402` row survives the corrected seed, with the block scan's `+2` id at `0x90C0` as the candidate and no run yet that separates it from the alternative; what `CmdDbDxe` does once started, since the command database at `0x80860000` is absent here **[narrowed in step 4.145: it resolves four cmd-db resource names — `MC0`, `mss.lvl`, `cx.lvl`, `cx.tmr` — into six cached 32-bit values on its own startup path, and publishes an eight-method protocol under `1C34F691-D33D-4E14-B8F8-32C6C029E95B` whose second method is the same name-to-id resolver the startup path uses; what the other six methods do is still unread]**; the second entry into the payload that seed 5's capture holds and rung 3's does not — the two-attempt stream and this step's one-attempt stream correlate with the `404` row's presence and with nothing else this step measured, and no mechanism is claimed; `SO`'s value, which needs `P2 WHAT`; and the phone's own `K` rows, which remain the only record that could confirm this ladder against the device |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; the changes are to the launcher's read-back and to the stub's SMEM seed, and every run that judged them is a QEMU run |
 
 ## Step 4.128 — the run stops on Apriori 19 because that entry never returned, and the assert that says so is `RpmhDxe`'s own `DebugLib.c:78`
@@ -29078,7 +29078,7 @@ and not this routine. The consequence is a negative that matters for a record
 this document has been carrying: `P2Record[0]`'s `0x8000000000000003` is exactly
 this routine's configure arm, but `CmdDbDxe.efi` does not contain the string, so
 its `-3` comes from its own code and the match is a match of two `ENCODE_ERROR`
-values, nothing more. What `CmdDbDxe` failed at is still unread.
+values, nothing more. What `CmdDbDxe` failed at is still unread. **[corrected in step 4.145: the sentence before this one is right and this one is stale — the failure *was* read, in step 4.126, and its cause was decided in step 4.133 on the phone's own payload; step 4.145 only adds where in the image the gate sits (`0x2540`, reached from the entry path through `0x1398`, with `0x13b4` the entry path's one producer of `-3`) and what the driver publishes on the other side of it]**
 
 ### What this does and does not establish
 
@@ -29100,7 +29100,7 @@ the driver replaces the value with its own `EFI_DEVICE_ERROR` in any case; the
 identity of the second image to return `-7` at 10.6 s; the pointer the
 `LocateProtocol` call produced; what `0x64c8` returns and what the driver stores
 at `U+0x19400`; what `0x8ccc`, `0x4c00`'s map format and `0x4c64` are; and
-`CmdDbDxe`'s own failure. Above all, and it is the one that matters for the port:
+`CmdDbDxe`'s own failure **[withdrawn in step 4.145: read in step 4.126, decided in step 4.133, and located in the image in step 4.145]**. Above all, and it is the one that matters for the port:
 **whether the phone takes this path at all is not decidable from this model.**
 On the phone, `HALIOMMUDxe` runs before `UFSDxe` and would have installed the
 protocol, so the slot would be filled, the `LocateProtocol` arm would never run,
@@ -29785,7 +29785,8 @@ whole 27-`L` run say whether all 27 failed for one reason or for several.
   this model, since `LocateProtocol` succeeding proves an installation without
   naming the installer; what `0x4be0`, `0x4ce0`, `0x4ea8`, `0x4c00`, `0x4c64`,
   `0x64c8`, `0x8ccc`, `0x17b8`, `0x2604` and `0x2750` are; what `U+0x19400` holds;
-  `CmdDbDxe`'s own `P2Record[0]` of `0x8000000000000003`, still unexamined; the
+  `CmdDbDxe`'s own `P2Record[0]` of `0x8000000000000003`, withdrawn from this list in
+  step 4.145 as read in step 4.126 and decided in step 4.133; the
   second image to return `-7` at 10.6 s in these runs; and — the largest open item
   this step touches, now that the batch is derived rather than missing — the
   **confirmation** of that derivation and the statuses behind its 27 `L`s: `P2 APRI
@@ -30183,3 +30184,183 @@ is on `boot` now is a question for the next `--read` and not for this host.
   table and the firmware LUN remain untouched; the device is absent; the porting goal
   is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and
   P5's peripherals not begun.
+
+## Step 4.145 — `CmdDbDxe`'s `-3` is a stale row and not an unread failure: step 4.126
+decoded the gate that produces it and step 4.133 decided its cause on the
+phone's own payload, so this step annotates the four sentences that still call
+it unread instead of re-deriving the gate — and adds the one thing none of
+those steps had, the gate's position in the image: `-3` has a single producer
+on the entry path (`0x13b4`), the gate is a callee (`0x2540`, reached through
+`0x1398`) whose zero is the *pass*, the word it dereferences is read by exactly
+one of the fifty-five images in the set, and the protocol the driver publishes
+on the other side of the gate — its GUID, its interface, and two of its eight
+methods — is read here for the first time
+
+Step 4.142's section on `UFSDxe`'s three arms ends with the sentence "What
+`CmdDbDxe` failed at is still unread", and steps 4.142, 4.143 and 4.144 each
+carry "`CmdDbDxe`'s own `P2Record[0]` of `0x8000000000000003`" in their `does
+not close` rows, the last two as "still unexamined". The row is not open. Step
+4.126 read the gate out of the driver's own instructions — `p = *(u32
+*)0x0C3F000C; p != 0 && p[0] == 1 && p[1] == 0x0C0330DB`, from the `mov w8,
+#0xc` / `movk w8, #0xc3f, lsl #16` pair at RVA `0x45c0` and the `cmp w9, #0x1`
+at `0x2568` — and step 4.127 recorded the seed and the read-back that make it
+usable as an experiment; step 4.133 then decided the **cause** on the phone's
+own payload, where the four-rung ladder moves exactly one row (`K 17 SU 16/69`
+to `K 17 Ss 17/69`) and removes the payload's own `Error: Image at 0009C565000
+start failed: Unsupported` row once the AOP record is seeded, while
+`CmdDbDxe`'s PE32 is byte-identical in the two builds. One status, two prints,
+moving together: the `U` of the `K` row and the `%r` of the `Error:` row are
+the driver's own return, and what makes it `EFI_UNSUPPORTED` is the absent AOP
+record and not the build. So the four sites are restatements of step 4.129's
+note surviving into steps that were reading other images, and they are
+annotated in place rather than repeated.
+
+What this step measured is *where* that gate is. The EntryPoint at `U+0x1000`
+returns one value and it is `0x1398`'s: `0x1210: bl 0x1398`, `0x1214: mov x21,
+x0`, `0x1218: tbz x21, #63, 0x1228`, return at `0x1230`. `0x1398` is a tail
+branch (`14000003 b 0x13a4`) and `0x13a4` is three things: `bl 0x2540`, `cbz
+w0, 0x13c0`, and — on a non-zero result — a single `mov x0,
+#0x8000000000000003` at `0x13b4` before its `ret`. The pass arm at `0x13c0` is
+the variadic install: `x0 = U+0x60d0` (a handle slot in `.data`, and it is zero
+in the file), `x1 = U+0x6048`, `x2 = U+0x6078`, `x3 = 0`, and the call through
+`[gBS + 0x148]` where `gBS` is `U+0x60e8` — the same
+`+0x10`-above-`EFI_BOOT_SERVICES` displacement step 4.143 identified in
+`HALIOMMU`, so the same `InstallMultipleProtocolInterfaces`, with the install's
+status tail-returned. Two things follow that the earlier readings of this gate
+did not state. The **polarity**: zero from `0x2540` is the pass, and the
+driver's own `EFI_UNSUPPORTED` is produced before any install is attempted —
+which is why `Image.c:1925` prints the gate's status and not an install status,
+and why "the install failed" is not the same question. And the **producer**: on
+the entry path `-3` has exactly one source, because the EntryPoint can return
+nothing else. A census of both `mov x0, #0x8000000000000003` sites in the image
+bounds that claim where it should be bounded: the second, `0x2ec0`, is the NULL
+arm of a forwarder that tail-calls the first method of a pointer held at
+`+0x140` of some global (`0x2e80: ldr x8, [x10, #0x140]` … `ldr x5, [x8]` … `br
+x5`), which is a different `-3` with a different meaning — so `-3` is not
+unique to the gate in the image; it is unique on the entry path the recorder
+saw.
+
+`0x2540` has one caller (`0x13ac`) and its first act is the image's only read
+of an absolute physical word: `0x45c0` builds `0xC3F0000C` from `mov w8, #0xc`
+and `movk w8, #0xc3f, lsl #16`, loads the dword there, zero-extends it and
+caches it at `U+0x6100`; `0x45c0` itself has one caller (`0x2550`). A scan of
+all fifty-five `.efi` files under `uefi/Binaries` for that instruction pair
+finds it in one file, this one, so no other driver in the set is waiting on
+that word, and a plain text search of the tree finds the address named nowhere.
+The failure arm is not an early return that leaves state behind: at `0x2594` it
+also stores zero over the cache (`str xzr, [x20, #256]`), and the workers
+behind the protocol's methods test that same word (`0x1f60`, `0x1fd8`,
+`0x20c4`, the first of them refusing with `w0 = 2` when it is NULL), so a
+failed gate is *designed* to make every later call report cleanly rather than
+dereference whatever the flagged address held. The two `ret`-only leaves
+`0x45b8` and `0x45bc` are what the validation brackets its two reads with; the
+same cluster carries a `dc cvac, x0` at `0x45a4`, whose callers this step does
+not census.
+
+When the header validates, `0x2540` sets its result and continues, and that
+continuation runs on *both* paths — which is why a failing run still reads the
+database. It resolves four cmd-db resource names out of the literal pool beside
+`.text` — `"MC0"` at `U+0x54f9`, `"mss.lvl"` at `U+0x54fd`, `"cx.lvl"` at
+`U+0x5505` and `"cx.tmr"` at `U+0x550c` — into six 32-bit values: two ids
+through `0x2128` into `U+0x6108` and `U+0x610c`, one read through `0x2410` with
+a one-byte buffer initialised to `0x20` into `U+0x6110`, two id-keyed reads
+through `0x21b4` into `U+0x6130` and `U+0x6134`, and two name-keyed reads
+through `0x2248` into `U+0x6138` and `U+0x613c`. Two of the names are the CX
+and MSS level resources and one is the CX timer; this is the first answer the
+record has to its own open row "what `CmdDbDxe` does once started". On the
+other side of the gate the protocol is published under the GUID at `U+0x6048`,
+`1C34F691-D33D-4E14-B8F8-32C6C029E95B`, with the interface at `U+0x6078`: a
+dword `0x00010000`, a zero dword, and eight pointers at `U+0x6080`–`U+0x60b8`
+naming `0x13f0`, `0x1444`, `0x148c`, `0x14d4`, `0x1520`, `0x1568`, `0x15b0` and
+`0x1608`. Two of the eight are read. The first, `0x13f0 (obj, a, b, c, out)`,
+NULL-checks four arguments, calls `0x1f38` and writes its 32-bit result through
+`out`, returning `0`. The second, `0x1444 (obj, name, out)`, NULL-checks three,
+calls `0x2128` — the same resolver the startup path calls on `"MC0"` and
+`"mss.lvl"` — writes the result through `out` and returns `0`. So the resolver
+the gate uses is *published*: a client asks the same question through the
+protocol. The same block's `HandleProtocol` GUID at `U+0x6068` decodes straight
+to `gEfiLoadedImageProtocolGuid` and occurs once in the file, and the seven
+GUID slots are `0x6008 B898D8DC-080A-F740-99E3-31627B806A5A`, `0x6018
+ABA01FF8-2CCB-4E12-8B2E-CD3F4A742993`, `0x6028
+BEDAEABC-5E70-4D66-9733-213D072B9D04`, `0x6038
+7739F24C-93D7-11D4-9A3A-0090273FC14D`, `0x6048` the driver's own protocol,
+`0x6058 D2B2B828-0826-48A7-B3DF-983C006024F0` and `0x6068` the loaded-image
+GUID. The driver's `FILE_GUID`, `D461A719-F2EC-5C77-A7AF-045F17ED012C` — the
+value on `K 17`'s row and in all three `P2Record` dumps — occurs **nowhere** in
+its own image, in any byte order; it lives in the FFS header alone, which is
+the 50 bytes the volume's 32,818-byte file has and this 32,768- byte PE does
+not.
+
+On the phone the record's reading of the 46-character `P2 SEQ` puts Apriori 17
+at `s`, so the phone's gate passed and the model's `-3` is the stub's absent
+AOP record. That is step 4.133's reading and nothing here strengthens or
+weakens it beyond locating the gate; what this step removes is the reason the
+row kept being re-listed, which was that the four sites carrying it never
+cross-referenced the step that read it.
+
+- **instrument**: `CmdDbDxe.efi` (32,768 B, sha256
+  `ea9cf6bfd81d12bfde3125b3176f2288 76a42de56b70ea77b51ee35a5c0691fb`, the hash
+  step 4.133 pins) disassembled whole with `objdump -D -b binary -m aarch64`
+  (5,098 lines) and read at offsets that equal its VAs; a `bl`-site census of
+  that listing for `0x2540`, `0x45c0`, `0x1398` and `0x13a4`; a census of every
+  `mov xN, #0x8000000000000003` and of the `mov`/`movk` address pair; a scan of
+  all 55 `.efi` files under `uefi/Binaries` for that pair and a text search of
+  the tree for the address; the `.data` GUID slots decoded both mixed-endian
+  and byte-reversed; and the record's own steps 4.126, 4.127, 4.133, 4.141,
+  4.142, 4.143 and 4.144 read for the claims being annotated. No QEMU run, no
+  probe, no panel and no device: `adb devices -l` and `fastboot devices` are
+  both empty and no Qualcomm USB device is present. Nothing was built for the
+  device, nothing was flashed, no partition was written, no stub or firmware
+  source was changed and no patch was written into any image; the only writes
+  are to this record.
+
+- **shows**: that the `-3` the three `P2Record` dumps
+  hold for `CmdDbDxe` is produced on the entry path by exactly one instruction,
+  `0x13b4`, and that the gate reaching it is `0x2540` — a callee of the entry
+  path through `0x1398`, and not the EntryPoint — whose pass arm calls
+  `InstallMultipleProtocolInterfaces` and whose failure arm nulls the pointer
+  it cached; that the absolute word `0x0C3F000C` is read once in this image and
+  in no other image of the fifty-five; that the interface the driver publishes
+  is `{0x00010000, 0, 8 methods}` under `1C34F691-D33D-4E14-B8F8-32C6C029E95B`;
+  that the resolver the startup path uses on `"MC0"` and `"mss.lvl"` is one of
+  those eight methods; and that the header the gate validates is the only state
+  the methods share, since three of their workers test the same cached word.
+
+- **adds**: the gate's location and the single-producer argument for the entry
+  path, with the second `-3` site named so the claim is bounded; the failure
+  arm's cache-nulling and the three workers that read the same word; the four
+  resource names and the six cached values, which is a first answer to "what
+  `CmdDbDxe` does once started"; the published protocol's GUID, interface and
+  the shape of its first two methods; the seven GUID slots; and the absence of
+  this driver's `FILE_GUID` from its own image.
+
+- **corrects**: step 4.142's
+  closing sentence "What `CmdDbDxe` failed at is still unread" and the `does
+  not close` rows of 4.142, 4.143 and 4.144 that repeat it — the failure was
+  read in step 4.126 and decided in step 4.133, so the four sites carry the
+  annotation now; and the phrase "entry gate" that 4.126 uses for `0x2540`,
+  which is right as a gate on the driver's startup and wrong if read as a
+  statement about the EntryPoint, which is `U+0x1000`/`0x1150` and reaches the
+  gate through two calls.
+
+- **does not close**: which of the gate's two failing
+  sub-cases the model hit — the word read as zero, or a word pointing at a
+  header that does not validate — because the rung that moves the row measures
+  the record's presence and not the value the word held in the failing rung;
+  what the other six protocol methods do, and what `0x1f38`'s workers
+  (`0x1f00`, `0x1f38`, `0x2078`, `0x207c`) and the id-keyed `0x21b4`/`0x2248`
+  paths do beyond resolving and reading; which object `0x2e80`'s `[x10,
+  #0x140]` is and who calls that forwarder; the five GUIDs at
+  `0x6008`–`0x6058`; the callers of the `dc cvac` leaf at `0x45a4`; the second
+  image to return `-7` at 10.6 s; the P3 gate; and the device-side half of
+  every claim above, which remains the phone's `P2 ERR` and the owed panel
+  readings, none of which this host can supply.
+
+- **not an action**: nothing
+  was built for the device, nothing was flashed, no partition was written, no
+  stub or firmware source was changed and no patch was written into any image.
+  This step changes no claim about the model's failure beyond locating the code
+  that produces it, and none about the phone's derived batch. `userdata`, the
+  partition table and the firmware LUN remain untouched; the device is absent;
+  the porting goal is unchanged and unmet, with P3 unfinished and P4's
+  `userdata`-destroying install and P5's peripherals not begun.
