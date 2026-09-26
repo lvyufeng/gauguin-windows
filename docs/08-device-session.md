@@ -28352,3 +28352,386 @@ Does not establish:
   this step are to `/tmp`, to `work/out/qemu-probe-4.139/`, and to this record.
   `userdata`, the partition table and the firmware LUN remain untouched.
 
+
+## Step 4.140 — the stop on `PmicDxe`'s own failure text is a read watchpoint and not a fault: the message reads intact at 9.0 s, `x0 = 0` is `AsciiStrnLenS`'s own length counter inside the outlined helper `0x541c` (whose first instructions are a NULL guard), and the branch that prints the text returns `0x8000000000000007` at `0x1634`, the `EFI_DEVICE_ERROR` `P2Record` holds for `PmicDxeLa`; the `0xAF` window is `SetMem (0x9c1d9000, 0x22000, 0xAF)` — the driver's whole image span — reached from `CoreConvertPagesEx+0x2d8` under `CoreFreePages+0xbc` under `CoreStartImage+0x43c`
+
+The third driver `P2Record` names, `PmicDxeLa`, had been read as an abort inside
+`AsciiStrnLenS`: the capture's `x0 = 0` was taken to be that routine's `String`
+argument, the first `ldrb` was therefore taken to read address `0`, and since this
+machine model declares no region at `0x0` the driver was said to die of a data
+abort inside its own print path. This step re-runs that probe with a frame walk
+attached and reads the routine out of the image instruction by instruction. The
+stop is not an abort at all and `x0` is not a pointer: it is the read watchpoint
+firing on a **successful** read of the driver's own message, and the driver's
+failure is its own `EFI_DEVICE_ERROR` return, off the same branch that prints the
+message. Both halves of the old reading are withdrawn below; what survives — the
+chain of return addresses — is now assigned to the functions that own them and
+closes on the status the core recorded.
+
+### What the stop is: a read watchpoint on the driver's own literal
+
+`gdbprobe19.py` sets `Z3` (hardware read-watch) watchpoints on PmicDxe's two
+failure texts, `S1 = 0x9c1f3537` and `S2 = 0x9c1f3596`, and runs the same loader
+set as every other run in this record (`el3.bin` at `0x48000000`, the payload at
+`0x48010000`, the four seeds `/tmp/rsc-word.bin`, `/tmp/rsc-enable.bin`,
+`/tmp/pdc-cap.bin`, `/tmp/apcs-clk.bin`). Only `S1` fires, at 9.0 s:
+
+```
+=== stop 0 @9.0s: b'T05thread:01;rwatch:9c1f3537;'  which=0x9c1f3537 ===
+  pc=0x9c1de444 x0=0x0 x1=0xf4241 x2=0x0 x3=0x9c1f3537 x19=0x80000000 x20=0x9c1f3537 x21=0x0 x30=0x9c1dd008
+  pc code: 480100b4210100b4e0031faa290400d1040000141f0009eba2000054000400910a1540388affff35c0035fd6e00301aac0035fd6fd7bbfa9fd030091e00100b4
+  string now : b'PmicDxe: PMIC was not detected \n\r'
+```
+
+Three facts are in that one line, and none of them was available before:
+
+1. **The stop reason is `rwatch:`.** It is QEMU's report of a watchpoint hit, not
+   a signal from a faulting load. `before: S1 @0x9c1f3537 = b''` in the same log
+   is the image not yet loaded; `string now : b'PmicDxe: PMIC was not detected \n\r'`
+   is the driver's own message, read out of its own `.rdata` while the printer is
+   walking it.
+2. **`pc = 0x9c1de444` is `PmicDxe+0x5444`**, and the live bytes at `pc-32` are
+   byte-identical to the shipped image's `.text` at file offset `0x5424`
+   (`pc code:`'s last 24 bytes are `…1f0009eb a2000054 00040091 0a154038
+   8affff35 c0035fd6` = `cmp x0,x9` / `b.hs 0x5450` / `add x0,x0,#1` /
+   `ldrb w10,[x8],#1` / `cbnz w10,0x5438` / `ret`), so no relocation or
+   patching stands between the file and the running code.
+3. **`x8` is not in that register list.** The probe prints `x0 x1 x2 x3 x19 x20
+   x21 x30`; the pointer of the faulting load was never read. The old reading's
+   `x8 = 0` was inferred from `x0`, and in this routine `x0` is the *return
+   counter*, starting at zero on the first byte of the string. `x3` and `x20`
+   both hold `0x9c1f3537`, the format pointer of the `bl 0x3a90` at `0x15e0`.
+
+### The routine the pc sits in: `0x541c`, and the NULL guard the old reading assumed away
+
+The call is `0x4004: bl 0x541c` and `x30 = 0x9c1dd008 = PmicDxe+0x4008` is its
+continuation, so the faulting instruction is inside `0x541c` — an *outlined*
+`AsciiStrnLenS`, not an inlined one:
+
+```
+541c: mov  x8, x0        ; x8 = String            <- the pointer, live
+5420: mov  x0, xzr       ; x0 = 0                 <- the counter, and the value in the capture
+5424: cbz  x8, 0x544c    ; String == NULL -> return 0            <- the guard
+5428: cbz  x1, 0x544c    ; MaxSize == 0  -> return 0
+542c: mov  x0, xzr
+5430: sub  x9, x1, #1    ; x9 = MaxSize - 1
+5434: b    0x5444
+5438: cmp  x0, x9
+543c: b.hs 0x5450        ; len >= MaxSize -> return MaxSize
+5440: add  x0, x0, #1
+5444: ldrb w10, [x8], #1 ; <-- pc, and the read the watchpoint caught
+5448: cbnz w10, 0x5438
+544c: ret
+5450: mov  x0, x1
+5454: ret
+```
+
+`0x5424` is a NULL guard: `AsciiStrnLenS (NULL, n)` returns `0` without touching
+memory. The previous window's conclusion — that the routine's first `ldrb` read
+address `0` and aborted because this machine has no region there — is withdrawn
+in full, together with the argument built on it (`SAFE_PRINT_CONSTRAINT_CHECK`
+evaluating a NULL `Format` and aborting instead of returning its `RetVal`). The
+macro *is* inlined in this build, which is why the check's own code sits in the
+print routine below; the function it calls is not.
+
+### The check the call belongs to: `PrintLibInternal.c:617`, and the PCD read twice
+
+The caller is `PmicDxe+0x3ee0`, the driver's own copy of `BasePrintLibSPrintMarker`
+(frame 0xf0 below), and the code at the call is check #4 of that function, verbatim:
+
+```
+3fe8: adrp x15, 0x1a000
+3fec: ldr  w25, [x15, #0x4fc]   ; w25 = *(0x1a4fc) = 1000000 = ASCII_RSIZE_MAX
+3ff0: cbz  w25, 0x4070
+3ff4: add  w22, w25, #0x1       ; w22 = 1000001 = 0xF4241   <- exactly the capture's x1
+3ff8: mov  x0, x20              ; Format
+3ffc: mov  x1, x22
+4000: mov  x24, x17
+4004: bl   0x541c               ; AsciiStrnLenS (Format, ASCII_RSIZE_MAX + 1)
+4008: cmp  x0, x25
+400c: b.ls 0x4090               ; the constraint passes
+4010: adrp x0, 0x1a000          ; ... else build the assert:
+4018: add  x0, x0, #0xbf5       ;   file 0x1abf5 = "PrintLibInternal.c"
+401c: mov  w1, #0x269           ;   line 617
+4020: add  x2, x2, #0xe9d       ;   description 0x1ae9d
+4024: bl   0x3b94               ;   DebugAssert, whose own tail is the dead loop at 0x4028
+```
+
+The bound is thus read twice over: the dword at file offset `0x1a4fc` is
+`1000000` in the image, and one instruction later `w22 = w25 + 1 = 0xF4241` is
+what the live `x1` holds. The `mov w1, #0x269` says the shipped build's line for
+this statement is **617**; the tree's copy of
+`Mu_Basecore/MdePkg/Library/BasePrintLib/PrintLibInternal.c` has the same
+statement at line **633**, inside `BasePrintLibSPrintMarker` (defined at line
+540), with check #3's ASCII arm at 614. So the file, the function and the
+expression are the same and the line number is one revision apart; the previous
+window's `PrintLibInternal.c:633` is corrected to 617 for the shipped build, and
+the identity is carried by the expression text and the two PCD reads, not by the
+line. The neighbouring check at `0x402c` is the sibling arm — it reads its own
+PCD dword at `0x1a500` (also `1000000`) and calls `0x53b4`, the `StrnLenS`
+(`CHAR16`) half of the same pair.
+
+What the run shows is the constraint *passing*: the watchpoint catches the first
+byte of the string being read, before `cmp x0, x25` at `0x4008` can be reached.
+A NULL `Format` would take `0x5424`'s guard, return 0, compare `0 <= 1000000` and
+pass — no assert and no fault on that path either.
+
+### The chain, from the frame table and from the call sites
+
+`gdbprobe20.py` repeats the same watchpoint and walks `x29`, naming each frame's
+return address. `x29 = 0x9ffce850`, `sp = 0x9ffce740`, and the walk gives:
+
+| frame | fp | return address | the function that owns the frame |
+|---|---|---|---|
+| f0 | `0x9ffce850` | `PmicDxe+0x3dd0` | `0x3ee0` — `BasePrintLibSPrintMarker` |
+| f1 | `0x9ffce880` | `PmicDxe+0x3b2c` | `0x3d9c` — the format-argument shim |
+| f2 | `0x9ffceba0` | `PmicDxe+0x15e4` | `0x3a90` — the Debug printer |
+| f3 | `0x9ffcebd0` | `PmicDxe+0x1210` | `0x155c` — the PMIC probe (the message site) |
+| f4 | `0x9ffcec00` | `0x9cd02654` | the driver's generated `DriverEntryPoint`, called by `CoreStartImage` |
+| f5 | `0x9ffcec70` | `0x9cd06560` | DxeCore `CoreDispatcher+0x7ac` |
+| f6 | `0x9ffced00` | `0x9ccf9c5c` | DxeCore `DxeMain+0x2134` |
+| f7 | `0x9ffcee60` | `0x9ccf7260` | DxeCore `ProcessModuleEntryPointList+0xc` |
+| f8 | `0x9ffcee70` | `0x9ccf7250` | DxeCore `_ModuleEntryPoint+0x14` |
+
+Every step of that ladder is confirmed a second time by the call site that
+produced it, and this is what makes the naming safe rather than decorative:
+
+- `0x4004: bl 0x541c` → continuation `0x4008` = the capture's `x30`;
+- `0x3dcc: bl 0x3ee0` → `0x3dd0` = f0's return, and `0x3dd0` is the epilogue of
+  `0x3d9c` (`ldp x29,x30,[sp,#0x20]` / `add sp,sp,#0x30` / `ret`);
+- `0x3b28: bl 0x3d9c` → `0x3b2c` = f1's return, and `0x3b28` is inside `0x3a90`;
+- `0x15e0: bl 0x3a90` → `0x15e4` = f2's return, and `0x15e0` is inside `0x155c`;
+- `0x120c: bl 0x14d0` → `0x1210` = f3's return, and `0x14d0` is `b 0x155c`, a
+  four-byte tail jump — which is why `0x155c` appears in no `bl` list in the
+  image and why the entry into the probe routine has to be read off the branch;
+- `CoreStartImage`'s `blr x9` → `0x9cd02654` = f4's return. The live 16 bytes at
+  `0x9cd02644` are `ldr x1,[x19,#0x38]` / `mov x0,x22` / `strb w8,[x19,#0x18]` /
+  `bl …` / `mov x1,x0` / `str x0,[x19,#0xa8]` / `mov x2,xzr` / `mov x0,x22` /
+  `blr x9`, i.e. `Image->Started = TRUE; Image->Status = Image->EntryPoint
+  (ImageHandle, Image->Info.SystemTable)` (`MdeModulePkg/Core/Dxe/Image/Image.c:1768`
+  in the tree).
+
+The four core addresses resolve against `DxeCore.map` with the live core base
+`0x9ccf6000`: `0x9cd02654` = `CoreStartImage+0xfc` (symbol rva `0xc558`) — the
+return of the entry call, so the core frame is the caller of the driver, not a
+frame inside it; `0x9cd06560` = `CoreDispatcher+0x7ac`; `0x9ccf9c5c` =
+`DxeMain+0x2134`; and the two outermost are `_ModuleEntryPoint+0x14` and
+`ProcessModuleEntryPointList+0xc`. The stack scan in the same log (`PmicDxe
+return addresses on the stack: ['+0x3dd0', '+0x3b2c', '+0x1e108', '+0x1f2a0',
+'+0x1f000', '+0x710c']`) is worth one sentence of warning: two of those six are
+the walk's own return addresses and the other four are data pointers that happen
+to land inside the image's span, so the scan alone would have named nothing.
+
+### The branch that prints the message, and the `EFI_DEVICE_ERROR` it returns
+
+`0x155c` is the driver's PMIC probe, entered by the tail jump, and its whole
+decision is four instructions:
+
+```
+156c: mov  x20, x0
+157c: bl   0x6788                ; one-shot global at 0x1f250, context copied to 0x1f260
+1580: bl   0x10188               ; the presence verdict
+1584: cmp  w0, #0x1
+1588: b.eq 0x15d4                ; == 1  -> print "not detected" and fail
+158c: cbnz w0, 0x1620            ; != 0  -> fail without printing
+1590: ...                        ; == 0  -> the init path (0x1640, 0x1009c, 0x103d8, 0x14e0, 0x10108)
+15d4: adrp x1, 0x1a000
+15d8: add  x1, x1, #0x537        ; "PmicDxe: PMIC was not detected \n\r"
+15dc: orr  w0, wzr, #0x80000000  ; EFI_D_ERROR
+15e0: bl   0x3a90                ; <- the print whose print-library check the watchpoint caught
+15e4: add  x0, sp, #0xc
+15e8: bl   0x52a8                ; pm_core_utils_get_target_property
+15ec: ldr  w9, [sp, #0xc]
+15f0: cmp  w9, #0xf
+15f4: b.ne 0x1620
+...
+1624: ldp  x29, x30, [sp, #0x20]
+162c: cmp  w8, #0x0
+1630: mov  x8, #-0x7ffffffffffffff9   ; = 0x8000000000000007 = EFI_DEVICE_ERROR
+1634: csel x0, xzr, x8, eq            ; EFI_SUCCESS if w8 == 0, EFI_DEVICE_ERROR otherwise
+163c: ret
+```
+
+`0x10188` is a real routine, not a thunk: it calls `0x101f4` and `0x6bc4`, and
+`0x6bc4` with argument `0` returns the dword at `0x1f314` guarded by the byte at
+`0x1f2a0` (and `0x7fffffff` when the guard byte is zero). So the "PMIC was not
+detected" verdict on this machine is a read of a global table that no hardware
+wrote — which is the honest shape of the result: the branch is the driver's own
+no-hardware path, and the message is its own text, not an artifact of the model.
+
+The status is the driver's own return, and it is the status the core recorded.
+`P2Record`'s phase letter is documented in the payload's own instrumentation
+(`MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:83`: `'L' = CoreLoadImage
+failed, 'S' = CoreStartImage failed`), and the array at `0x9cd217a0` — read out
+of this run's saved core span at file offset `0x317a0` — holds exactly three
+records:
+
+```
+[0] D461A719-F2EC-5C77-A7AF-045F17ED012C  0x8000000000000003  'S'   (CmdDbDxe)
+[1] D3C16B1F-3F48-54CA-84CD-B58F228DE601  0x8000000000000007  'S'   (UFSDxe)
+[2] 04357C9D-9C01-5805-B18E-913EB32BE798  0x8000000000000007  'S'   (PmicDxeLa)
+```
+
+The third is the value `0x1634`'s `csel` produces. That the record exists at all
+is itself evidence: `'S'` is written only after `CoreStartImage` returns, so the
+driver returned a status instead of dead-looping, and the error-report path it
+takes on the way out (`0x1210`'s `tbz x21, #0x3f` → `0x1218: bl 0x1484`, which
+prints `ASSERT_EFI_ERROR (Status = %r)` at `0x1a494` and asserts at
+`AutoGen.c:600` only if its own `0x66e0` call fails) did not stop the run.
+
+### The `0xAF` window is `SetMem` over the driver's own image span
+
+The fill that this record has been calling "the `0xAF` window" is caught in the
+act in the same step (`gdbprobe18.py`, a store watch on the driver's registered
+DAL node inside its own image): the watch fires at `pc = 0x9cd0ec18` with
+
+```
+x0 = 0x9c1d9000   x1 = 0x22000   x2 = 0xaf   x3 = 0x9c1fafff
+```
+
+— the driver's base, its `SizeOfImage`, the fill value, and the last byte of the
+span. The code at that pc is a `SetMem` loop: `mov x8, x0` / `subs x10, x10, #8`
+/ `str x9, [x8], #8` / `b` back, with `x9` built from `w2` and the `0x01010101`
+pattern (`orr w9, wzr, #0x1010101` at `pc+0x3c`). The frame walk in the same log
+puts it under `CoreConvertPagesEx+0x2d8` (`0x9ccfbed8`) under `CoreFreePages+0xbc`
+(`0x9ccfc7a4`) under a frame returning to `CoreStartImage+0x43c` (`0x9cd02994`)
+under the same `CoreDispatcher+0x7ac` / `DxeMain+0x2134` ladder. That is
+`CoreUnloadAndCloseImage` freeing the image's pages and `CoreConvertPagesEx`
+clearing them with `DEBUG_CLEAR_MEMORY` (`SetMem (…, PcdDebugClearMemoryValue
+= 0xAF)`, `MdePkg/MdePkg.dec:2440`) — so the 0xAF bytes are the driver's own
+`.text` and `.rdata` after its failure, and the message that reads `0xAF` in a
+later capture is the same message this step reads intact at 9.0 s, three quarters
+of a minute earlier in the same run family.
+
+One naming caveat, stated rather than smoothed over: the tree's `DxeCore.map`
+resolves that pc to `BasePrintLibSPrintMarker+0x2d8`, which the bytes contradict
+(a memset loop over an image span is not the print marker), while the two frames
+above it resolve to `CoreFreePages+0xbc` and `CoreConvertPagesEx+0x2d8`, which
+fit the established chain exactly. The tree's core is one generation older than
+the running one; the addresses used in this step are the ones whose names the
+bytes confirm, and the fill is described by its arguments, which are unambiguous.
+
+### What this does and does not establish
+
+Does establish:
+
+- `PmicDxe` reaches its own "PMIC was not detected" branch in this machine, prints
+  the message through the print library's check, and returns `EFI_DEVICE_ERROR`
+  from the same branch's tail; the value `P2Record` holds for the driver is that
+  return, and `CoreStartImage` returned it (the record exists only if it did).
+- The `0xAF` window is not corruption of the message: the message is live at 9.0 s
+  and the fill is `SetMem` over the driver's whole `0x22000`-byte span after
+  `CoreUnloadAndCloseImage`, with the fill's own arguments read live.
+- The chain from `CoreStartImage`'s entry call to the print, with every link
+  confirmed twice (live frame and static call site), and the correction that the
+  helper is outlined (`0x541c`) while only the `SAFE_PRINT_CONSTRAINT_CHECK` macro
+  is inlined.
+- The library's own bound read two ways (the PCD dword `1000000` at `0x1a4fc` and
+  `+1 = 0xF4241` in the live `x1`), and the shipped line number 617 for a
+  statement the tree carries at 633.
+
+Does not establish:
+
+- Whether the *device* takes the `w0 == 1` branch. On the phone there is an SPMI
+  PMIC and a real `0x1f2a0`/`0x1f314` table behind `0x6bc4`, and nothing in the
+  image says what that read returns there; this run's verdict comes from a global
+  the machine model never writes.
+- Whether `0x1484`'s error-report path ran to its `AutoGen.c:600` assert on this
+  run. The `'S'` record proves only that `CoreStartImage` returned.
+- What `0x66e0`, `0x101f4`, `0xfa3c`, `0xfd80`, `0x1912c`, `0x12580`, `0x106f0`,
+  `0x11b2c`, `0x10120` do, or what `0x1f2a0`/`0x1f314` hold; and, unchanged from
+  earlier steps, whether `DALSys` should have unregistered the driver's node on
+  unload, which this step's store watch shows being overwritten by the fill
+  rather than by any unregister.
+- The record's larger open items are unchanged: R1 versus R2 for the phone's
+  46-character `P2 SEQ`; the five owed on-device readings (`P2 STATS`'s
+  `apriori=` denominator, `P2 APRI`/`P2 WALK`/`P2 FREE`/`P2 ERR`/`P2 RETRY`, the
+  four `P2 BIN` rows) under *先读屏，再刷下一次*; the P3 gate, with P3's display,
+  USB-host and buttons items unfinished; and P4 and P5 not begun.
+
+### Rows
+
+- **instrument**: `work/out/qemu-probe-4.140/gdbprobe19.py` (the `Z3` read
+  watchpoints on `0x9c1f3537` and `0x9c1f3596`, log `gdb19b.log`,
+  `4b494f3a7c7241c84b5dedf006ca7c25cdee8a432dd5a98a2551f96ee073058f`, whose six
+  identical stops are one logical event — the probe never issues `z3` to clear
+  the watchpoint, so GDB re-executes the trapping instruction) and
+  `gdbprobe20.py` (the same watchpoint plus the `x29` walk, the stack scan and
+  the `pc-32`/`lr-24` windows; log `gdb20.log`,
+  `d774b69d533838f076b8f1c7c32aad7bff4b977a12d360005ddd95521dca179e`); the
+  earlier probes of this step, `gdbprobe15.py`-`gdbprobe18.py` with `gdb15.log`-
+  `gdb18.log` and `site-probe11.py`-`site-probe15.py` with `p11-run.log`-
+  `p14-run.log`, which captured the fill, the DAL node store and the 85 s memory
+  spans; `llvm-objdump -d --arch-name=aarch64` on
+  `Binaries/gauguin/QcomPkg/Drivers/PmicDxe/PmicDxe.efi` (`8267f86a58bf356f…`)
+  into `/tmp/pmic.asm` (29,458 lines,
+  `89888ca043622e2e1876937645d191b1d2354282a92c5d50ae2c88cbb6ebe2d2`), read at
+  `0x120c`-`0x1238`, `0x14d0`-`0x14d4`, `0x155c`-`0x163c`, `0x3a90`/`0x3b28`,
+  `0x3d9c`-`0x3ddc`, `0x3ee0`-`0x4028`, `0x541c`-`0x5454`, `0x53b4`, `0x6788`,
+  `0x6bc4`, `0x10188`-`0x101ec`; the image's own dwords and strings at file
+  offsets `0x1a4fc` (`1000000`), `0x1a500` (`1000000`), `0x1a494`, `0x1abf5`,
+  `0x1ae9d`, `0x1a537`; this run's saved core span `/tmp/g19-core.bin` for the
+  three `P2Record` entries at offset `0x317a0`; and `DxeCore.map` with the live
+  base `0x9ccf6000`. Nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was modified, and no device
+  is attached to this machine.
+- **shows**: that the stop which the previous window read as a data abort on a
+  NULL `Format` is QEMU's `rwatch:` hit on a successful read of the driver's own
+  message, with `x8` never read and `x0 = 0` being `AsciiStrnLenS`'s counter;
+  that `0x541c` opens with a `cbz x8, 0x544c` NULL guard, so the path the old
+  reading needed does not exist; that the message site, its `bl 0x3a90`, the
+  library check that runs inside that call and its failure assert at
+  `PrintLibInternal.c:617` are one chain entered from `DriverEntryPoint` at
+  `0x120c` by way of the four-byte tail jump at `0x14d0`; that the same routine's
+  tail returns `0x8000000000000007` by `csel` at `0x1634` whenever its verdict is
+  non-zero, which is the value the third `P2Record` entry holds for `PmicDxeLa`;
+  and that the `0xAF` bytes are `SetMem (0x9c1d9000, 0x22000, 0xAF)` — the whole
+  image span — under `CoreConvertPagesEx+0x2d8` and `CoreFreePages+0xbc`, i.e.
+  the unload, not damage.
+- **adds**: the assignment of every frame in the chain to the function that owns
+  it (`0x541c`, `0x3ee0`, `0x3d9c`, `0x3a90`, `0x155c`, `0x3ee0`'s
+  `BasePrintLibSPrintMarker` identity by the two PCD reads and the line number);
+  the fact that the probe routine is entered by a tail jump from `0x14d0` and so
+  appears in no `bl` list, which is why the entry had to be read off the branch;
+  the driver's presence verdict as a global-table read (`0x10188` → `0x6bc4(0)`
+  → `0x1f2a0`-guarded `0x1f314`) rather than a hardware probe, which is what makes
+  "the device may answer differently" a concrete statement rather than a hedge;
+  and the fill's own arguments as the third independent confirmation that the
+  `0xAF` window is an unloaded image.
+- **corrects**: the previous window's `AsciiStrnLenS` fault reading, withdrawn in
+  full (no abort, no NULL `Format`, `x8` never read, and the guard at `0x5424`);
+  the description of the helper as inlined, which is true of
+  `SAFE_PRINT_CONSTRAINT_CHECK` and false of `AsciiStrnLenS`; the containing
+  function's name, which is `BasePrintLibSPrintMarker` rather than `AsciiVSPrint`;
+  the shipped line number, 617 and not 633; the claim that the message region was
+  already overwritten at the trap, which the 9.0 s reading of the intact string
+  contradicts — the fill is later and is the unload; and this step's own first
+  pass at the core frames, which resolved `0x9cd02654` against a base of
+  `0x9ccf0000` and named a symbol at rva `0x1c654`, where the live base is
+  `0x9ccf6000` and the address is `CoreStartImage+0xfc`. Nothing in step 4.139's
+  chain changes: the release path it named is present instruction for instruction,
+  and its return address `0x15e4` is the frame this step's walk reads as f2.
+- **does not close**: whether the phone takes the `w0 == 1` branch, which needs
+  the device and not a machine model whose `0x1f2a0` byte is never written;
+  whether `0x1484`'s report path reached its `AutoGen.c:600` assert; what
+  `0x6bc4`'s table and the eight helper routines it sits among mean; whether
+  `DALSys` owes the driver an unregister on unload; the `DxeCore.map` naming gap
+  above `CoreFreePages`; R1 versus R2 for the phone's 46-character `P2 SEQ`; the
+  five owed on-device readings under *先读屏，再刷下一次*; and the P3 gate.
+- **not an action**: nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was changed and no patch was
+  written into any image — in particular the analysis of `0x155c`'s verdict
+  read, of the print library's constraint check and of the unload fill is
+  analysis only, and no change to `PmicDxe`, to `Dalsys` or to the payload is
+  proposed or made. The four seeds this step's runs carry are unchanged from
+  step 4.139, and every write in this step is to `/tmp`, to
+  `work/out/qemu-probe-4.140/` and to this record (`work/` is untracked); the
+  tracked tree gains this document alone. `userdata`, the partition table and the
+  firmware LUN remain untouched. The porting goal is not advanced by it: the end
+  state is still a Windows tablet, the modem and the cameras are still
+  undrivable, and P4's `userdata`-destroying install and P5's peripherals are not
+  begun. What it does change is that one of the three drivers this payload loses
+  on the way to a shell is now explained end to end — it does not find a PMIC,
+  says so, returns `EFI_DEVICE_ERROR`, and is unloaded — and that the explanation
+  now names the one read, on the device, that would tell whether the phone
+  disagrees.
