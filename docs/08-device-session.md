@@ -28046,3 +28046,309 @@ and the bytes settle which literal is which: `0x4c31 = b'DebugLib.c'`, `0x4c3c =
 | corrects | step 4.137's `does not close` item beginning "why `X19` and `X21` in the `p9` capture hold the file and description pointers in the reverse order from the one `DebugAssert`'s prologue writes" — withdrawn: the capture's values are in the prologue's order and the row was written from a transposed pair; step 4.137's implicit expectation that the fifth site's failure would be a table or entry condition, which the static element rules out; and this step's own earlier summary of `PdcDxe`'s table as "one fully populated element at the four pointer offsets the check reads", which is true of the element but was read before `0x26d0`'s `+0x38` write and `0x2528`'s `+0x1004` read were understood, so the phrase "the assert is reached by the loop's second condition or a deeper check" is replaced by the single named comparison at `0x2794`. Nothing in step 4.137's frame table, base derivation (`0x9c4e6000`), site identification (`0x24f4`, `pdc_seq.c:386`), halt-routine reading (`0x4084`/`0x40a4`) or census (21 `bl 0x1460`, 51 `bl 0x1564`, five NULL-format sites) changes; nor does step 4.136's `RpmhDxe` half |
 | does not close | whether the same comparison fails on the *device* — this run's resource address is read in a machine model that has nothing at `0xd2a0000`, and the phone is the only place that can say whether its own PDC block answers `+0x1008` with capacity; whether `RpmhDxe`'s `EFI_UNSUPPORTED` sleep-callback row and `PdcDxe`'s assert are also what stop the *device*, which needs the phone and not QEMU; which of the five `PdcDxe` sites a real run reaches, since this one reached the fifth under two fabricated seeds; what the `ERROR: C90000002:V03000007 I0 <GUID>` row is and which module prints it; whether the `mov x1, xzr` that puts the NULL in the format argument is written that way in the driver's source or is a build artifact, which the image cannot settle and the sources are not in this tree to check; what the 24-byte key at `0x7270` and the entry field `0x10018` mean, which only the driver's source or the phone would name; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written into any image; **the `mov x1, xzr` at `PdcDxe`'s five NULL-format sites is untouched**, and no patch to them is proposed — patching them is a device-facing action and is not taken, and neither is any patch to the capacity read, which is the driver's own check on hardware the phone has and this machine model does not; the one new QEMU run carries no payload, boots nothing and writes to no file under version control, its memory tree captured to `/tmp`; and no device is attached to this machine. The tracked tree gains this document alone. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun. What it does change is that the record now knows, from the image, *which* resource stops `PdcDxe` and *which* comparison stops it — a PDC block that must exist for the display resource, on a path the PDC driver walks before any of this port's code runs |
+## Step 4.139 — the PDC capacity read is the gate and it opens: a four-byte seed at the redirected pool address `0x424a1008` moves the run out of `PdcDxe`, and the next wall is `ClockDxe`'s `ClockDriver.c:260` on `Clock_InitTarget`; and step 4.138's resource address was `0x0b2a0000`, not `0xd2a0000`
+
+Step 4.138 ended with the fifth `PdcDxe` assert explained as a capacity read at
+`resource + 0x1008`, with `resource = elem[+0x20] + 0xb000000` computed as
+`0xd2a0000`. That arithmetic is wrong and this step corrects it, and then runs the
+experiment the corrected address makes possible — seeding the word — which moves
+the payload past `PdcDxe` for the first time in this record.
+
+### The correction: `0xb000000 + 0x2a0000` is `0x0b2a0000`
+
+`0x0b000000 + 0x002a0000 = 0x0b2a0000`. Step 4.138's `0xd2a0000` came from
+carrying into the wrong nibble while adding in my head; the instruction it was
+computed from is unambiguous:
+
+```
+26d0: ldr  x8, [x0, #0x20]      ; x8 = elem[+0x20] = 0x2a0000
+26d4: mov  w10, #0xb000000      ; w10 = 0x0b000000
+26d8: ldr  x9, [x0, #0x30]      ; x9 = elem[+0x30] = 0
+26dc: add  x11, x8, x10         ; x11 = 0x0b2a0000
+26e0: str  x11, [x0, #0x38]     ; elem[+0x38] = resource
+```
+
+Three independent facts say `0x0b2a0000` and not `0xd2a0000`, and they were all
+available before this run:
+
+1. **The board's own memory map names the address.** The platform's generated map
+   — the same `MemoryMapLib.c` that `low_regions()` reads — declares
+   `PDC_DISPLAY 0x0b2a0000 + 0x010000` and `PDC_DISP_SEQ 0x0b4a0000 + 0x010000`.
+   `0x0b2a0000` is `elem[+0x20]` plus the literal. And `elem[+0x28] = 0xb4a0000`
+   is `PDC_DISP_SEQ` **exactly** — the field `0x2784` receives as its `x1`. So the
+   element named `display` carries the offset of the PDC display register block
+   and the address of its sequencer block, and both are the board's own
+   declarations to the byte. Nothing declares anything at `0xd2a0000`; the
+   nearest thing to it in the map is the *span* of `PMIC ARB SPMI`,
+   `0x0c400000 + 0x2800000`, which covers `0xd2a0000` only because it is 40 MB
+   wide.
+2. **The previous run's own stack holds the corrected value and not the wrong
+   one.** `work/out/qemu-probe-4.137/p9-stack.bin`, searched as 8-byte slots,
+   contains the qword `0x0b2a0000` at `0x9ffcf210` and `0x9ffcf218` and the qword
+   `0x0b4a0000` at `0x9ffcf230` and `0x9ffcf238` — two adjacent copies of each,
+   the pair of values the driver computed — and contains `0xd2a0000`,
+   `0x0b2a1008` and `0xd2a1008` in no slot at all. The live frame that reached the
+   assert carried the real address.
+3. **4.138's memory-tree query was aimed at the wrong address.** The `info mtree
+   -f` capture shows no region at `0xd2a0000` because no region exists there — a
+   property of an address the driver never computed. The query asked the wrong
+   question, so its answer says nothing about the run.
+
+What survives from 4.138 unchanged: the table the loop walks is installed at run
+time, it holds one element, that element is named `display`, its four pointer
+fields pass `0x23a8`'s NULL tests, and the check that fires is the read at
+`resource + 0x1008` compared against `elem[+0x58] = 0`. Only the address moves,
+and with it the reason the read is zero.
+
+### Why the read is zero: the stage-2 redirect, not an unmapped address
+
+The tool builds its stage-2 level-2 table from the same map. `l2_plan` assigns one
+2 MB pool block per 2 MB block a declared region occupies, densely from
+`0x40000000`. For the addresses in play:
+
+| declared region | low address | 2 MB block | pool address |
+|---|---|---|---|
+| `PDC_DISPLAY` | `0x0b2a0000 + 0x10000` | 89 | `0x42400000` |
+| `PDC_DISP_SEQ` | `0x0b4a0000 + 0x10000` | 90 | `0x42600000` |
+| `APSS_RSC_RSCCR` | `0x18200000 + 0x30000` | 193 | `0x46c00000` |
+
+8.5 MB of pool, 55 blocks — the pool runs `0x40000000`–`0x46e00000` and stops
+below the load address, which is the property `l2_plan` refuses to break.
+
+The arithmetic is confirmed by observation twice over, and this is what makes the
+next section a controlled experiment rather than a stab:
+
+- `block_for_ipa(0x1822000c) = 0x46c00000`, so IPA `0x1822000c` reads PA
+  `0x46c2000c` — the address step 4.135 seeded the RSC word at, and the value the
+  RSC register model returned. The run read back what was written through the
+  redirect.
+- `block_for_ipa(0x0b2a1008) = 0x42400000` with offset `0x0b2a1008 & 0x1fffff =
+  0xa1008`, so IPA `0x0b2a1008` reads PA `0x424a1008`.
+
+The payload's read at `0x0b2a1008` therefore lands in DRAM that QEMU zeroed at
+reset. It returns 0, `0x2794`'s `b.ls` takes the fail branch, `0x27a8` returns 0,
+`0x26bc` turns that into `-4`, `0x23a8` propagates it and `0x2450`'s
+`cbnz w0, 0x24f4` reaches `pdc_seq.c:386`. The read is zero because the pool is
+zeroed RAM, not because the address is unmapped — which is precisely the
+difference between an unpassable check and a seedable one.
+
+### The experiment: one loader line, four bytes, and the run leaves `PdcDxe`
+
+`work/out/qemu-probe-4.139/site-probe10.py` is `site-probe9.py` with one added
+device:
+
+```
+-device loader,file=/tmp/pdc-cap.bin,addr=0x424a1008,force-raw=on
+```
+
+`pdc-cap.bin` is four bytes, `00 00 10 00` — little-endian `0x00100000`. That
+value is chosen from the instruction that reads it: `0x2784` computes
+`w8 = ((w10 >> 16) & 0xff) << 2` and fails when `w8 <= w2`, so bits [23:16] must
+be nonzero; `0x10` there gives `w8 = 64`, which clears both the `elem[+0x58] = 0`
+comparison on the failing path and the sequence walk's comparison against
+`0x10018 & 0xffff = 0x18` (24) one frame down. The remaining three loaders — the
+stub, the payload, the RSC word and the eight enable bits — are unchanged from
+4.137, so the seed is the only delta. Nothing in the stub, the tool or the payload
+was modified, and `el3.bin` is archived under the hash the 4.137 and 4.138 work
+rests on (`f567b832220ccac7512e41412c24357ad75c1de0894eb7d0af863cf00fb2f34d`).
+
+Observed, 85 s into the run (`work/out/qemu-probe-4.139/p10-regs.txt`):
+
+```
+PC=000000009c412f4c X00=0000000000000000 X01=0000000000000000
+X20=0000000000000104 X21=000000009c4161c6 X22=000000009c51bd98
+X29=000000009ffce7c0 X30=000000009c412f48 SP=000000009ffce7b0
+PSTATE=60000205 -ZC- NS EL1h
+```
+
+and on the stack, as one ASCII run at `0x9ffce7d8`
+(`work/out/qemu-probe-4.139/p10-stack.bin`):
+
+```
+ASSERT ClockDriver.c +260: 0
+```
+
+The module is no longer `PdcDxe`: the PC is at `0x9c412f4c` where 4.137's run was
+at `0x9c4ea0a4`, and the assert text names a different file. `PdcDxe`'s element
+check passed. The pool window after the run
+(`work/out/qemu-probe-4.139/p10-pdc.bin`, `0x424a0000 + 0x6000`) shows the seed
+intact — `0x424a100a = 0x10`, the third byte of the word written — and exactly one
+other nonzero byte in the whole 24 KB, `0x424a4500 = 0x01`, which is IPA
+`0x0b2a4500`, inside the PDC display window. The driver read the word it was
+given and wrote into the block behind it.
+
+### Which module, and which statement
+
+`ClockDriver.c` is in none of the tree's 57 sources; like `pdclog.c`, `pdcTcs.c`
+and `pdc_seq.c` it exists only inside a prebuilt image. Two images in the tree
+carry the string, and they are byte-identical:
+
+```
+c200d38eb3224b31354912947f93eacf238c9d18897cc9fd03c821b677da329d
+  device/dxe/ClockDxe.efi
+  work/uefi/Mu-Silicium/Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi
+```
+
+192,512 B, `.text` `0x1000`–`0x1d000`, `.data` `0x1d000`–`0x2d000`, `.reloc`
+`0x2d000`–`0x2f000`, raw pointer equal to VA in every section — the same layout
+convention `PdcDxe.efi` has. Inside that image:
+
+```
+RVA 0x131c6: 'ClockDriver.c'
+RVA 0x131d4: '0'                       <- 0x131c6 + 0xe, adjacent
+RVA 0x14570: 'DebugLib.c'
+RVA 0x131b5: 'Clock_DriverInit'
+RVA 0x13249: 'DALSYS_LOGEVENT_FATAL_ERROR: Clock_InitVoltage failed.'
+RVA 0x13280: 'DALSYS_LOGEVENT_FATAL_ERROR: Clock_InitTarget failed.'
+RVA 0x132b6: 'DALSYS_LOGEVENT_FATAL_ERROR: Clock_InitNPA failed.'
+```
+
+The captured registers select the module and the base between them. `X21` is the
+file pointer, and `0x9c4161c6 - 0x131c6 = 0x9c403000`; `X20 = 0x104 = 260`, the
+number in the printed text; and `0x9c4161d4` — the `'0'` description literal —
+is on the stack at `0x9ffce7b0`, one `X19` from the same base. `0x9c403000` is
+page-aligned and not 64 KB-aligned, the same shape as `PdcDxe`'s `0x9c4e6000`
+derived in 4.138.
+
+The base is confirmed a second time from the instruction the CPU is in. Under
+`0x9c403000`, PC `0x9c412f4c` is RVA `0xff4c`, and the image at `0xff48` is
+
+```
+ff48: str  xzr, [sp, #0x8]
+ff4c: ldr  x8, [sp, #0x8]
+ff50: cbz  x8, 0xff4c
+```
+
+— the compiler's `while (i == 0);` for a dead loop, which is where `DebugAssert`
+ends after it has printed. `X30 = 0x9c412f48` is RVA `0xff48`, the return address
+of the `bl 0x100d4` at `0xff44`; the loop does not touch `X30`, which is why the
+capture shows it. The module's assert is reached through `DebugAssert` at RVA
+`0x8124` (`mov x19, x2` / `mov x20, x1` / `mov x21, x0`, the same prologue
+`PdcDxe`'s has) called at `0x81d0`.
+
+The site that fired is the line-260 one, and it is the only one that can be: the
+image references `ClockDriver.c` from fifteen blocks, but the only
+`mov w1, #0x104` — the line argument — in the whole image is at `0x2bec`:
+
+```
+2ba0: mov  x0, x19
+2ba4: bl   0xa75c                  ; Clock_InitTarget
+2ba8: cbz  w0, 0x2bfc              ; 0 = success, skip
+2bac: ldr  x0, [x19, #0x38]
+2bb0: adrp x3, 0x13000
+2bb4: add  x3, x3, #0x280          ; 'DALSYS_LOGEVENT_FATAL_ERROR: Clock_InitTarget failed.'
+2bb8: mov  w1, wzr
+2bbc: mov  w2, wzr
+2bc0: bl   0xbf48
+2bc4: adrp x1, 0x13000
+2bc8: add  x1, x1, #0x1b5          ; 'Clock_DriverInit'
+2bcc: orr  w0, wzr, #0x80000000    ; EFI_ERROR
+2bd0: mov  w2, wzr
+2bd4: mov  w3, wzr
+2bd8: mov  w4, wzr
+2bdc: bl   0x8020
+2be0: adrp x0, 0x13000
+2be4: adrp x2, 0x13000
+2be8: add  x0, x0, #0x1c6          ; 'ClockDriver.c'
+2bec: mov  w1, #0x104              ; 260
+2bf0: add  x2, x2, #0x1d4          ; '0'
+2bf4: bl   0x8124                  ; DebugAssert
+2bf8: b    0x2bf8                  ; dead
+```
+
+Three independent confirmations that this is the site: the printed text matches
+the three literals; `X20` and `X21` hold the line and the file the block loads;
+and `0x2bf8` — the return address of the `bl 0x8124` at `0x2bf4` — is the saved
+LR of the second frame of the captured chain (`0x9ffcea00 → 0x9c405bf8`, RVA
+`0x2bf8`). The same block one screen up, at `0x2b48` with `mov w1, #0xe8` (232)
+and `0x13249`, is its twin for `Clock_InitVoltage`. So `Clock_DriverInit` logs
+`Clock_InitTarget failed` and asserts when `Clock_InitTarget` returns nonzero;
+the run's `Clock_InitTarget` returned nonzero.
+
+The rest of the captured chain, in RVAs under the same base: `0x81d4` (the return
+into `DebugAssert` from the `bl 0xff2c` at `0x81d0`), `0x2bf8` (the site), then
+`0x8f90` and `0x1c48`, then a frame at `0x9c49b1b8` that is in a different
+module, then `0xeb00`, `0xe070` and `0xc108`, all three back inside `ClockDxe`.
+So the driver's own init chain crosses into the core and is called back before it
+reaches the assert: the module boundary in the chain sits between `0x1c48` and
+`0xeb00`, and the outermost `ClockDxe` frame is `0xc108`. Which core routine that
+crossing is — a protocol notification, a boot service, or the dispatcher's own
+entry into the image — is not established by a frame chain alone.
+
+### What this does and does not establish
+
+Establishes:
+
+- The capacity read at `resource + 0x1008` is the gate on this path. A four-byte
+  value at the address the redirect puts behind that read is enough to pass it,
+  and the run then leaves `PdcDxe` — so the `-4` from `0x26bc` and the
+  `pdc_seq.c:386` assert are consequences of a zero capacity word and of nothing
+  else in the element table.
+- The redirected block is live. The driver both read it (the check passed only on
+  the seeded value) and wrote into it (`0x424a4500 = 0x01`).
+- The next wall, named at the instruction level: `ClockDriver.c:260`, the
+  `Clock_InitTarget` failure assert in `ClockDxe`, a module loaded at
+  `0x9c403000`.
+- Step 4.137's and 4.138's terminal state, sharper: both captures are inside the
+  compiler's dead loop at the tail of the module's `DebugAssert`, and `X30 = PC -
+  4` in both is the return address of the `bl` immediately before that loop, not
+  a property of `DebugAssert`'s prologue. 4.138's reading of `X19`/`X21` stands —
+  it came from the prologue and the literals, not from this relation.
+
+Does not establish:
+
+- Whether `Clock_InitTarget`'s failure is *caused by* the fabricated capacity word
+  or is the next pre-existing wall in the same family as everything else here.
+  One run with one seed value cannot separate the two, and no counterfactual run
+  is possible: `PdcDxe` cannot pass without a seed, so there is no state in which
+  `Clock_InitTarget` runs against a device-accurate PDC word. The honest form of
+  the claim is "with a nonzero capacity the PDC check passes and the run reaches
+  `Clock_InitTarget`", not "the device's PDC check passes".
+- What the word at `+0x1008` really is. The derivation
+  `((w >> 16) & 0xff) << 2` is inferred from the two comparisons that use it
+  (`elem[+0x58] = 0` and the sequence entry's `0x18`), and the value I chose
+  (`0x00100000`, count 16) is one that satisfies both — not one read off hardware.
+  Only the phone's own PDC register can say what it holds, and only the phone can
+  say whether the capacity check passes there at all.
+- What `ClockDriver.c` line 260 contains. The sources are absent from the tree;
+  the file name, the line, the description literal `'0'` and the two log strings
+  are all the evidence there is, exactly as with `pdclog.c`, `pdcTcs.c` and
+  `pdc_seq.c`.
+- Why `Clock_InitTarget` fails. Its four neighbour strings name four init steps
+  (`Bases`, `Voltage`, `Target`, `NPA`) and two of them have asserts at lines 232
+  and 260; what the third step reads and why it rejects what it read on this
+  machine is not in the image.
+
+### Rows
+
+- **instrument**: `work/out/qemu-probe-4.139/site-probe10.py` — `site-probe9.py`
+  plus `-device loader,file=/tmp/pdc-cap.bin,addr=0x424a1008,force-raw=on`, with
+  `pdc-cap.bin` = `00 00 10 00`. Artifacts `p10-regs.txt`, `p10-stack.bin`,
+  `p10-pdc.bin`, `p10-ctx.bin`, `pdc-cap.bin`, and `el3.bin` under
+  `f567b832220ccac7512e41412c24357ad75c1de0894eb7d0af863cf00fb2f34d`.
+- **shows**: the run's terminal state moves from `PdcDxe`'s `pdc_seq.c:386` at
+  `0x9c4ea0a4` to `ClockDxe`'s `ClockDriver.c:260` at `0x9c412f4c`; the pool block
+  behind the PDC display window holds the seed and one byte the driver wrote.
+- **adds**: the resource address is `0x0b2a0000` = the board's `PDC_DISPLAY`, and
+  `elem[+0x28] = 0xb4a0000` = `PDC_DISP_SEQ`; the plan's pool addresses for blocks
+  89, 90 and 193; the fact that the payload's `DebugAssert` tail is a dead loop at
+  `str xzr` / `ldr` / `cbz` so the capture PC and `X30` are four bytes apart; and
+  a named next wall with its module, base, site RVA and the string literals on
+  both sides of it.
+- **corrects**: 4.138's `0xd2a0000` — the sum is `0x0b2a0000`, the board's own
+  `PDC_DISPLAY`, and the address is one the platform's map does declare, so 4.138's
+  sentence that nothing declares a region there was about the wrong address and
+  the memory-tree capture it rested on answers a question the driver never asked.
+  The mechanism it gave for the zero — the redirect has no device behind it — is
+  right, and now names the pool block rather than "no region".
+- **does not close**: whether the device's own capacity word passes this check;
+  whether `Clock_InitTarget` fails on a device that does; what the PDC word's bits
+  [23:16] mean; why `Clock_InitTarget` rejects this machine; what `ClockDriver.c`
+  line 260 says. The record's larger open items are unchanged: R1 versus R2 for
+  the phone's 46-character `P2 SEQ`, the five owed on-device readings, the P3 gate,
+  and the absent device.
+- **not an action**: nothing was written to the phone, no partition was touched,
+  and the boot image that was read back and archived still is — the only writes in
+  this step are to `/tmp`, to `work/out/qemu-probe-4.139/`, and to this record.
+  `userdata`, the partition table and the firmware LUN remain untouched.
+
