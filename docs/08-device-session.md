@@ -29203,7 +29203,7 @@ previous step read out of a core dump is a model's value.
   whether the interface slot is filled before `UFSDxe` runs, and whether the
   attach succeeds when it is.
 
-## Step 4.142 — the third call is `HALIOMMU`'s own attach, it returns `4`, and the buffer it calls too small is this model's zeroed SMMU window: the protocol *was* installed before `UFSDxe` looked (so step 4.141's "nothing installs it here" is withdrawn), the slot it could not find is `UFSDxe`'s private cache and not the protocol database, the count behind the failure is read at `0x15000024` — the board's own declared `SMMU` base plus `0x24` — and the device's `P2 SEQ` line says `HALIOMMU` started there while `UFSDxe` never loaded
+## Step 4.142 — the third call is `HALIOMMU`'s own attach, it returns `4`, and the buffer it calls too small is this model's zeroed SMMU window: the protocol *was* installed before `UFSDxe` looked (so step 4.141's "nothing installs it here" is withdrawn), the slot it could not find is `UFSDxe`'s private cache and not the protocol database, the count behind the failure is read at `0x15000024` — the board's own declared `SMMU` base plus `0x24` — and this step's own first draft, which read the device's 46-character `P2 SEQ` by Apriori slot, is withdrawn in full: the array is 70 entries and all 70 have files in the volume, so the 46 promotions are 24 misses and *which* 24 is exactly what the letters cannot say
 
 Step 4.141 ended with four things it could not close, and all four are closed
 here, three of them by reading the two images statically rather than by running
@@ -29450,7 +29450,7 @@ gauguin board. On the phone that window is a real SMMU register block, and the
 same read would return whatever the block's `+0x24` field holds — which is the
 one thing this model cannot supply and does not pretend to.
 
-### The device's own line, and what it says about this path
+### The device's own line: 46 promotions out of 70, and the letters do not name them
 
 The `P2 SEQ` line read off the device on 2026-09-23 —
 `ssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL`, 46 characters — has one letter
@@ -29458,33 +29458,77 @@ per Apriori *match*, and the payload's own patch defines them
 (`uefi/patches/mu-basecore-local.patch:378-384`): `'s'` = *EntryPoint returned
 `EFI_SUCCESS`*, `'S'` = *EntryPoint returned an error*, `'L'` = *`CoreLoadImage`
 failed, so the EntryPoint was never called*, `'?'` = promoted but never reached.
-Under the table's slot-to-Apriori identity (slot *k* = Apriori *k + 1*), the two
-entries this step is about are:
+Two facts about that line are settled and one is not, and the unsettled one is the
+one this step would want.
 
-- **slot 14 = Apriori 15 = `HALIOMMU` = `s`** — on the phone, `HALIOMMU`'s
-  `DriverEntry` ran and returned `EFI_SUCCESS`.
-- **slot 27 = Apriori 28 = `UFSDxe` = `L`** — on the phone, `CoreLoadImage`
-  failed for `UFSDxe`, so its `DriverEntry` never ran, `UFSSmmuConfig` was never
-  called, and no `P2Record` entry exists for it.
+**Settled, from the host this time and not from the panel: the array is 70 entries
+long.** `tools/fv-apriori.py` walks the built volume and prints the same numbers
+this paragraph reasons from — `entries=70  missing=0  files=126`. The Apriori FFS
+file is the very first file in the volume, at `0x78`, of
+type `0x02` with a single `EFI_SECTION_RAW` of 1,124 bytes — 4 bytes of section
+header and **1,120 bytes of GUIDs, which is exactly 70 `EFI_GUID`s** — and its
+first two entries are `D6A2CB7F-…` (`DxeCore`) and `80CF7257-…` (`PcdDxe`), in the
+order `APRIORI.inc` lists them. The volume holds 126 files, and **all 70 Apriori
+GUIDs are present in it: the membership test finds zero missing**, so no Apriori
+entry fails to match for want of a file. This is the `entries=` denominator the
+record has wanted since step 4.132, and the answer is **70**, for every archived
+payload as well as this build (`tools/apriori-prefix.py`, which states it as a
+premise every candidate must satisfy). The array's trailing 24 bytes of free space
+in the compact volume are 1,768 in the inner 7,536,640-byte `FVMAIN.Fv` — the
+build is 0.02% short of full and nothing was dropped for space.
 
-That is the answer to the question 4.141 called unanswerable, and it is an answer
-in the opposite direction from the model's: **the phone starts the IOMMU driver
-and never starts `UFSDxe`**, so the attach this step explains in such detail does
-not run there at all. The status behind the `L` is kept in `mP2ApriSt` and printed
-by the digest as a class letter — `'R'` `OUT_OF_RESOURCES`, `'N'` `NOT_FOUND`,
-`'X'` `SECURITY_VIOLATION`, `'D'` `DEVICE_ERROR` (`patches/mu-basecore-local.patch:440-444`)
-— so the owed `P2 WHY` row is what would name the class of `UFSDxe`'s load
-failure, and it is one of the five readings the device still owes.
+**Settled: 46 of the 70 matched, so 24 did not.** Entry 0 is the core file and
+never matches by construction (`Dispatcher.c`'s `DXE_CORE` branch fills
+`gDxeCoreLoadedImage->FilePath` instead of calling `CoreAddToDriverList`), so the
+batch is 46 promotions and 23 real misses among the 69 nameable entries. The
+patch's own `unhit` counter says the same thing as a checksum and was written to
+be read beside `entries` rather than instead of it.
 
-The caveat this conclusion inherits is the one the table itself states: the
-slot-to-Apriori identity holds if the array was read short (step 4.132's **R1**)
-and fails if the *discovered list* was short (**R2**), and the row that decides is
-`P2 STATS`'s `apriori=` denominator, which has never been transcribed. Under R1
-the two rows above are `HALIOMMU` and `UFSDxe`; under R2 they are whichever
-drivers occupy those positions in the run's actual match order. One
-corroboration, not a proof: R1's reading of slots 18–20 as `RpmhDxe`, `PdcDxe`
-and `ClockDxe` failing agrees with the model, which walks into `PdcDxe` and stops
-in `ClockDxe` on its own (`ClockDriver.c:260`, step 4.139).
+**Not settled, and this is the correction to this step's first draft: the 46
+letters cannot be indexed by Apriori entry.** The first draft of this section read
+`slot 14 = Apriori 15 = HALIOMMU = s` and `slot 27 = Apriori 28 = UFSDxe = L` and
+concluded that the phone starts the IOMMU driver and never loads `UFSDxe`. That
+reading is withdrawn in full, and the repo has the receipts: `work/out/retracted/README.md`
+retires `phys-order.py` for "the letters are in *promotion* order, i.e.
+Apriori-array order, which is not the volume's order", retires `apriori-map.py`
+because "the `N` in `apriori=46/N` has never been observed, so the fork it was
+written to resolve was never device-decidable", and records a fifth retraction —
+step 4.17's physical-cutoff reading — as refuted *by the SEQ's content*: "slot 21
+is decisive because it holds `ShmBridgeDxe`, which sits at physical 74 and so
+cannot be promoted by any stop below 74". And `tools/apriori-prefix.py` states the
+general form: *"The letters (`s`, `L`) cannot separate them and no reading of them
+ever will. Each character is the load result of the driver in that slot, and the
+slots are the hypothesis under test — so a string of the right length is
+consistent with **every** batch of that length, and any test that indexes the
+observed string by a slot map has assumed the answer."* The slot-to-entry map is
+the thing being looked for; using it as the key is circular, and the first draft
+of this section did exactly that. What the line licenses is the **length** — 46
+promotions — and nothing about which 46.
+
+What names the batch is `P2 APRI`'s three numbers and `P2 DIAG`'s GUID list, which
+is what `tools/apriori-prefix.py` and `tools/fv-census.py` are for: the promotion
+loop is an outer loop over the Apriori array and an inner loop over the discovered
+list, so the batch is a function of the *scan prefix* and of nothing else, and the
+surviving candidates — a scan that reached the end of the volume, a cut at 48 or
+49, and a truncated array read — promote sets that share 42 entries and differ in
+eight. So the owed readings are unchanged and are now three rather than five in
+this neighbourhood: `P2 APRI`'s `bytes=`, `entries=` and `sum=`, `P2 DIAG`'s GUID
+list, and `P2 WALK`'s five `seen=`/`iter=` lines. Everything in this step's
+model-side chain is GUID-keyed rather than slot-keyed — the `P2Record` entry for
+`UFSDxe` at step 4.141 was found by matching `D3C16B1F-3F48-54CA-84CD-B58F228DE601`,
+which is `UFSDxe`'s own `Guid.xref` name — and so none of it depends on the map
+that is missing.
+
+The one thing the phone-side record does say about this driver, stated at the
+strength it is actually held: `UFSDxe` is in the Apriori array (entry 29 by
+`Guid.xref`'s name for `D3C16B1F-…`, which is the same GUID the model's
+`P2Record[1]` carries) and its FFS file is in the volume, with the other 69; and
+whether its letter in that 46-character line is an `s`, an `S` or an `L` is not
+determinable from the line. The class letter behind a load failure — `'R'`
+`OUT_OF_RESOURCES`, `'N'` `NOT_FOUND`, `'X'` `SECURITY_VIOLATION`, `'D'`
+`DEVICE_ERROR` (`patches/mu-basecore-local.patch:440-444`) — is what `P2 WHY` would
+print *for a slot once the slot is named*, so `P2 WHY` is worth less than `P2 APRI`
+here and the order of the owed readings is that one first.
 
 - **instrument**: two images read statically and byte-wise —
   `uefi/Binaries/gauguin/QcomPkg/Drivers/HALIOMMUDxe/HALIOMMU.efi` (45,056 B,
@@ -29509,6 +29553,18 @@ in `ClockDxe` on its own (`ClockDriver.c:260`, step 4.139).
   (`s2_l1`/`s2_l2`), `tools/qemu-panel-read.py`'s `low_regions`, `l2_plan`,
   `block_for_ipa` and its `ZERO_MEM_POOL_BASE`/`STAGE2_BLOCK` constants,
   `MemoryMapLib.c:95`, `Base.h:1036–1117` and `patches/mu-basecore-local.patch:359,378-384,440-444`.
+  The phone-side numbers added by the correction are host measurements of the
+  built volume, not new device readings:
+  `work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` and its
+  `.txt`/`.map`/`Guid.xref` (7,536,640 B, `TAKEN 0x72f918`, `SPACE 0x6e8`, 126
+  files) and `FVMAIN_COMPACT.Fv`/`.txt` beside it (`TAKEN 0x112150` of
+  `0x300000`), read with `tools/fv-apriori.py` — written for this correction, run
+  as `tools/fv-apriori.py`, and printing `entries=70  missing=0  files=126` — which
+  walks the FFS header at `0x78` and the single `EFI_SECTION_RAW` inside it;
+  `uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc`
+  (72 `INF` lines, which is the *source* list and not the section's 70);
+  `work/out/retracted/README.md`; and `tools/apriori-prefix.py`'s docstring, which
+  is the standing statement of what the SEQ letters can and cannot separate.
   Nothing was built for the device, nothing was flashed, no partition was written,
   no stub or firmware source was changed and no patch was written into any image;
   every write is to `/tmp`, to `work/out/qemu-probe-4.141/` and to this record, and
@@ -29542,11 +29598,13 @@ in `ClockDxe` on its own (`ClockDriver.c:260`, step 4.139).
   source line; the `-1` sentinel's single seeder; the `0x3b1c` → `0x3590` →
   `*(u32 *)(arg32 + 0x24)` chain that gives the count an address; the measured
   location the driver treats as its SMMU register block; the four site-to-word
-  matches that tie `UFSDxe`'s three calls to the ten-word table; the
-  `0x1fc0` arm that maps `RETURN_BUFFER_TOO_SMALL` to success; and the reading of
-  the device's own `P2 SEQ` letters against the payload's own definitions —
-  `HALIOMMU` `s`, `UFSDxe` `L` — which is the first time this record has turned
-  that line into a statement about a *specific* driver's path.
+  matches that tie `UFSDxe`'s three calls to the ten-word table; the `0x1fc0` arm
+  that maps `RETURN_BUFFER_TOO_SMALL` to success; and, from the host, the Apriori
+  array's own arithmetic — the `EFI_SECTION_RAW` at FFS offset `0x78` is 1,124
+  bytes, so **70 `EFI_GUID`s**, the volume holds 126 files, **all 70 Apriori GUIDs
+  are among them and none is missing**, and the inner `FVMAIN.Fv` is
+  7,536,640 bytes with 1,768 free — which supplies the `entries=70` denominator
+  steps 4.130/4.132 wanted and leaves the SEQ's 46 as 46 promotions out of 70.
 - **corrects**: step 4.141's *"the interface slot `[U+0x193f8]` was NULL: no other
   driver had installed the IOMMU protocol by the time `UFSDxe` started"* — the slot
   is `UFSDxe`'s private cache, filled by the same function four instructions later,
@@ -29558,13 +29616,23 @@ in `ClockDxe` on its own (`ClockDriver.c:260`, step 4.139).
   produced is `0x9c502098 = HALIOMMU + 0x9098` and its word 1 writes
   `HALIOMMU + 0x90b0` into the slot, and "whether `HALIOMMUDxe` installs the IOMMU
   protocol before `UFSDxe` starts there, which this model cannot answer because
-  nothing installs it here" is answered twice over — the model does install and
-  locate it, and the device's `P2 SEQ` line says `HALIOMMU`'s entry returned
-  `EFI_SUCCESS`; and the earlier window's `0x60000015000000` descriptor anomaly,
+  nothing installs it here" is answered on the model side — the model does install
+  and locate it — while the phone side of that question goes back to being open,
+  because the answer this step first gave it was read off the SEQ by slot and is
+  withdrawn below; and the earlier window's `0x60000015000000` descriptor anomaly,
   which was a stage-1 walk of a stage-2 address and is now a derived, not an open,
   number. Nothing in step 4.141's chain of stops changes: probes 12–15 reproduce
   every stop it used, and `UFSDxe`'s three arms keep their `EFI_NOT_STARTED`,
-  `EFI_UNSUPPORTED` and `EFI_DEVICE_ERROR` values.
+  `EFI_UNSUPPORTED` and `EFI_DEVICE_ERROR` values. And this step's own first draft,
+  which is the largest correction here: the sentence *"slot 14 = Apriori 15 =
+  `HALIOMMU` = `s`"* / *"slot 27 = Apriori 28 = `UFSDxe` = `L`"*, the paragraph
+  that drew from it *"the phone starts the IOMMU driver and never starts
+  `UFSDxe`"*, the `adds` claim that this was *"the first time this record has
+  turned that line into a statement about a specific driver's path"*, and the
+  `not an action` sentence that pointed the next question at *"why `CoreLoadImage`
+  fails for `UFSDxe`"* on the phone — all withdrawn, because indexing the SEQ by
+  Apriori slot is the one move `tools/apriori-prefix.py` names as assuming the
+  answer and `work/out/retracted/README.md` has retired twice.
 - **does not close**: what fills the bank table on a machine that has one — the
   driver reads a count and calls `0x382c` per bank, and no probe has yet run on a
   machine where the count is non-zero, so the per-bank path (`0x228c`–`0x23b8`,
@@ -29575,23 +29643,23 @@ in `ClockDxe` on its own (`ClockDriver.c:260`, step 4.139).
   naming the installer; what `0x4be0`, `0x4ce0`, `0x4ea8`, `0x4c00`, `0x4c64`,
   `0x64c8`, `0x8ccc`, `0x17b8`, `0x2604` and `0x2750` are; what `U+0x19400` holds;
   `CmdDbDxe`'s own `P2Record[0]` of `0x8000000000000003`, still unexamined; the
-  second image to return `-7` at 10.6 s in these runs; and the R1/R2 identity
-  caveat that every device-side statement above inherits, which the unread
-  `P2 STATS`'s `apriori=` denominator decides. The five owed on-device readings
-  under *先读屏，再刷下一次*, the P3 gate and its display, USB-host and buttons
-  items, and P4 and P5 remain where they were — the device is still absent
+  second image to return `-7` at 10.6 s in these runs; and — now the largest open
+  item this step touches — **which 46 of the 70 Apriori entries were promoted**,
+  which is `P2 APRI`'s `bytes=`/`entries=`/`sum=`, `P2 DIAG`'s GUID list and
+  `P2 WALK`'s five `seen=`/`iter=` lines, and not the letters. The owed on-device
+  readings under *先读屏，再刷下一次*, the P3 gate and its display, USB-host and
+  buttons items, and P4 and P5 remain where they were — the device is still absent
   (`adb devices -l` and `fastboot devices` both empty, no qcom USB device).
 - **not an action**: nothing was built for the device, nothing was flashed, no
   partition was written, no stub or firmware source was changed and no patch was
   written into any image. In particular the model's failure is **not** a defect
   this step proposes to fix: `HALIOMMU` reads a register block the model does not
-  emulate, and the phone, which does have that block, never reaches the call —
-  so there is no code change to `HALIOMMU`, to `UFSDxe` or to the payload that
-  follows from this step, and none is made. What it does change is where the next
-  on-device question points: not at the IOMMU, whose driver the device reports as
-  having started successfully, but at why `CoreLoadImage` fails for `UFSDxe` — a
-  load failure, before any of the code in this step, whose class letter the owed
-  `P2 WHY` row would print. The porting goal is unchanged and unmet: the end state
+  emulate, and no code change to `HALIOMMU`, to `UFSDxe` or to the payload follows
+  from this step, and none is made. Nor is the empty bank table a defect to fix on
+  the strength of the withdrawn reading: the model supplies zero where a real
+  device would supply a register block, so it is a boundary of the model, and
+  whether the phone's `UFSDxe` ever reaches this call is one of the things the
+  promotion batch would say. The porting goal is unchanged and unmet: the end state
   is still a Windows tablet, the modem and the cameras are still undrivable, P3 is
   unfinished and P4's `userdata`-destroying install and P5's peripherals are not
   begun. `userdata`, the partition table and the firmware LUN remain untouched.
