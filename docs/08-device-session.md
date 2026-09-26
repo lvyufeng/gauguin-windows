@@ -26000,23 +26000,23 @@ respectively, with the description at `0xb4d4`, which reads back as the one-char
 `0`. So **one of those three was reached**, and the guard is what stopped it. That is the whole
 mechanism: the site's print is reached with a null format, `DebugVPrint`'s own guard at
 `0x191c` fires before the print can run, and its `DebugAssert("DebugLib.c", 78, …)` plus the
-spin at `0x19d8` is the pair the panel shows. The site's own `ASSERT rpmh_image_os.c +84: 0`
+spin at `0x19d8` is the pair the panel shows. **[step 4.134: the guard's assert is right and the spin is not — `DebugAssert` does not return to `0x19d8` at all. It prints, then reaches `bl 0x9794` at `0x1a8c`, and the live `PC` is inside that call's own loop at `base + 0x97b4`; `0x19d8` is never executed by this run.]** The site's own `ASSERT rpmh_image_os.c +84: 0`
 never executes, which is why the panel names `DebugLib.c` and line 78 — the file the site's
 assert would have named, the `rpmh_image_os.c` at `0xbdea`, and its expression text, the `"0"`
 at `0xb4d4`, are both absent from the guard's message.
 
 *Which* of the three it was is not established, and the panel cannot settle it: the guard
-prints its own file and line and does not record its caller. The three differ only in where in
+prints its own file and line and does not record its caller. **[settled in step 4.134 — and not by the panel: the guard's own `DebugAssert` leaves its three arguments live in `x19`, `x20` and `x21` (the description at `0xa6a1`, the line `78`, the file at `0xa696`), and the frame chain *below* the guard names the call site. It is `bl 0x6108` at `0x4e74` inside the DRV-map walk at `0x4d88`, so the line is **175**.]** The three differ only in where in
 the module they sit, and the reading of them is asymmetric. Line **84** is a cold function:
 `0x5fcc` looks up `RPMhMasterLog` (`0xbddc`) on the object at `0xe828+0x20` by calling
-`0xa2c8`, and takes the branch when that lookup returns 0 — a failure of the module's own
+`0xa2c8`, and takes the branch when that lookup returns 0 **[step 4.134, at the instruction level: the zero case is the *other* branch — `cbz w0` at `0x5ffc` sends a zero result to `0x6034`, whose call at `0x603c` passes the string `RpmhDriver` (`0xbdfa`), and the assert at `0x6000` is the non-zero case]** — a failure of the module's own
 logging object. Lines **175** and **187** are not cold: they are the failure tails of two shared
 helpers, `0x6108` (`(w0 & 0xff) == 0`) and `0x617c` (null pointer), reached by **66** and
 **35** `bl` sites respectively, and both are called from the wrapper at `0x6050`, which polls
 three interface slots of the object at `0xe828` — `[x10+72]`, `[x10+80]` and `[x10+88]` — and
 converts each result with `cset w0, eq` before handing it to the helper. So the likeliest
 reached site is one of the two interface-slot checks, on a fabric the mirror is standing in for
-with a stub; but that is an inference about which of the three, not a reading. The one thing the
+with a stub; but that is an inference about which of the three, not a reading. **[step 4.134, and it is withdrawn there: the reached site is neither wrapper slot. The stack holds one `bl 0x6108` return address and it is `base + 0x4e78`, from `0x4d88`'s DRV-map walk; the wrapper at `0x6050` is not on the stack at all.]** The one thing the
 row does fix is the file, and it is `rpmh_image_os.c`.
 
 Step 4.125's section *"Why the machine stops: an error branch in `rpmh_image_os.c`"* is
@@ -27091,7 +27091,7 @@ is about the mirror. The archived payload for the phone is `/tmp/phone-payload.r
 `0e5226c062935eb0465b3409eba74c39`, sha256 `0dcfbd6a…`), out of
 `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`. Both run under the same instrument as before:
 machine `virt,secure=on,virtualization=on,gic-version=2`, `-cpu max`, `-m 4096`, payload loaded at
-`0x48000000`, the EL3 stub at `0x48010000`, `--el3-zero-mem` on in every run so that an undecoded
+`0x48000000`, the EL3 stub at `0x48010000` **[step 4.134: the two are the other way round — `DEFAULT_LOAD_ADDR = 0x48000000` at `tools/qemu-panel-read.py:80` and `STUB_GAP = 0x10000` at `:84` put the **stub** on the low line with `cpu-num=0` and the payload one gap above it (`:449-451`, and the docstring at `:442-444` says so in words: *"the EL3 stub is the thing QEMU resets into and the payload is loaded one gap above it"*); read the record's way round, the 1,142,784-byte payload at `0x48000000` would have run to `0x48130000` and covered the 16,432-byte stub's line entirely, and the stub's `eret` would never be what starts the firmware]**, `--el3-zero-mem` on in every run so that an undecoded
 register reads zero, and the console read off the "Display Reserved" region at `0xa0000000` by
 `tools/qemu-panel-read.py`. Four runs were captured and archived:
 
@@ -27252,5 +27252,241 @@ asymmetry is the whole reason the owed reading is a power-on.
 | shows | that the confound step 4.126 declared open and step 4.127 closed on the mirror alone is closed on **the phone's own payload**: the same image under the SMEM seed prints `Loading driver at 0x0009C56B000 EntryPoint=0x0009C56C000 CmdDbDxe.efi` and then `Error: Image at 0009C56B000 start failed: Unsupported`, and under the same seed plus the AOP record prints the load row and **zero** `Error: Image` rows in 479 sampled screens, with the driver's `K`-row letters moving from `SU` to `Ss` beside it on the mirror's matched pair — and that `CmdDbDxe`'s PE32 is **byte-identical** in the two builds (sha256 `ea9cf6bf…`, 32,768 B, GUID `D461A719-…`, physical 31 in both), so the build is not a candidate and the phone's recorded `s` at Apriori 17 carries no information about its build; that `Error: Image at %11p start failed: %r` (`Image.c:1925`) prints `Image->Status`, the status the **entry point returned**, so the row is `CmdDbDxe`'s own `EFI_UNSUPPORTED` and the same status appears as the `U` of `K 17 SU` — one status, two prints, moving together; that the two volumes differ in exactly three files — `DxeCore` (170,032 → 172,592 B, PEs 169,984 → 172,544), `SmBiosTableDxe` (27,734 B both, differing in **9 bytes**: the build date `09/23/2026` → `09/25/2026` and the RSDS PDB GUID) and a mirror-only `AcpiTables` (6,638 B, type `0x02` FREEFORM, not one of `mDxeFileTypes`, so invisible to the walk and to the 80-driver count) — with the other 119 named files byte-identical; that the `DxeCore` difference is **not a shift and not a stamp**: `.text` +0x800 with **eight** 64-byte probes at 0x4000 intervals matching the phone's bytes at deltas 0, −180, +260 and +2740 and matching nothing at four of the eight, `.rdata` +0x200, `.data` +0x760 of virtual size against an unchanged raw size, `.pdata` +0x18 — and that its explanation is the instrumentation, the phone's core carrying **six** `P2` format strings and the mirror's carrying those six plus **fifteen** (`K %d %c%c %d/%d free=%d %g`, the six `P2 APRI` rows, four `P2 BIN`, two `P2 ERR`, `P2 FREE`, `P2 FWHY`, `P2 FWTY`, `P2 RETRY`, `P2 WALK`, `P2 WHY`), which is the same six `tools/probe-fingerprint.py --rows` found and is why runs 3 and 4 print no `K` row where runs 1 and 2 print fifteen; that the Apriori RAW section is **byte-identical in both builds** — 1120 bytes, 70 entries, `sum 0xa998b263`, `first D6A2CB7F-…`, `last CCCB0C28-…`, `entries with no file: []` — so no build here offers an array shorter than 70 and the build cannot be what made the line 46 characters, leaving the short read as the only mechanism; that a live run prints `mP2Apriori` = **69** against the 70-entry array in all eighteen tick rows — `K 1` through `K 18` — of both mirror runs, which is step 4.132's N − 1 arithmetic measured on running code and 69 − 46 = 23 back to the count the record has been trying to explain; and that `P2 STATS discovered=%d apriori=%d/%d started=%d diag=%d noload=%d` is one of the phone's six strings, so the denominator that decides R1 from R2 is printed by the payload already on the phone, while `P2 APRI`, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows are not |
 | adds | the four-run matched ladder as an archived artifact, two of whose runs are the record's own rung 3 and rung 4 rebuilt from the archived payloads and reproducing them row for row, which makes the ladder's determinism a measurement rather than an assumption; the phone's payload as a second, independent test of the AOP seed's prediction, at its own load address; the closure of step 4.126's confound on the artifact step 4.132 found, with the byte-identity of the driver as the control that makes the closure valid; the per-file, per-section census of what "the build" even means here — three files, nine bytes in one of them, one file that is not a driver — so that the build is no longer an unexamined variable in any later step; the format-string inventory of both cores as the ground truth for which rows a build can print, which replaces a text scan with the strings themselves; the observation that the deciding row needs a re-read and not a rebuild, which moves one item out of the owed-flash group; and the measurement of `mP2Apriori` = 69 on live code, which is a second and independent route to step 4.132's arithmetic |
 | corrects | step 4.132's `does not close` row, which groups `P2 STATS`'s denominator together with `P2 APRI entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=` and the four `P2 BIN` lines under *"all of which need a build that carries them on the glass"* — the denominator does not: it is in the format string of the payload already on the phone, so that group splits and the reading which decides the record's largest open question is obtained by re-reading a screen the device already draws; step 4.126's `does not close` item *"whether the seed or the build is why `CmdDbDxe` returns `EFI_UNSUPPORTED` — the two are confounded in every capture here"*, which is now decided for the image and decided by the phone's own payload rather than by the mirror's, annotated in place; and the framing that runs the same way through 4.126 and 4.127, where the difference between the two payloads stood for "the build" as a single unresolvable thing — it is three files and nine bytes, and the one that drives the dispatcher is the core carrying the probes |
-| does not close | which of R1 and R2 the phone's 46-character `P2 SEQ` was, which is the record's largest open question and is not touched here: the deciding row is `P2 STATS`'s denominator, no QEMU capture reaches any `P2 …` row because every run asserts in `DebugLib` first, and no photograph this record holds carries the line — the record states the row's shape with every field an `N` at `:945` and holds the `SEQ` string alone as a transcription (`:1458-1464`), with `:1784` recording that the line was never captured at all; the phone's `P2 APRI bytes=`/`entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=` and the four `P2 BIN` lines, all of which still need a build carrying `P2BRINGUP` rows the flashed payload does not have, under *先读屏，再刷下一次*; the cause of the `DebugLib` assert that ends every QEMU run and therefore the instrument's whole ability to reach the digest; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| does not close | which of R1 and R2 the phone's 46-character `P2 SEQ` was, which is the record's largest open question and is not touched here: the deciding row is `P2 STATS`'s denominator, no QEMU capture reaches any `P2 …` row because every run asserts in `DebugLib` first, and no photograph this record holds carries the line — the record states the row's shape with every field an `N` at `:945` and holds the `SEQ` string alone as a transcription (`:1458-1464`), with `:1784` recording that the line was never captured at all; the phone's `P2 APRI bytes=`/`entries=`/`sum=`/`first=`/`unhit=`/`miss=`, `P2 WALK t=0 seen=`, `P2 FREE largest=`, `P2 ERR`, `P2 RETRY bs9=` and the four `P2 BIN` lines, all of which still need a build carrying `P2BRINGUP` rows the flashed payload does not have, under *先读屏，再刷下一次*; the cause of the `DebugLib` assert that ends every QEMU run and therefore the instrument's whole ability to reach the digest **[closed by step 4.134: the assert is `rpmh_image_os.c` line 175, reached from `bl 0x6108` at `0x4e74` in `0x4d88`'s DRV-map walk on the check `cfg1 < entry->[+0x18]` = `cfg1 < 8` — `cfg1` being the word `RscHalReadConfig` returned as 0 in both the mirror's and the phone's live runs, and the `8` a build-time constant of the image's own `.data`. The row that *ends* every capture, `ASSERT DebugLib.c +78: Format != ((void *) 0)`, is an inner assert — `DebugVPrint`'s own NULL-format guard — and the reason no capture reaches any `P2 …` row is therefore now a specific inequality in the RPMh driver rather than an unidentified assert]**; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified and no firmware source was changed; every reading is off the sources, off files already under `work/`, or off the QEMU instrument on this host, and no device is attached to this machine. The four captures are new files under `work/out/` (94, 93, 393 and 499 rows), and `work/` is gitignored, so the tracked tree gains one file: this document, plus the four annotations that the `corrects` row names — two in step 4.126's section, one in step 4.127's and one in step 4.132's, at `:25453`, `:25486`, `:25831` and `:27069`. The porting goal is not advanced by any of it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun |
+
+## Step 4.134 — the assert that ends every QEMU run is `rpmh_image_os.c` line 175, reached from the DRV walk's third check: the version word `RscHalReadConfig` hands it against the driver's own 8, read from one context element past the one whose validity byte the same call had just accepted
+
+Step 4.128 left the `ASSERT DebugLib.c +78: Format != ((void *) 0)` row unclassified: seven of the captures end there, the
+firmware is what stops, and the record could say neither which of three candidates produced it nor what the NULL `DEBUG`
+was. This step answers both from the image's own instructions and from the live state of two runs — the mirror and the
+phone — and the answer is that the row is an *inner* assert, that the outer one is a specific line of vendor source, and
+that the condition it tests is decidable, static and false on this platform.
+
+### The panel's row is the messenger, and the message is now named
+
+`DebugAssert` is not the fault. The row is `DebugAssert` called from inside `DebugVPrint` (`0x18dc`–`0x19dc`), whose
+guard at `DebugLib.c` line 78 is the NULL-format check; so the run dies in `DebugLib` because *something asked `DebugVPrint`
+to print with `Format == NULL`*. In this image exactly three places do that, and each of them then asserts in
+`rpmh_image_os.c` at a different line:
+
+| helper | the NULL-format call | the `DebugAssert` it feeds | file | line |
+|---|---|---|---|---|
+| `0x5fcc`'s failure path (inside its own body) | `0x6014: bl 0x18dc` | `0x602c` | `add x0, x0, #0xdea` → `0xbdea` | `mov w1, #0x54` = **84** |
+| `0x6108` | `0x6130: bl 0x18dc` | `0x6148` | `add x0, x0, #0xdea` → `0xbdea` | `mov w1, #0xaf` = **175** |
+| `0x617c` | `0x61a0: bl 0x18dc` | `0x61b8` | `add x0, x0, #0xdea` → `0xbdea` | `mov w1, #0xbb` = **187** |
+
+The string at RVA `0xbdea` is `rpmh_image_os.c`, and the description passed with every one of them is the one-byte
+string at RVA `0xb4d4`, `"0"` (`add x2, x2, #0x4d4` with `adrp x2, 0xb000`). The fourth helper, `0x61c4`, is **not** a
+fourth NULL-format site: it passes the real format `"RPMH_ERR_FATAL"` at `0xbe05` (`add x1, x1, #0xe05` before the call)
+and names line 197 (`mov w1, #0xc5`). So step 4.128's count is right — exactly three pass a null format — but its framing
+is not: these three are the *assert epilogues* of three helpers, not three call sites of anything.
+
+### Which of the three it was is answered by registers, not by the panel
+
+`DebugAssert`'s prologue is `mov x19, x2` / `mov x20, x1` / `mov x21, x0` (`0x19f8`, `0x19fc`, `0x1a04`), i.e. EDK2's
+`DebugAssert (FileName, LineNumber, Description)`. Neither `DebugAssert`'s tail nor `CpuDeadLoop` writes those three
+registers, so at the moment of the spin they still hold the row the panel would have shown. In the phone's run:
+
+```
+X19 = 0x9c46c6a1 = base + 0xa6a1   "Format != ((void *) 0)"   (Description)
+X20 = 0x4e         = 78                                        (LineNumber)
+X21 = 0x9c46c696 = base + 0xa696   "DebugLib.c"               (FileName)
+PC  = 0x9c46b7b4 = base + 0x97b4   X30 = base + 0x97b0   SP = 0x9ffce570   X29 = 0x9ffce580
+```
+
+with `base = 0x9c462000` — the load address the panel itself prints (`Loading driver at 0x0009C462000`). So the panel's
+row can be read out of the registers and does not need to be photographed to be known; and the same three registers in
+the mirror's run hold the same three RVAs against its own base.
+
+### The stack names the call site, and it is not a wrapper slot
+
+The live frame chain is a chain of saved `x29`/`x30` pairs, and every return address in it is inside the image:
+
+| slot (phone, stack at `0x9ffb0000`) | holds | means |
+|---|---|---|
+| `0x9ffceae8` | `base + 0x6134` | `DebugVPrint` (`0x18dc`) was called from `0x6130` — from the helper `0x6108` |
+| `0x9ffceaf8` | `base + 0x4e78` | the helper was called from **`0x4e74`** — this is the failing check |
+| `0x9ffceb58` | `base + 0x3808` | `0x4d88`'s walk was called from `0x3804`, after `ldrb w10, [x22, #0x20]` / `cbnz` at `0x37fc` |
+| `0x9ffcebb8` | `base + 0x14f4` | `bl 0x3734` at `0x14f0`, the client init |
+| `0x9ffcebd8` | `base + 0x1214` | `bl 0x1490` at `0x1210` |
+
+and the chain closes on `0x9ffce588` holding `base + 0x1a90`, the return address of the `bl 0x9794` at `0x1a8c` inside
+`DebugAssert` itself. Nowhere in the 262,144 bytes of either stack is `base + 0x4dc8` or `base + 0x4df4` — the two
+`bl 0x617c` sites inside `0x4d88` — nor `base + 0x6030`, the address the `DebugAssert` inside `0x5fcc` would have
+returned to (from its call at `0x602c`). So the reached epilogue is
+`0x6108`, whose assert names **line 175**, and step 4.128's *"the likeliest reached site is one of the two interface-slot
+checks"* — an inference about the wrapper at `0x6050` — is **withdrawn** rather than merely unproven: that wrapper's
+prologue is `str x21, [sp, #-0x30]!` / `stp x20, x19, [sp, #0x10]` / `stp x29, x30, [sp, #0x20]` /
+`add x29, sp, #0x20`, and nothing it saved is on the stack at all.
+
+A line number cannot belong to a statement that was compiled 66 times, and `bl 0x6108` has **66** call sites
+(`bl 0x617c` has 35, `bl 0x5fcc` has 1). So the two conditional helpers are out-of-line assert epilogues: the condition
+is the *argument* (`0x6108`: `and w8, w0, #0xff` / `cbz w8, 0x6114`, a boolean; `0x617c`: `cbz x0, 0x6184`, a pointer),
+while file, line and description are constants of the epilogue. The consequence has to be stated plainly: **the panel
+row plus the registers give the file and line of the epilogue — `rpmh_image_os.c` line 175 — and the source statement
+whose condition failed is identified only by the return address the stack held, which is `0x4e74`.**
+
+### The same stack proves the master-log lookup succeeded, which narrows the fault further
+
+The frame that holds `base + 0x3808` is the function entered at `0x3734`, and the same invocation calls `0x5fcc` at
+`0x3780` — before the walk — to locate the master-log protocol: it initialises a state blob at `base+0xe600`
+(`str w8, [x22]` with `w8 = 1`, `strb w9, [x22, #0x20]`), calls `0x5fcc`, and then at `0x3804` calls the walk. `0x5fcc`'s
+own body is `bl 0xa2c8` with `x0 = base+0xe848`, `x1` = the string `"RPMhMasterLog"` at `0xbddc`, `w2 = 0x2000`,
+`w3 = 0x100301`, `w4 = 1` — and
+then `cbz w0, 0x6034`: the **zero** result is the success branch, which resolves the name `RpmhDriver` (`0xbdfa`) at
+`0xa11c` and caches the interface pointer at `base+0xe828` (`str x0, [x9, #0x828]`); the assert of line 84 is the
+non-zero one. So the fact that the walk ran at all is the record's own evidence that the master-log service answered
+successfully and `base+0xe828` is populated — the failure is not "RPMh could not be found". That also identifies the
+third of the five differing self-pointers in the image diff: `base+0xe848` is the destination buffer of that same
+lookup (`0xa2c8`'s `x0`, and `bl 0xa2c8` has exactly one call site, `0x5ff8`, inside `0x5fcc`), so it holds a pool
+pointer the firmware allocated at init rather than a module constant.
+
+### The condition is decidable, and `0x6108` fails on a zero
+
+`0x4d88` walks the DRV table — `[desc] = numDrv`, `[desc + 0x20]` = the entries, stride `0x30` (`add x23, x23, #0x30`
+at `0x4f4c`) — and per entry checks three things in order: `bl 0x6648` (the id, and the once-only initialisation of the
+context array), `bl 0x6738` = `RscHalReadConfig (id, &cfg1, &cfg2)` returning 0, and then:
+
+```
+4e64:  ldr w11, [sp, #0xc]      ; cfg1   (the slot RscHalReadConfig wrote)
+4e68:  ldr w12, [x26, #0x18]    ; entry->[+0x18]
+4e6c:  cmp w11, w12
+4e70:  cset w0, hs              ; w0 = (cfg1 >= entry->[+0x18])
+4e74:  bl 0x6108                ; dies when w0 == 0
+4e78:  ldr w13, [sp, #0x8]      ; cfg2 vs entry->[+0x1c] — never reached in this run
+```
+
+`0x6108` takes the low byte of `w0` and dies on zero, so the failing condition is exactly **`cfg1 < 8`**, where 8 is
+`entry->[+0x18]`. (`0x4da8: stp wzr, wzr, [sp, #0x8]` zeroes both slots on entry, so a call that wrote nothing would
+read as zero too — the same direction, but the call did return 0, as the next paragraph shows.)
+
+### `RscHalReadConfig` and where the two words come from
+
+`0x6738 (id, pVersion, pNum)`: a NULL output pointer prints `"\tInvalid Input PTR in RscHalReadConfig"` (`0xc0a8`) and
+returns `-5`; a failing `0x6320 (gCtx, id)` prints `"\tContext not initialized in RscHalReadConfig"` (`0xc0cf`) and
+returns that failure; otherwise
+
+```
+67c8:  orr w8, wzr, #0x18
+67cc:  umaddl x9, w22, w8, x23   ; x9 = gCtx + id * 0x18
+67d0:  ldr w10, [x9, #0x18]      ; *pVersion = gCtx[id*0x18 + 0x18]
+67d8:  ldr w9,  [x9, #0x1c]      ; *pNum     = gCtx[id*0x18 + 0x1c]
+```
+
+and `0x6320 (p, id)`'s contract is short: `id >= 0x10` → log at `0xbe14` and `-1`; `p == NULL` or `p[0] != 1` → `-6`;
+`p[id*0x18 + 0x14] != 1` → `-6`; else 0. The base is the module global at `img + 0xe850` (`adrp x23, 0xe000` /
+`add x23, x23, #0x850`), whose byte 0 is that initialised flag.
+
+### What the two runs actually hold there
+
+Both live dumps agree byte for byte on all of it:
+
+| element | address (phone) | words | `+0x14` |
+|---|---|---|---|
+| `gCtx[0]` | `0x9c470850` | `1 1 0 0 0 0` | 0 |
+| `gCtx[1]` | `0x9c470868` | `0 0 0 0 0 0` | 0 |
+| `gCtx[2]` | `0x9c470880` | `0 0 2 0x18200000 2 1` | **1** |
+
+and the two words `RscHalReadConfig` hands the walk are `[0x9c470898] = 0` and `[0x9c47089c] = 0` — the first two words
+of `gCtx[3]`, the element *after* the one whose `+0x14` byte passed `0x6320`'s check. So `cfg1 = 0 < 8`, and the walk
+dies on its first and only entry. That the run got as far as `0x4e74` at all is itself the proof of the arithmetic: with
+a `0x20` stride the validity byte for id 2 would be read at `0x9c4708a4`, which is 0 in both dumps, `0x6320` would
+return `-6`, `RscHalReadConfig` would return `-5`, and the assert that fired would be the one at `0x4e60` — not `0x4e74`.
+The offsets are the vendor's own and not a reading of the disassembly.
+
+### The 8 is a constant in the binary, and so is the table
+
+`RpmhDxe.efi`'s `.data` already carries the whole table. In the file, `[0xbdc8] = 0xbda0` and the descriptor at `0xbda0`
+is `{1, 0, 0, 0}`; the entry at `0xe1d8` is
+
+```
+02 00 00 00 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 00 00 00 10 00 00 00 01 00 00 00 00 00 00 00 d0 e1 00 00 00 00 00 00
+```
+
+i.e. `{2, 2, 0, 0, 0, 0, 8, 0x10, 1, 0, RVA 0xe1d0, 0}`, and the live entry is the same bytes with the one self-pointer
+relocated to `0x9c4701d0` (which holds `img + 0xbdd0`, the struct `{2, 5, 2, "RPMhMasterLog"}`). So the driver id, its
+`8`, its `0x10` and its `1` are all decided at build time; whatever the platform contributes, it is not the demand. The
+same `+0x18` is the loop bound in `0x4f78` — `add x24, x20, #0x18`, `ldr w9, [x24]`, `add x22, x22, #0x18` — walking
+eight `0x18`-byte elements of a per-driver array and writing each element's first byte as `entry->[+0x14] + i`
+(`add x11, x23, x10` at `0x5004`, `strb w11, [x19]`), with `entry->[+0x04]` handed on as the first argument of a call
+at `0x7414` (`0x5018`–`0x501c`). A count of TCS contexts at `+0x18` and a per-TCS command count at `+0x1c` is what
+that reads like, and it is a reading; what is measured is that the walk compares the config word against 8.
+
+### The deadloop is `CpuDeadLoop`, and `0x19d8` is not a spin
+
+`DebugAssert`'s tail is `1a74: bl 0x82e0` (newline), `1a78`–`1a84` print the one-byte string at `0xa6cb` (`" "`, via
+`bl 0x8220` at `0x1a84`), `1a88: bl 0x82e0`, **`1a8c: bl 0x9794`**, `1a90: bl 0x1ac0`. `0x9794` is `CpuDeadLoop`:
+
+```
+9794: sub sp, sp, #0x20 ; stp x29,x30,[sp,#0x10] ; add x29, sp, #0x10
+      adrp x8, 0xa000 ; ldr w0, [x8, #0x648]      ; = 0x0c264000, a UART data register
+      bl 0xa59c                                   ; IoLibArm's MMIO write (its assert names IoLibArm.c:543)
+      str xzr, [sp, #0x8] ; ldr x8, [sp, #0x8] ; cbz x8, 0x97b4
+```
+
+The live `PC = base + 0x97b4` and `X30 = base + 0x97b0`, and the top of the stack holds `base + 0x1a90` — the return
+address of the call at `0x1a8c`. So the guest is writing zero to `0x0c264000` forever, and the terminal going quiet is
+the UART's FIFO not draining rather than the guest pausing to print. Step 4.128's sentence that *"the spin at `0x19d8`
+… is the pair the panel shows"* is wrong: `0x19d8` is the address `DebugAssert` was *called* with (from `0x19d4` inside
+`DebugVPrint`), it is never executed by any observed run, and `DebugAssert` has no path that returns — `bl 0x9794`
+appears exactly twice in the image, at `0x1a8c` and in the `ASSERT (FALSE)` template at `0x1acc`.
+
+### The phone's own payload dies at the same instruction, with the same values
+
+A probe run this step with `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`'s payload replacement — the phone's own
+`/tmp/phone-payload.raw`, decompressed from `work/out/boot-before-p2walk.img` — reaches the identical site:
+
+```
+PC = 0x9c46b7b4   X19 = 0x9c46c6a1   X20 = 0x4e   X21 = 0x9c46c696
+X24 = 0x3ffeffff  X25 = X26 = 0x9c4701d8   X29 = 0x9ffce580   SP = 0x9ffce570
+PSTATE = 60000205 -ZC- NS EL1h
+```
+
+It is the same chain at the same absolute stack addresses (the stack layout is fixed by the firmware, so this is not a
+coincidence), the same single DRV entry, and the same `cfg1 = cfg2 = 0`. And the two live images differ almost nowhere
+else: **226 differing bytes in 166 eight-byte words** between the mirror's dump (base `0x9c45c000`) and the phone's
+(base `0x9c462000`), of which **161 differ by exactly `0x6000`** — the two load addresses' difference, i.e. relocated
+self-pointers — and the five exceptions are runtime state: `0xe268` (Δ `0x5000`) and `0xe280` (Δ `0x4ff0`) pointing
+inside a module-private allocation, and `0xe6f8`, `0xe700`, `0xe848` (Δ `0x6880`, `0x5a80`, `0x5880`) — three heap
+pointers, of which the first two are the two arrays `0x4d88` allocates and stores itself, at `0x4dc0` (`base+0xe6f8`,
+the `8 × numDrv` array) and at `0x4dec` (`base+0xe700`, the `4 × numDrv` one), and the third is `base+0xe848`, the
+destination buffer of the master-log lookup described above. So between the mirror and the phone the
+code is the same bytes, the table is the same bytes, the condition is the same bytes, and only relocation and allocator
+state move. The site is not an artifact of the mirror.
+
+### The instrument's own entry configuration, and what these probes may not be used for
+
+The three ad-hoc probes this step used (`/tmp/site-probe*.py`, archived) load `el3.bin` at `0x48000000` and the payload
+at `0x48010000` — the stub's slot and then the payload's. `tools/qemu-panel-read.py` does the other thing round:
+`DEFAULT_LOAD_ADDR = 0x48000000` at `:80` with `STUB_GAP = 0x10000` at `:84` puts the **stub** on the low line with
+`cpu-num=0` (`:450`) and the payload one gap above (`:451`), and its docstring says so in words — *"the EL3 stub is the
+thing QEMU resets into and the payload is loaded one gap above it, so that the stub's `eret` is what starts the
+firmware"*. Read the record's way round, a 1,142,784-byte payload at `0x48000000` would run to `0x48130000` and cover
+the 16,432-byte stub's line entirely. The guest reaches the same assert either way, so the *guest state* above is real
+and the classification stands; but the entry configuration is not the instrument's, and step 4.133's 46-character
+`P2 SEQ` question is not moved by any of these probes.
+
+### What this does not close
+
+The cause is now a line of vendor code and a value, but the *fix* is not: what `+0x18` and `+0x1c` of a context element
+are supposed to hold, and why the read that `0x6320` validated (`gCtx[id]`, `+0x14` = 1) hands `RscHalReadConfig` words
+that lie past that element, remain open — narrowed to the registration path (`0x6320`, `0x67f8`, `0x66cc`–`0x66f8`, and
+the per-driver `0x18`-stride array `0x4f78` walks with bound `entry->[+0x18]`), and to whether the vendor's context
+struct is `0x18` bytes — in which case the read is out of the element by construction — or larger, in which case its
+index stride is. The binary alone does not decide between those two, and no source for `rpmh_image_os.c` is on this
+disk. What it does decide is that on this cell the assert is deterministic: `cfg1` is 0 in both runs and 0 is less than
+8, so `RpmhDxe` cannot finish its DRV walk here, and every QEMU capture that ends at `DebugLib.c +78` ends at this same
+instruction. That also means RPMh initialisation is not merely *blocked* under the instrument: on the evidence here it
+is blocked by arithmetic in the driver itself, which is a much better-shaped problem than an unknown assert, and one
+that a seeded word or a one-instruction patch can be used to step past in order to find what fails next. Neither was
+done here.
+
+| | |
+|---|---|
+| instrument | `device/dxe/RpmhDxe.efi` (65,536 B, sha256 `616686e2…`) read statically with `llvm-objdump -d` (`/tmp/rpmh.asm`, 551,907 B) and with a plain byte reader for the RVAs quoted, all of them cross-checked against the live dumps; two QEMU runs under `tools/qemu-panel-read.py`'s machine string and memory size — the record's mirror rung and a new probe of the phone's own payload (`/tmp/phone-payload.raw`, decompressed from `work/out/boot-before-p2walk.img`) — with `info registers` and `pmemsave` of the image region and the stack region, dumped to `/tmp/p3-img.bin`, `/tmp/p3-stack.bin`, `/tmp/p4-img.bin` (131,072 B, so the `.data` heap pointers at `0xe700`–`0xe8xx` are in range), `/tmp/p4-stack.bin`, all four copied to `work/out/qemu-probe-4.134/` with sha256s `acd75471…`, `87a18b76…`, `e1bc80ba…`, `b1c6e460…`, together with the two probe scripts and their register transcripts; a word-by-word diff of the two image dumps; and `tools/qemu-panel-read.py:80`, `:84`, `:450-451` for the loader lines — nothing was built for the device, nothing was flashed, no partition was written, no stub was modified and no firmware source was changed, and no device is attached to this machine |
+| shows | that the row seven of the captures end at — `ASSERT DebugLib.c +78: Format != ((void *) 0)` — is an **inner** assert: `DebugVPrint`'s own NULL-format guard, reached because a helper called it with `Format = NULL`, and that exactly three helpers in the image do that, asserting in `rpmh_image_os.c` at lines 84 (`0x5fcc`'s failure path, entered from `0x5ffc`'s `cbz w0, 0x6034` when the lookup is non-zero, with its `DebugAssert` at `0x602c`), 175 (`0x6108`, `0x6148`) and 187 (`0x617c`, `0x61b8`), with the fourth NULL-looking candidate `0x61c4` passing the real format `"RPMH_ERR_FATAL"` and naming line 197; that the panel's row can be read from the guard's own live registers — `X19 = base+0xa6a1` = `"Format != ((void *) 0)"`, `X20 = 0x4e` = 78, `X21 = base+0xa696` = `"DebugLib.c"`, exactly the three arguments `DebugAssert` moves into `x19`/`x20`/`x21` — so the row is known without a photograph; that the live stack names the call site as **`bl 0x6108` at `0x4e74`** (return address `base + 0x4e78` at `0x9ffceaf8`, over `base+0x6134` at `0x9ffceae8` for the `DebugVPrint` call at `0x6130`, over `base+0x3808`, `base+0x14f4`, `base+0x1214` for the walk's own callers at `0x3804`, `0x14f0`, `0x1210`, closing on `base+0x1a90` for the `bl 0x9794` at `0x1a8c`), and that no `0x617c` and no `0x5fcc` return address is anywhere in either stack; that the two conditional helpers are out-of-line **epilogues** — 66 `bl 0x6108` sites, 35 `bl 0x617c`, against 1 `bl 0x5fcc` — so line 175 is the epilogue's line and the failing *statement* is identified only by that return address; that the condition is `cfg1 >= entry->[+0x18]` with `cfg1` from `RscHalReadConfig (id=2, …)`, which returned 0, and `entry->[+0x18] = 8`, so the failing condition is `cfg1 < 8`; that `RscHalReadConfig` reads `gCtx + id*0x18 + 0x18` and `+0x1c` after `0x6320` validated `gCtx[id*0x18 + 0x14] == 1`, that the id that passed is 2 (`{0, 0, 2, 0x18200000, 2, 1}`, validity byte 1) and that the two words it returns are the first two words of `gCtx[3]`, which are **0** in both dumps, in both runs, and that the run's own progress past `0x4e60` proves the element stride is 0x18; that the entry's `8` and `0x10` and the whole table are build-time constants in `.data` (`0xe1d8`, only the `+0x28` self-pointer relocated), so the platform does not supply the demand; that `DebugAssert` reaches `CpuDeadLoop` (`0x9794`) at `0x1a8c` and never returns, spinning on `str xzr, [sp,#0x8]`/`ldr x8,[sp,#0x8]`/`cbz` while writing zero to the UART data register at `0x0c264000`, so the terminal's silence is the FIFO and not a pause; and that the phone's own payload reaches the same instruction at the same site with the same entry and the same `cfg1`/`cfg2`, its dump differing from the mirror's by 226 bytes in 166 words of which 161 differ by exactly the `0x6000` load-address delta and the other five are three heap pointers (`0xe6f8` and `0xe700` — the two arrays the walk itself allocated and stored — and `0xe848`) plus two module-private pointers (`0xe268`, `0xe280`) |
+| adds | the classification step 4.128 left open, as a *line* of vendor source rather than a guess — `rpmh_image_os.c:175` — with the instruction-level reason it is that line and not 84 or 187, and with the order in the helper (`DebugVPrint(0x80000000, NULL, 0, 0, 0)` at `0x6130`, then the assert at `0x6148`) that makes the visible row an inner assert of a hidden one; a *register*-based way to identify the panel's row, which removes the panel from the loop for this question and therefore removes the device from its critical path; the frame chain end to end with each link's own call site, which converts the record's earlier inference about which wrapper slot was likeliest into a measurement and then withdraws it; the discovery that the two conditional helpers are shared epilogues with 66 and 35 callers, which is what makes the return address — not the line number — the identifier of the failing statement, and which corrects the record's habit of reading the helper's file/line as the statement's; the failing *condition* as an inequality with a number in it (`cfg1 < 8`) and the value on the other side as a build-time constant of `.data`; the live contents of the context array and the two runs' agreement on them to the byte; the first account of what the 262,144-byte stack dumps actually are good for, namely the frame chain and the call sites inside it; and the two image dumps' difference as 226 bytes that are relocation plus three heap pointers, which is what allows the phone's run to be used as evidence about the code at all; and — from the same stack — the fact that the master-log lookup at `0x3780` preceded the walk and that the walk was reached at all, which is the run's own proof that `0x5fcc`'s `bl 0xa2c8` returned zero and cached the `RpmhDriver` interface at `base+0xe828`, so the fault is not a missing protocol but the driver's own config word, plus the identification of `base+0xe848` as that lookup's destination buffer (its only writer is `0x5ff8`) |
+| corrects | step 4.128's *"Which* of the three it was is not established" — it is established, it is the one whose epilogue names line 175, and the registers and the stack establish it without the panel; step 4.128's *"the likeliest reached site is one of the two interface-slot checks"*, which is **withdrawn**: the reached site is inside `0x4d88`'s DRV walk and the wrapper at `0x6050` is not on the stack; step 4.128's sentence that *"the spin at `0x19d8` … is the pair the panel shows"*, which is wrong on the mechanism — `DebugAssert` prints, then calls `CpuDeadLoop` at `0x1a8c`, and `0x19d8` is the address it was *called* with and is never executed; step 4.128's description of the line-84 assert's branch, which is the other way round at the instruction level (`cbz w0, 0x6034` at `0x5ffc` sends a zero result to `0x6034`, which logs with the string `RpmhDriver` at `0xbdfa`; the assert at `0x6000` is the non-zero case); step 4.128's naming of `0x6014`/`0x6130`/`0x61a0` as three *call sites* of a NULL-format `DebugVPrint` — they are the assert branches of three helpers — while its count that exactly three exist stands and is confirmed here; and the records' framing of the `DebugLib.c +78` row as the firmware's failure, which it is only in the sense that a messenger can fail: the failure is the condition at `0x4e74`. Each of the three step-4.128 annotations is in place in that step's own section |
+| does not close | what `+0x18` and `+0x1c` of a context element are meant to hold, and why a call that `0x6320` validated hands back words lying past that element — the vendor's context struct being 0x18 bytes (the read out of the element by construction) and being larger (its index stride out of the element) are both consistent with everything measured, and `rpmh_image_os.c` is not on this disk; whether the same assert is what stops the *device*, which the record can only infer from the seven captures that end at the same row and not from a run it can see; which of R1 and R2 the phone's 46-character `P2 SEQ` was, still the record's largest open question and still needing a re-read of the phone's own screen; `P2 STATS`'s `apriori=` denominator, the `P2 APRI` block, `P2 WALK`, `P2 FREE`, `P2 ERR`, `P2 RETRY` and the four `P2 BIN` rows, under *先读屏，再刷下一次*; and the P3 gate, with P3's display, USB-host and buttons items unfinished and P4 and P5 not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub was modified, no firmware source was changed and no patch was written for the condition found; every reading is off the committed image, off the disassembly of it, or off QEMU runs on this host, and no device is attached to this machine. The tracked tree gains this document alone — the four probe artifacts, the two dumps and the two probe scripts are under `work/` and `/tmp/`, and `work/` is gitignored. The porting goal is not advanced by it: the end state is still a Windows tablet, the modem and the cameras are still undrivable, and P4's `userdata`-destroying install and P5's peripherals are not begun |
