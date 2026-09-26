@@ -30364,3 +30364,64 @@ cross-referenced the step that read it.
   partition table and the firmware LUN remain untouched; the device is absent;
   the porting goal is unchanged and unmet, with P3 unfinished and P4's
   `userdata`-destroying install and P5's peripherals not begun.
+
+## Step 4.146 — the staged payload's instruments were checked for *presence* and never for *readability*; measured against the panel, the readings the next window wants sit in the digest's tail and survive, and the rows at risk are the ones at its head
+
+Step 4.144 established that every instrument the record claims is in the image
+it claims. That is a claim about bytes in a payload and not about ink on a
+panel: `probe-fingerprint.py` decides each of the fourteen by finding a
+`DEBUG` format string inside `DxeCore`, and a string that is in the image can
+still be a row nobody sees, because this console has no scrollback.
+`tools/console-budget.py` reads the geometry out of `gauguin.dsc`,
+`FrameBufferSerialPortLib.c` and `Font.h` rather than assuming it — 1080x2400
+at scale 2 gives **90 columns and 100 rows**, `AdvanceNewLine` past the last
+row `ZeroMem`s the whole framebuffer and restarts at (0,0) — and then renders
+the digest's own `DEBUG` lines at their widest. That question had not been put
+to the *staged* file set: `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`,
+1,171,456 B, sha256 `f1a7106b…3f1c84`, the 14/14 payload. It is here.
+
+The order of the digest is fixed by the patch and matters more than its total:
+`P2 BIN` x4, `P2 RETRY`, `P2 APRI` x4, `P2 SEQ`, `P2 WHY`, `P2 ERR`, the
+per-record `P2 DIAG` block, `P2 STATS`, `P2 WALK`, `P2 FREE`, `KEY`, `P2 FWTY`,
+`P2 FWHY` — `mu-basecore-local.patch:1281-1404`. So `SEQ`, `WHY` and `ERR` sit
+about thirteen rows into a copy and the reader's four owed readings `P2 ERR`,
+`P2 STATS`, `P2 APRI` and `P2 WALK` are split across both ends of it.
+
+Measured against this device's profile — 27 load failures, one status among
+them, 2 of 8 walk types used — one copy is **49 rows against a 99-row panel**,
+so **two copies fit at once** and once the first wipe has passed every
+populated row is a digest row. That is what the 41 repetitions are for, and it
+means all fourteen instruments are legible in the state the panel settles into.
+Reading from the other end: the tail from `P2 ERR` onward is `err + diag + 7`
+rows = **35**, so the rows the gate waits on are never the ones at risk.
+
+The risk is at the head and it is bounded by arithmetic rather than by hope.
+The tool's worst case — the storage caps, `diag=64`, one *distinct* status per
+failure, all 9 walk types — is **119 rows**, which is more than the panel
+holds, so in that state the window shows only the last 99 rows of a copy and
+the first ~20 rows are wiped: the four `P2 BIN` rows, `P2 RETRY`, the `P2 APRI`
+block, and `P2 SEQ`/`P2 WHY` go with them. The tail still fits — `err + diag +
+7` = 27 + 64 + 7 = **98 of 99** — so `P2 ERR`, `P2 STATS`, `P2 WALK` and `KEY`
+survive even there, which is why the count on `P2 ERR`'s own line is the
+instrument that says which case the run is in: one row means the phone is in
+the 49-row regime and everything is readable, many rows mean the head is being
+wiped and the four `P2 BIN` rows will have to come from a second, narrower
+build.
+
+This changes nothing about the payload and deliberately so. The caps that
+produce the 119-row case are the storage caps and not a defect, the phone's
+own batch is 27 failures against a 70-entry array, and the record has already
+been burned once by rebuilding a staged artifact on a host-side theory — the
+`efc8e10d09f0f286…` supersession of Step 4.112, whose earlier candidate was
+audited against the wrong base and read as current for six steps. So the file
+to flash stays `f1a7106b…3f1c84` and the finding is recorded as the axis to
+read it along rather than as a reason to rebuild it.
+
+| | |
+|---|---|
+| instrument | `tools/console-budget.py` against the tree of the staged payload, and `tools/probe-fingerprint.py` against the payload itself; the digest's print order read out of `uefi/patches/mu-basecore-local.patch:1281-1404` rather than recalled |
+| shows | the staged 14/14 payload prints all fourteen instruments (probe: fourteen `present`, "the full ladder"); against the panel's 90x100 the digest is 49 rows in this device's profile, so two copies fit and every instrument is legible; the tail from `P2 ERR` onward is 35 rows and fits under every profile the tool models, so the gate's own reading is never the one wiped |
+| bounds | the phone's *actual* batch is unread, so which regime it is in is unknown until the panel is photographed; the 119-row worst case is the tool's model of the storage caps and not an observation of any run |
+| corrects | nothing in the payload and nothing about the model's failure; it corrects the implicit reading of Step 4.144, that "every instrument is in this image" is the same claim as "every instrument can be read off this panel" — it is not, and the difference is 50 rows of headroom in one regime and a wiped head in the other |
+| does not close | the owed readings themselves; `P2 ERR`'s distinct-status count on the phone; the P2 gate, the P3 gate, and the device-side half of everything |
+| not an action | nothing was built, flashed or written to any partition; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN are untouched; the porting goal is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and P5's peripherals not begun |
