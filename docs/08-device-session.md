@@ -28735,3 +28735,470 @@ Does not establish:
   says so, returns `EFI_DEVICE_ERROR`, and is unloaded — and that the explanation
   now names the one read, on the device, that would tell whether the phone
   disagrees.
+
+## Step 4.141 — `UFSDxe`'s `P2Record` status is its own `UFSSmmuConfig` return: the machine takes the `\_SB_.UFS0` attach arm, the third of three, and the record is written between `CoreStartImage`'s `blr x9` and its next instruction
+
+Step 4.140 read the three `P2Record` entries out of a saved core span, and left
+this step the question it could not answer from a memory dump: `UFSDxe`'s
+`0x8000000000000007` is *a* return of that driver, and the image has three
+candidate arms that could produce it — or the value could come from somewhere
+else in a 114 KB driver. The answer here is live. The entry is found in the same
+image-start sweep the last four steps used, every address of interest is armed
+before the first single step, and the run is read stop by stop from the entry
+call to the record store, 300 ms later.
+
+### The instrument: image 28, `U = 0x9c37f000`, and the arming comes first
+
+`work/out/qemu-probe-4.141/ufs-probe10.py` (log `ufs-probe10.log`,
+`b8f2062569fdca0adc78481275dcdd32e4fb90363dcf4cd31dab728ef59070a3`) and
+`ufs-probe11.py` (log `ufs-probe11.log`,
+`6631d6eb8e3509dd0bc30c4ac7ab4bfc36ea4c37f4caeeb868042dfe15d2d7eb`) are the two
+runs this step rests on. Both arm one `Z0` on `CoreStartImage`'s image-entry
+call —
+
+```
+9cd02650: blr x9        ; the image's entry point, x9 = base + AddressOfEntryPoint
+9cd02654: mov x1, x0    ; <- the return, and the only place the entry's status is visible
+```
+
+— and identify the image by the needle `QcomPkg/Drivers/UFSDxe` at RVA `0x1a7d8`,
+trying both biases the loader uses (`0x1000` and `0x1050`). The 28th hit is
+`UFSDxe`:
+
+```
+hit 28 @ 8.8s entry=0x9c380000 <<< UFSDxe U=0x9c37f000
+U+0x0e80 AddressOfEntryPoint = 0x1000
+U+0x0e88 ImageBase            = 0x9c37f000
+U+0x1a7d8 = b'QcomPkg/Drivers/UFSDxe/UFSDxe/DEBUG/UFSD'
+```
+
+so the image is at `U = 0x9c37f000`, its entry call is `0x9c380000 = U+0x1000`, and
+the `ImageBase` field is patched in place (the file holds `0` there). The same
+`U` and the same sequence come out of two runs (`ufs-probe10.py` at 9.1 s,
+`ufs-probe11.py` at 8.8 s) and, for `U`, out of a third (`ufs-probe9.py`), which
+is why the offsets below are quoted against one base.
+
+Then the arming, and the mechanical reason it must come first: `Z0` sites for the
+entry (`0x262c`), the boot-device gate's arm (`0x26a8`), the config-map re-test
+(`0x2b5c`), `UFSSmmuConfig`'s prologue, its three failure arms and its success
+path (`0x24d8`, `0x251c`, `0x25d0`, `0x260c`, `0x2614`), and the entry tail
+(`0x2d44`) are all set while the CPU is still stopped at `0x9cd02650`; only then
+is the first `c` issued. On this machine the whole driver runs in about 0.5 s of
+guest time, so one `s` before the arming would have carried the machine past
+everything this step reads.
+
+The entry itself has no `bl` site. `ufs-probe10.py`'s first stop has
+`x30 = 0x9c380210 = U + 0x1210`, and `U+0x120c` is `bl 0x14d0` with `U+0x14d0`
+being the four-byte tail branch `14000457 b 0x262c` — the same construction
+`PmicDxe` uses at its own `0x14d0`, and the reason a search over `bl` targets
+finds nothing that calls `0x262c`.
+
+### The live image is the shipped image, and `adrp` is not patched
+
+The 114,688-byte file and the live 0x20000-byte window (`/tmp/ufs-img.bin`,
+`d25a7368e217ef95f31effce7d42cf4fd3a6fb4b131743cbf223b3ab33e404fb`) differ in
+726 bytes, in 242 groups of three consecutive bytes spaced eight apart. Every one
+is a 64-bit absolute pointer slot:
+
+```
+off 0x10b8  file ...0880 0100 00000000   live ...0870 399c 00000000
+off 0x78d8  file ...f878 0000 00000000   live ...f868 389c 00000000
+off 0x19008 file ...cc7d 0100 00000000   live ...cc6d 399c 00000000
+```
+
+Take the third: `0x0000000000017dcc` becomes `0x000000009c396dcc`, which is
+`U + 0x17dcc`. The link-time value is a low address inside the same image and the
+runtime value is that address moved by the load base; the first group sits at
+`0x0e89`, the top three bytes of the `ImageBase` field itself. Every
+*instruction* this step quotes is byte-identical file and live — checked at
+`0x24e8`, `0x2528`, `0x252c`, `0x258c`, `0x2590`, `0x264c`, `0x2650`, `0x2670`,
+`0x26dc` and `0x2d44` — so the disassembly below is the code this machine ran.
+
+That check also settles a phrase this record has been carrying. The entry does
+
+```
+2670: adrp x10, 0x19000
+2674: str  x0, [x10, #1024]
+```
+
+and a working note of an earlier window read the `adrp` target as a "textual
+`0x19000`", i.e. an address the driver writes without the loader's help. The
+bytes are identical in file and live, and that is the point: `adrp` is
+PC-relative and needs no fixup, so objdump's link-time `0x19000` means only "the
+page 0x17 pages above the instruction's own page". At run time the instruction at
+`0x9c381670` materialises `0x9c398000 = U + 0x19000`, and the `str` writes
+`U + 0x19400`. The same arithmetic is confirmed by a register the probe does
+print: `x19` at the `0x260c` stop is `0x9c3983f8`, and `0x258c`/`0x2590` are
+exactly the `adrp x19, 0x19000` / `add x19, x19, #0x3f8` pair, `U + 0x193f8`.
+
+### The entry takes the "other boot device" arm
+
+Entry at `U+0x262c`, with this run's registers at each stop:
+
+```
+262c: sub  sp, sp, #0x190
+      ...  stp x28,x27 / x26,x25 / x24,x23 / x22,x21 / x20,x19 / x29,x30
+2648: add  x29, sp, #0x180
+264c: adrp x9, 0x18000 ; 2658: ldr x9, [x9]      ; stack cookie
+2654: add  x21, sp, #0x58 ; 2660: str x9, [x21]  ; the cookie's home
+2650/265c: adrp x0, 0x14000 ; add x0, x0, #0x227 ; "UFS_DRVR" (U+0x14227)
+2664: str  xzr, [sp, #104]        ; the status home
+2668: str  wzr, [sp, #100]        ; the configuration map's out-parameter
+266c: bl   0x64c8                 ; its return is stored below
+2670: adrp x10, 0x19000 ; 2674: str x0, [x10, #1024]   ; -> U+0x19400
+2678: bl   0x4304                 ; 1 iff the boot device is 8
+267c: and  w8, w0, #0xff
+2680: cbz  w8, 0x26a8             ; <-- taken: x0 = 0 at the stop
+2684: bl   0x24d8                 ; the not-taken path: straight into the SMMU code
+2688: mov  x26, x0 ; 268c: cbz x26, 0x26d4
+2690: ... print 0x1424d "UFSSmmuConfig failed, status 0x%x\n" ; 26a4: b 0x2d44
+26a8: mov  w0, wzr ; 26ac: mov w1, wzr ; 26b0: bl 0x8ccc
+26b4: adrp x0, 0x14000 ; 26b8: add x0, x0, #0x230  ; "UfsSmmuConfigForOtherBootDev"
+26bc: add  x1, sp, #0x64                           ; = [sp, #100], the out-parameter
+26c0: bl   0x4c00                                  ; the configuration-map getter
+26c4: cbz  x0, 0x2b54                              ; <-- taken: x0 = 0
+26c8: mov  x26, xzr ; 26cc: str wzr, [sp, #100] ; 26d0: b 0x2d44
+2b54: ldr  w8, [sp, #100]                          ; x8 = 1 on this machine
+2b58: cbz  w8, 0x2d40                              ; not taken
+2b5c: bl   0x24d8                                  ; <-- stop 3: the SMMU code runs
+2b60: mov  x26, x0
+2b64: cbnz x26, 0x2690                             ; <-- taken: the failure report
+2b68: b    0x2d44
+```
+
+The gate `0x4304` is exact in both directions:
+
+```
+4310: orr  w8, wzr, #0x7fffffff
+4318: stur w8, [x29, #-4]     ; preset the verdict to "no answer"
+431c: bl   0x440c             ; the shared-imem boot-device read
+4320: cbz  x0, 0x4334
+4324: ...  print 0x14688 "ERROR: Failed to Get Shared Imem Boot Device type \n"
+                with w0 = 0x80000000, and fall through to the comparison anyway
+4334: ldur w8, [x29, #-4]
+433c: cmp  w8, #0x8
+4340: cset w0, eq             ; 1 iff the boot device is 8 (fastboot)
+```
+
+`cbz w8` at `0x2680` sends **zero** to `0x26a8`, so `0x26a8` is the arm taken when
+the boot device is *not* 8 — or when the read fails and leaves the sentinel. The
+arm is named for exactly that: `UfsSmmuConfigForOtherBootDev`. The run's
+registers agree: `x0 = 0` at the `0x26a8` stop, and `x1 = 0x2400000` is a leftover
+of earlier code, not of `0x8ccc`, which has not yet been called. Worth stating
+because it reads backwards at a glance, and this step's own first working note
+had it backwards; nothing in the record above depends on it, since no earlier
+step read `0x4304` or `0x26a8`.
+
+### The configuration map: the key is present, the value is 1, and the getter leaves its own copy in `x1`
+
+`Platforms/Xiaomi/gauguinPkg/Library/ConfigurationMapLib/ConfigurationMapLib.c`
+carries both keys this routine uses:
+
+```
+35:  {"EnableUfsIOC", 0x0},
+36:  {"UfsSmmuConfigForOtherBootDev", 0x1},
+```
+
+so the key exists and its value is 1 — which is the `x8 = 1` read at `0x2b54`, and
+the reason `0x2b58`'s `cbz` does not skip the SMMU call. `str wzr, [sp, #100]` at
+`0x2668` proves the slot started at zero before the getter ran, so the 1 was
+written by `bl 0x4c00` and not left by anything earlier.
+
+Two incidental readings come with it. First, the map lives in the FD: the string
+the getter matched is not only the driver's own literal at `U+0x14230` but a copy
+inside the FD at file offset `0xea50`, i.e. address `0x9fc0ea50` — and that is
+exactly `x1` at the `0x2b5c` stop. Nothing between the getter's return at
+`0x26c4` and that stop writes `x1` (the path is `cbz` → `ldr w8` → `cbz`), so
+`0x9fc0ea50` is what `bl 0x4c00` left behind: the looked-up entry's own name
+pointer. The three archived FD dumps this record holds (`/tmp/fd-live.bin`,
+`/tmp/fd.bin`, `/tmp/fd-a.bin`, 3,145,728 = 0x300000 bytes each, consistent with
+the `FD_BASE 0x9fc00000` recorded at `docs/08-device-session.md:23209`) carry the
+string at the same file offset `0xea50`. Second, the returned `x0 = 0` is the
+getter's *status*, not a pointer or a found-flag: the same shape appears at
+`0x2578` for `EnableUfsIOC`, where zero takes the branch that *uses* the
+out-parameter (`ldr w1, [sp, #12]` at `0x25a8`) and non-zero the branch that
+forces zero.
+
+### `UFSSmmuConfig`: three failure arms with three statuses, and the machine takes the third
+
+The whole routine, `U+0x24d8` to its `ret` at `U+0x2628`:
+
+```
+24d8: sub  sp, sp, #0x40 ; stp x20,x19 / x29,x30 ; add x29, sp, #0x30
+24e8: adrp x20, 0x19000                  ; x20 = U + 0x19000
+24ec: str  xzr, [sp, #16]                ; the LocateProtocol out-parameter
+24f0: str  wzr, [sp, #12]                ; the EnableUfsIOC out-parameter
+24f4: ldr  x8, [x20, #1016]              ; [U+0x193f8]: the IOMMU interface slot
+24f8: cbz  x8, 0x2528                    ; <-- taken: the slot is NULL
+24fc: ldr  x10, [x8] ; 2500: add x0, sp, #0x18 ; 2504: blr x10     ; vtable[0]
+2508: cbz  w0, 0x2568                    ; <-- second pass: taken, w0 = 0
+250c: ... print 0x141a3 "UFS IOMMU domain create failed\n"
+251c: mov  x19, #0x13 ; 2520: movk x19, #0x8000, lsl #48     ; 0x8000000000000013
+2524: b    0x2618
+2528: adrp x9, 0x19000 ; 252c: adrp x0, 0x18000 ; 2530: add x0, x0, #0x218
+2534: ldr  x10, [x9, #1792]              ; gBS = [U+0x19700]
+2538: add  x2, sp, #0x10                 ; the out-parameter, passed in x2
+253c: mov  x1, xzr
+2540: ldr  x8, [x10, #320]               ; gBS->LocateProtocol
+2544: blr  x8
+2548: mov  x19, x0 ; 254c: cbz x19, 0x2588     ; <-- x0 = 0: success
+2550: ... print 0x1417d "UFS IOMMU LocateProtocol failed 0x%x\n" ; b 0x2618
+2588: ldr  x11, [sp, #16]                ; the interface the service returned
+258c: adrp x19, 0x19000 ; 2590: add x19, x19, #0x3f8   ; &[U+0x193f8]
+2594: mov  x0, x19
+2598: ldr  x9, [x11, #8] ; 259c: blr x9                 ; vtable[1]
+25a0: ldr  x8, [x19]                     ; the slot, now filled
+25a4: b    0x24fc                        ; re-test the first arm
+2568: adrp x0, 0x14000 ; 256c: add x0, x0, #0x1c3      ; "EnableUfsIOC"
+2570: add  x1, sp, #0xc ; 2574: bl 0x4c00
+2578: cbz  x0, 0x25a8                    ; success -> use the value
+257c: mov  w1, wzr ; 2580: str wzr, [sp, #12] ; 2584: b 0x25ac
+25a8: ldr  w1, [sp, #12]
+25ac: ldr  x12, [x20, #1016] ; 25b0: ldr x0, [sp, #24]
+25b4: ldr  x11, [x12, #64] ; 25b8: blr x11            ; vtable[8](handle, EnableUfsIOC)
+25bc: cbz  w0, 0x25d8                    ; <-- taken: success
+25c0: ... print 0x141d0 "UFS IOMMU domain configure failed\n"
+25d0: mov  x19, #0x8000000000000003 ; 25d4: b 0x2618
+25d8: ldr  x13, [x20, #1016] ; 25dc: adrp x1, 0x14000 ; 25e0: ldr x0, [sp, #24]
+25e4: add  x1, x1, #0x1f3                ; "\_SB_.UFS0"
+25e8: mov  w2, wzr ; 25ec: mov w3, wzr
+25f0: ldr  x12, [x13, #16] ; 25f4: blr x12            ; vtable[2](handle, "\_SB_.UFS0", 0, 0)
+25f8: cbz  w0, 0x2614                    ; <-- NOT taken: the attach returned non-zero
+25fc: ... print 0x141fe "UFS IOMMU domain attach ARID 0x0 failed\n"
+260c: mov  x19, #0x8000000000000007       ; <-- stop 7, with x19 = U+0x193f8 beforehand
+2610: b    0x2618
+2614: mov  x19, xzr
+2618: mov  x0, x19 ; 261c/2620: ldp x29,x30 / x20,x19 ; 2624: add sp,sp,#0x40 ; 2628: ret
+```
+
+Three failure arms, three distinct statuses, and a one-to-one map from site to
+value:
+
+| arm | site | message (literal) | status |
+| --- | --- | --- | --- |
+| create | `0x251c` | `UFS IOMMU domain create failed\n` (`U+0x141a3`) | `0x8000000000000013` = `EFI_NOT_STARTED` |
+| configure | `0x25d0` | `UFS IOMMU domain configure failed\n` (`U+0x141d0`) | `0x8000000000000003` = `EFI_UNSUPPORTED` |
+| attach | `0x260c` | `UFS IOMMU domain attach ARID 0x0 failed\n` (`U+0x141fe`) | `0x8000000000000007` = `EFI_DEVICE_ERROR` |
+
+(the three codes are `ENCODE_ERROR(19)`, `ENCODE_ERROR(3)` and `ENCODE_ERROR(7)`
+per `work/uefi/Mu-Silicium/Mu_Basecore/MdePkg/Include/Base.h:1050,1094,1117,1180`).
+**Only the third fired.** The run's stops say so directly: `0x251c` and `0x25d0`
+never appear, while `0x260c` appears at 9.3 s with `x19 = 0x9c3983f8`, the
+`adrp`/`add` pair's value, the breakpoint stopping before the `mov` that
+overwrites it.
+
+The first arm is the one that decides the shape of the run. `cbz x8, 0x2528` at
+`0x24f8` was taken, so the interface slot `[U+0x193f8]` was NULL: no other
+driver had installed the IOMMU protocol by the time `UFSDxe` started. The driver
+then locates it itself — the GUID at `U+0x18218` is
+`54B6D3B4-5D33-4F91-8600-6C41D5DEB19A` — and calls `vtable[1]` of the located
+interface with `x0 = &[U+0x193f8]`, after which the re-test at `0x24fc` reads a
+non-NULL slot and takes the other branch of the first arm. Of the 55 images in
+`Binaries/gauguin/QcomPkg/Drivers/`, exactly four carry that GUID, once each:
+`HALIOMMU.efi`, `DisplayDxe.efi`, `UsbConfigDxe.efi` and `UFSDxe.efi`.
+`HALIOMMUDxe` is the presumed owner, and on this machine model it has announced
+nothing before `UFSDxe` runs — which is why the slot is empty and why the
+driver's own more expensive path is the one this run reads.
+
+The earlier window's "`[sp, #16]` reseeding gap" dissolves here rather than being
+carried. The out-parameter is passed in `x2` (`add x2, sp, #0x10` at `0x2538`), so
+the store into `[sp, #16]` is made by the `LocateProtocol` callee through that
+pointer and is not expected in this function's disassembly; `x1` after a call is
+a leftover register, and `0x9c55a688` read at the `0x2548` stop is not the
+out-parameter. What the run establishes about the call is what the code reads:
+`x0 = 0`, and the pointer loaded from `[sp, #16]` at `0x2588` is then dereferenced
+at `0x2598` and its method called without faulting. The pointer itself is never
+printed, so it stays unidentified.
+
+### The store: `x19` → `x26` → `x0` → the record, in 300 ms
+
+Tail of the routine and the entry's own handling of it:
+
+```
+2618: mov  x0, x19 ; ... ; 2628: ret          ; x0 = 0x8000000000000007
+2b60: mov  x26, x0                            ; stop 8: x0 = 0x8000000000000007
+2b64: cbnz x26, 0x2690                        ; taken
+2690: adrp x1, 0x14000 ; 2694: add x1, x1, #0x24d   ; "UFSSmmuConfig failed, status 0x%x\n"
+2698: orr  w0, wzr, #0x80000000 ; 269c: mov x2, x26 ; 26a0: bl 0x4c64
+26a4: b    0x2d44
+2d44: adrp x3, 0x18000 ; 2d48: ldr x2, [x21] ; 2d4c: ldr x3, [x3]
+2d50: sub  x4, x3, x2 ; 2d54: cbnz x4, 0x2d7c        ; the stack cookie check
+2d58: mov  x0, x26 ; 2d5c: ldp x29,x30 ... ; ret      ; x0 = 0x8000000000000007
+```
+
+`ufs-probe11.py` follows the value one frame up, re-arming `Z0` on the return
+site once the entry tail is reached:
+
+```
+*** TAIL x26 = 0x8000000000000007 -> arm return 0x9cd02654
+ post 1 @9.0s pc=0x9cd02654 x0=0x8000000000000007 REC=19a761d4...0300000000000080 53 00...
+ post 2 @9.3s pc=0x9cd02654 x0=0x0                REC=19a761d4...0300000000000080 53
+                                                      0000000000 000000
+                                                      1f6bc1d3483fca5484cdb58f228de601
+                                                      0700000000000080 53
+```
+
+Post 1 is the stop at `CoreStartImage+0x1a4` — `0x9cd02654`, the `mov x1, x0` that
+is the instruction after `blr x9` — for `UFSDxe` itself, and its `x0` is the
+driver's return. The record's second entry is still zero there, because
+`CoreStartImage` writes it after that instruction; by post 2, 300 ms later, the
+slot holds the driver's GUID, the status, and the phase letter `'S'`. Read out of
+the saved span (`/tmp/ufs-rec.bin`,
+`225ca9d163a8fea61c50178e9e88e8eb2fdc9e549d4513ba817db54ad401e8d7`):
+
+```
+[0] 2c01ed175f04afa75c77f2ecd461a719   0x8000000000000003  'S'   CmdDbDxe
+[1] 01e68d228fb5cd8454ca3f48d3c16b1f   0x8000000000000007  'S'   UFSDxe
+[2] 00...                              0                   --    (not yet run)
+```
+
+That fixes the record's field offsets, which this record has not had until now:
+**stride `0x20`; the 16-byte GUID at `+0x00` in little-endian byte order (`[1]`
+reads `01e68d22…` and is `D3C16B1F-3F48-54CA-84CD-B58F228DE601`); the status as a
+`UINT64` at `+0x10`; the phase letter at `+0x18`; seven bytes of padding.** So
+`[1]`'s status slot is `0x9cd217d0`. The `Z2` that `ufs-probe11.py` arms at
+`REC+0x40` is mislabelled in its own log line — that address is `[2]`'s GUID —
+and it never fired; the value was read directly with `m` packets instead. The
+working note that put `[1]`'s status at `0x9cd217e0` is withdrawn on the same
+evidence: `0x9cd217e0` is `[2]`'s GUID.
+
+One further reading from the same run, not this step's question but bearing on
+it: the return site fires again at 10.6 s with `x0 = 0x8000000000000007`, for an
+image this probe does not identify (posts 2 through 7 are other images returning
+`EFI_SUCCESS`). The record's `-7` is not unique to `UFSDxe` on this run, and the
+second one's owner is left unread.
+
+### The three arms are `UFSDxe`'s alone, so `CmdDbDxe`'s `-3` is a coincidence
+
+A sweep of all 55 images in `Binaries/gauguin/QcomPkg/Drivers/` for the three
+failure strings, plus `\_SB_.UFS0`, `UfsSmmuConfigForOtherBootDev`, `EnableUfsIOC`
+and `UFSSmmuConfig failed, status`, finds all seven in `UFSDxe.efi` and in no
+other image; `DALSys.efi` has `\_SB_.UFS0` alone, which is a device-name table
+and not this routine. The consequence is a negative that matters for a record
+this document has been carrying: `P2Record[0]`'s `0x8000000000000003` is exactly
+this routine's configure arm, but `CmdDbDxe.efi` does not contain the string, so
+its `-3` comes from its own code and the match is a match of two `ENCODE_ERROR`
+values, nothing more. What `CmdDbDxe` failed at is still unread.
+
+### What this does and does not establish
+
+Established, live, on this machine: which arm of `UFSSmmuConfig` produces
+`UFSDxe`'s recorded status; that the status is the entry's own return, seen at
+the instruction after the core's `blr x9`, with the record written between that
+instruction and the next image's start; that the three arms carry three distinct
+statuses, so the record's value identifies the arm for this driver without any
+further disassembly; the record's field offsets; that the boot-device gate sends
+"not 8" to the arm named `ForOtherBootDev`, and that this run is on that side;
+that the configuration map holds `UfsSmmuConfigForOtherBootDev = 0x1` and that
+the value the branch reads is the one the getter wrote; and that the interface
+slot was NULL, so the driver located the protocol itself.
+
+Not established, and stated rather than smoothed over: the attach call's own
+status — `cbz w0, 0x2614` was not taken, so it returned non-zero, but by the time
+the probe stops at `0x260c` the register holds the print's leftover `0x29`, and
+the driver replaces the value with its own `EFI_DEVICE_ERROR` in any case; the
+identity of the second image to return `-7` at 10.6 s; the pointer the
+`LocateProtocol` call produced; what `0x64c8` returns and what the driver stores
+at `U+0x19400`; what `0x8ccc`, `0x4c00`'s map format and `0x4c64` are; and
+`CmdDbDxe`'s own failure. Above all, and it is the one that matters for the port:
+**whether the phone takes this path at all is not decidable from this model.**
+On the phone, `HALIOMMUDxe` runs before `UFSDxe` and would have installed the
+protocol, so the slot would be filled, the `LocateProtocol` arm would never run,
+and the attach would be attempted against a real IOMMU. The machine model
+manufactures the empty slot; the arm this step proves is therefore proven for the
+model, and the phone's outcome is a device question. The `P2Record` value the
+previous step read out of a core dump is a model's value.
+
+### Rows
+
+- **instrument**: `work/out/qemu-probe-4.141/ufs-probe10.py` with `ufs-probe10.log`
+  (`b8f2062569fdca0adc78481275dcdd32e4fb90363dcf4cd31dab728ef59070a3`) and
+  `ufs-probe11.py` with `ufs-probe11.log`
+  (`6631d6eb8e3509dd0bc30c4ac7ab4bfc36ea4c37f4caeeb868042dfe15d2d7eb`) — the
+  entry-call sweep, the pre-armed `Z0` sites and the return-site and record
+  capture — with the earlier runs of the same step (`ufs-probe1.py` through
+  `ufs-probe9.py` and their logs) used only for the image identity and the
+  withdrawn readings;
+  `aarch64-linux-gnu-objdump -D -b binary -m aarch64 --adjust-vma=0x0` on
+  `Binaries/gauguin/QcomPkg/Drivers/UFSDxe/UFSDxe.efi`
+  (`c8bc07eb9d18da5472951936631eb758ea9b1d49248842112aa47218b9dca7d6`) into
+  `/tmp/ufsdis/ufs.asm` (948,836 B), read at `0x14d0`, `0x11f0`-`0x1218`,
+  `0x24d8`-`0x2628`, `0x262c`-`0x26d4`, `0x2b40`-`0x2b70`, `0x2d40`-`0x2d60`,
+  `0x4304`-`0x4348`; this run's saved image window `/tmp/ufs-img.bin`
+  (`d25a7368e217ef95f31effce7d42cf4fd3a6fb4b131743cbf223b3ab33e404fb`) diffed
+  against the shipped file, and this run's saved record span `/tmp/ufs-rec.bin`
+  (`225ca9d163a8fea61c50178e9e88e8eb2fdc9e549d4513ba817db54ad401e8d7`); the
+  string and GUID sweeps over all 55 images in
+  `Binaries/gauguin/QcomPkg/Drivers/`; `ConfigurationMapLib.c:35-36` and
+  `MdePkg/Include/Base.h:1050,1094,1117,1180` from the tree; and the three
+  archived FD dumps `/tmp/fd-live.bin`, `/tmp/fd.bin`, `/tmp/fd-a.bin` at file
+  offset `0xea50`. Nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was modified, and no device
+  is attached to this machine.
+- **shows**: that `UFSDxe`'s `P2Record` status `0x8000000000000007` is the
+  `EFI_DEVICE_ERROR` its `UFSSmmuConfig` returns when its third vtable call —
+  `UFS IOMMU domain attach ARID 0x0 failed`, made with `x1 = "\_SB_.UFS0"` —
+  fails, and not one of the two earlier arms, whose statuses are
+  `0x8000000000000013` and `0x8000000000000003`; that the value travels
+  `0x260c` (`x19`) → `0x2618` (`x0`) → `0x2b60` (`x26`) → `0x2d58` (`x0`) → the
+  core's `0x9cd02654`, where the probe reads it in `x0` at 9.0 s, and that the
+  record gains the GUID, the status and `'S'` between that stop and the next
+  image's start 300 ms later; that the interface slot `[U+0x193f8]` is NULL when
+  the routine starts, so this machine takes the `LocateProtocol` path rather than
+  the cheap one; and that the record's layout is `0x20` bytes per entry with the
+  GUID at `+0x00`, the status at `+0x10` and the phase letter at `+0x18`.
+- **adds**: the entry's real call path — `U+0x120c: bl 0x14d0` with `U+0x14d0` a
+  four-byte tail branch to `0x262c`, which is why the driver's own entry appears
+  in no `bl` list, the same construction `PmicDxe` uses; the site → value →
+  string table for all three arms, and the fact that each arm's status is
+  distinct, which makes a record value an identifier; the boot-device gate's
+  polarity read from `0x4304`'s `cset`, which puts this run on the
+  `ForOtherBootDev` side; the configuration map's key and value as the reason the
+  SMMU code runs at all, with the getter's out-parameter written through a
+  pointer the branch then re-reads; and the observation that the getter leaves
+  its own copy of the key's name in `x1`, at an address inside the FD — a second
+  reading of the same string, distinct from the driver's literal at `U+0x14230`.
+- **corrects**: the earlier window's "textual `0x19000`" reading of the
+  `adrp`/`str` pair, which is an artefact of reading `objdump --adjust-vma=0x0`
+  output as if `adrp` were absolute — the instruction is PC-relative and
+  unpatched, and materialises `U + 0x19000`; the same window's `[sp, #16]`
+  "reseeding gap", which is not a gap: the out-parameter is passed in `x2` and
+  filled by the callee, and `x1` at the stop is a leftover register and not the
+  interface; the working note reading the boot-device branch as "8 → `0x26a8`",
+  which the `cbz` inverts; the placement of `[1]`'s status at `0x9cd217e0`, which
+  is `[2]`'s GUID, and the `Z2` label in this step's own probe, which watches
+  `REC+0x40` and calls it `[1]`'s status; and the assumption that
+  `0x8000000000000003` in `CmdDbDxe`'s record could be this routine's configure
+  arm, which the string sweep refutes. Nothing in step 4.140 changes: the three
+  record entries it read from the core span are exactly the three this step's
+  runs produce, and the `-7` it attributed to `PmicDxeLa` is a third driver's own
+  return through its own `csel`.
+- **does not close**: the attach call's own error code, which the print clobbers
+  and the driver overwrites; the identity of the second image to return `-7` at
+  10.6 s in this run; the pointer `LocateProtocol` produced and the interface
+  `vtable[1]` writes into the slot; what `0x64c8`, `0x8ccc`, `0x4c00` and
+  `0x4c64` are and what `U+0x19400` holds; `CmdDbDxe`'s own `-3`; and — the one
+  that decides whether any of this happens on the phone — whether
+  `HALIOMMUDxe` installs the IOMMU protocol before `UFSDxe` starts there, which
+  this model cannot answer because nothing installs it here. The five owed
+  on-device readings under *先读屏，再刷下一次*, the P3 gate and its display,
+  USB-host and buttons items, and P4 and P5 remain where they were.
+- **not an action**: nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was changed and no patch was
+  written into any image — the analysis of the boot-device gate, of the
+  configuration map, of the three arms and of the record's layout is analysis
+  only, and no change to `UFSDxe`, to `ConfigurationMapLib` or to the payload is
+  proposed or made. The four loader seeds this step's runs carry are unchanged
+  from step 4.140, and every write in this step is to `/tmp`, to
+  `work/out/qemu-probe-4.141/` and to this record (`work/` is untracked); the
+  tracked tree gains this document alone. `userdata`, the partition table and the
+  firmware LUN remain untouched. The porting goal is not advanced by it: the end
+  state is still a Windows tablet, the modem and the cameras are still
+  undrivable, and P4's `userdata`-destroying install and P5's peripherals are not
+  begun. What it does change is that the second of the three drivers this payload
+  loses on the way to a shell is now explained end to end — it is started, it
+  finds no IOMMU interface where it looks, it installs one, it fails to attach
+  the UFS device to it, it returns `EFI_DEVICE_ERROR` — and that the explanation
+  now names the two on-device facts that would tell whether the phone agrees:
+  whether the interface slot is filled before `UFSDxe` runs, and whether the
+  attach succeeds when it is.
