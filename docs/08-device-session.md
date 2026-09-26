@@ -29812,3 +29812,271 @@ whole 27-`L` run say whether all 27 failed for one reason or for several.
   is still a Windows tablet, the modem and the cameras are still undrivable, P3 is
   unfinished and P4's `userdata`-destroying install and P5's peripherals are not
   begun. `userdata`, the partition table and the firmware LUN remain untouched.
+
+## Step 4.143 — the code path that installs the IOMMU protocol is `HALIOMMU`'s own
+`0x1504`, and its call is boot services' `InstallMultipleProtocolInterfaces (&Handle,
+&GUID@U+0x9048, &Interface@U+0x9098, NULL)`: the published interface is
+`{1, 0x14cc, 0x1500}` with the ten-method table at `+0x18`, `0x14cc` is its word 1
+and the table's address has exactly one writer in the whole image, `0x17b8` is
+`ArmDataSynchronizationBarrier` and `0x3f5c`/`0x3f6c` are the
+`AllocatePool (EfiBootServicesData, …)` / `FreePool` pair behind every allocation in
+create, configure and attach — so the protocol is published on a fresh handle by the
+driver's own start, which is what the model needed and what the phone's `s` at slot 13
+now has a mechanism for
+
+Step 4.142 ended with the interface found and its publisher unnamed. The located
+interface is `U+0x9098`, its word 1 is the routine at `0x14cc`, and word 1's single
+store at `0x14ec` writes `base + 0x90b0` into the client's slot — and nothing said
+which code had installed a protocol under the GUID at all. That code is `0x1504`, and
+it is reached from the driver's own start, not from a client.
+
+`0x1504` is short and its shape is the variadic install. It spills its two arguments
+at `0x1510`/`0x1514` and never reads them again; it zeroes a stack slot at `0x1518`
+and stores that zero at `[sp,#32]`; it loads the function pointer at
+`[[U+0x9170] + 0x148]` and calls it with `x0 = &[x29,#-32]` (the zeroed slot),
+`x1 = U+0x9048`, `x2 = U+0x9098` and `x3 = [sp,#32]` (the zero). Four arguments, the
+first a pointer to a NULL handle, the last a NULL terminator, the middle two a GUID
+and an interface: `InstallMultipleProtocolInterfaces (&Handle, &Guid, &Interface,
+NULL)`. A pair-decoded sweep of `.text` for references into the image's own `.data`
+finds `U+0x9048` at `0x152c` and `U+0x9098` at `0x1534` and **nowhere else in the
+image**, so this one site is the whole install and the protocol is never
+re-installed, uninstalled or looked up by its own driver.
+
+The caller is `0x1488`, a two-argument wrapper that passes its arguments through to
+`0x1504`; its only caller is `0x1210: bl 0x1488`, inside the routine entered at
+`0x1150`. That routine opens `gEfiLoadedImageProtocolGuid` — `HandleProtocol` with
+`x0 = x20`, `x1 = U+0x9088` and `x2 = &[sp,#8]` — writes the code pointer `U+0x1114`
+at `+0x58` of the interface it got back, and then calls the installer. The install is
+on both paths — the byte at `U+0x6f10` is tested at `0x119c`/`0x11a0` and a zero
+skips only the `HandleProtocol` and the hook store — and the routine's own entry gate
+compares a version word at `[x19+8]` against the constant dword at `U+0x6f0c`,
+returning `0x8000000000000019` (`EFI_INCOMPATIBLE_VERSION`) when the caller's is
+older, which is what its second argument is for. Two small
+facts fall out of the same neighbourhood. The module's EntryPoint at `U+0x1110` is the
+four-byte tail branch `14000e7b b 0x4afc`, the construction this record has already
+named twice (`PmicDxe`'s `0x120c: bl 0x14d0`, `UFSDxe`'s `b 0x262c`); and `U+0x1114`,
+the value written into that `+0x58` — `Unload`'s offset in a header without the
+`Reserved` field EDK2's definition carries, `ImageDataType`'s in one with it, and the
+value is code either way — is a stub: it calls the leaf `0x14b4`, whose body is
+`mov x8, xzr` and a return, so it yields `EFI_SUCCESS`. `0x1474`, called from inside
+it with `x0 = x20` and `x1 = [U+0x9168]`, stores both and returns nothing.
+
+The services pointer at `U+0x9170` is what makes the four-argument call nameable, and
+it is identified by arithmetic rather than by a symbol. Five methods the image reaches
+through it sit at a *uniform* `+0x10` above their `EFI_BOOT_SERVICES` positions:
+`+0x40` `AllocatePool`, `+0x48` `FreePool`, `+0x98` `HandleProtocol`, `+0x140`
+`LocateProtocol` and `+0x148` `InstallMultipleProtocolInterfaces`. Three of the five
+are confirmed by their arguments as well as their offsets. `0x3f5c (size)` sets
+`w0 = 4` and calls the `+0x40` slot with `x2 = &[sp,#8]`, then tests the *sign bit* of
+the returned status (`tbnz x0, #63`) and hands back the pointer or zero — `4` is
+`EfiBootServicesData`, so `0x3f5c` is `AllocatePool (EfiBootServicesData, size)` and
+the anonymous "allocator" of the earlier windows now has a name and a pool type; its
+twin `0x3f6c` calls the `+0x48` slot and tests the same bit, so it is `FreePool`.
+`0x11bc` calls the `+0x98` slot with a handle, `&gEfiLoadedImageProtocolGuid` and an
+out-parameter, which is `HandleProtocol`. `0x54a8` calls the `+0x140` slot with
+`x0 = &GUID@U+0x9058` and `x2 = U+0x94c0` after NULL-checking both the slot and the
+pointer it would call, which is `LocateProtocol` — and `U+0x9058` is
+`gEfiStatusCodeRuntimeProtocolGuid`, so `HALIOMMU` *consumes* the status-code channel
+(the interface is read back at `0x5484` and `0x5540`) in addition to publishing its
+own, which is the same channel the `P2Record` rows travel.
+
+The GUIDs at `U+0x9008` are a nine-entry array of sixteen-byte literals, and the
+installer indexes it by address rather than by count. Four of the nine are named in
+the build's own `Guid.xref`: `U+0x9038` is `gEfiHobListGuid`
+(`7739F24C-93D7-11D4-9A3A-0090273FC14D`), `U+0x9058` is
+`gEfiStatusCodeRuntimeProtocolGuid` (`D2B2B828-0826-48A7-B3DF-983C006024F0`), and
+`U+0x9088` is `gEfiLoadedImageProtocolGuid`
+(`5B1B31A1-9562-11D2-8E3F-00A0C969723B`); the fourth is `U+0x9048`, the protocol this
+driver publishes — `54B6D3B4-5D33-4F91-8600-6C41D5DEB19A`, byte-identical to the
+literal step 4.142 found in `UFSDxe.efi` at `U+0x18218` and to the one carried by
+`DisplayDxe.efi` and `UsbConfigDxe.efi`. The remaining five
+(`B898D8DC-080A-F740-99E3-31627B806A5A`, `9A00771F-36D4-4DD5-8916-C48ED9B16B86`,
+`BEDAEABC-5E70-4D66-9733-213D072B9D04`, `B5062BE7-170B-4A32-BE21-689262FF4399`,
+`AE37B942-457F-4C91-A196-D9669FD347A3`) are in no `.xref` this tree carries and stay
+unread. The array is preceded at `U+0x9000` by `0xC0C0C0C0` and a zero dword.
+
+`U+0x9098` is the published interface and the object `LocateProtocol` returns, so
+step 4.142's two readings of that address coincide rather than compete: probe 15 read
+`iface ptr x11 = 0x9c502098` with `[x11] = 0x1` and `[x11+8] = 0x9c4fa4cc`, which is
+exactly `U+0x9098` holding `1` and `0x14cc`, and the installer's `x2` is the same
+address. Its layout is then measured rather than inferred: `+0x00` a 32-bit `1` and
+four bytes of padding, `+0x08` `0x14cc`, `+0x10` `0x1500` (whose body is a bare
+`ret`, so the second method is a stub), `+0x18` the ten-entry table at `U+0x90b0`.
+That is why `0x14cc` looks trivial and is not: it is `GetMethods`, called as the
+interface's word 1 with the client's out-slot, and its one store hands back
+`&Interface->Methods` — which is the value `UFSDxe` stores at `U+0x193f8` and then
+indexes at `[0]` (`0x18c0`, create), `[2]` (`0x1b2c`, attach) and `[8]` (`0x311c`,
+configure). A reference census over the whole `.text` puts `U+0x90b0` at `0x14d0` and
+`0x14e4` only, so no second routine in the image hands the table out.
+
+The three methods step 4.142 could only count are now read. `0x18c0` (table `[0]`,
+create) rejects a NULL argument with status `3`, allocates `0x38` bytes through
+`0x3f5c`, returning `0x13` if that fails, clears them with `0x5260 (ptr, 0, 0x38)`,
+stamps the first word `1` (`0x1940: orr w8, wzr, #0x1` / `0x1944: str w8, [x2]`) and
+stores the pointer through its out-parameter — a 56-byte domain whose first field is
+the magic `1` that `0x1b2c` tests at `0x1ba4`–`0x1bc4` before returning
+`RETURN_ALREADY_STARTED`, so the "domain" of the attach path and the "interface" of
+`UFSDxe`'s cache are the same object in different states, not two different things.
+`0x311c` (table `[8]`, configure) is a record *builder*: an enum argument `>= 2`
+returns `4` (`RETURN_BAD_BUFFER_SIZE`, the value the model reproduces), the record is
+zeroed, `arg1 == 0` writes `[+32] = 0xE0` and `arg1 == 1` writes
+`[+32] = 0x009F00E0` (`movz w10, #0xe0` / `movk w10, #0x9f, lsl #16`), `[+36] = 0`
+either way, and then `0x3224: bl 0x2fa4 (record)` walks the record's `+40`
+linked-list head and programs each node through `0x37b8`, `0x3d50`, `0x3dfc`,
+`0x36d0`, `0x3744` and `0x3ea8` before ending on `dsb sy`. It does not read the bank
+count; that read belongs to attach. The driver's own start uses the same shape:
+`0x15a0` calls `0x18c0` with the global slot `U+0x9150`, and on success builds the
+*identical* ARID-0 record on its own stack (`[sp,#0x50] = 0xE0` at record offset
+`+0x20`) and calls `0x2e94`, table `[4]`, with `x0 = [U+0x9150]` — so the create and
+configure methods are exercised by the driver before any client exists, which is the
+other half of why `UFSDxe`'s locate finds a live protocol. `0x155c` wraps that as
+get-or-create: it takes a pointer, and only a NULL argument reaches `0x15a0`.
+
+The per-bank loop step 4.142 recorded as "read but never executed" is now read and
+explained. `0x2234` returns immediately on a NULL argument, reads the bank count
+through `0x3b1c` into `[x29,#-32]`, masks it with `and w9, w9, #0xff`, and walks that
+many banks. Per bank it reads the descriptor with `0x382c (base, i, &out)` — the same
+`base + 0x1800` block `0x3888`/`0x38e8`/`0x3944` reach, `0x3590 (w0, w1, w2)` being
+`*(u32 *)(w0 + w1 + w2)` and `0x35c4` its store — tests bits `[17:16]`, treats `0` and
+`2` as needing a fixup and `1` as needing one only when the low byte is `0xff`, and
+otherwise moves to the next bank. The fixup is three masked rewrites of the descriptor
+(`& 0xfffcffff | 0x10000`, then `& 0xffffff00`, then `| 0xf000` — the stage-2 device
+attribute index step 4.142 read out of the stub's own block), stored back through
+`0x3888`; then the paired word is read through `0x38e8` and its bit 0 is set from
+`arg1 == 0` (`0x2340: subs w8, w8, #0x0` / `0x2344: cset w1, eq` — `arg1` is a
+boolean, the `EnableUfsIOC` the record already names), written through `0x3944`, and
+the loop index is stored into the out-parameter and the function returns. So the loop
+stops at the first descriptor that needs fixing and reports *which bank* by writing it
+through `arg2` — which is why `arg2` behaves as an out- and not an in-parameter, and
+why the `-1` sentinel's only seeder is the miss path of `0x20b4`. That helper is a
+keyed find-or-create, not a blind builder: it rejects a NULL argument with `3`,
+allocates 32 bytes through `0x34a0` (`0x3f5c (0x20)`), returning `0x13` on failure,
+sets `[node] = key`, `[node+8] = arg2`, `[node+16] = [node+24] = 0`, seeds
+`[node+12] = 0xffffffff` (`0x21bc: mov w10, #0xffffffff` / `0x21c4`), links the node
+into the list at `[arg0+40]`, and returns 0 — and a hit returns the existing node with
+status 0 without touching the sentinel, which is why the failing arm prints no index.
+
+The two leaves that made the rest unreadable are named: `0x17b8` is
+`d5033f9f dsb sy` followed by `d65f03c0 ret` — `ArmDataSynchronizationBarrier`, called
+from six sites (`0x1f74`, `0x2078`, `0x2c70`, `0x310c`, `0x32b4`, `0x3358`), one of
+which ends the configure walk; and `0x34a0` is the 32-byte allocation above. The
+page/level helper `0x364c` takes a value, asks `0x3b1c` for the bank count dword at
+`arg + 0x24`, and from the descriptor's bit 31 picks a base page of `0x1000` or
+`0x10000`, scaling by `1 << (level + 1)` — and `0x37b8 (page, index, value)` writes
+`index` at `page + (value << 12)`, which is the shape of a per-node register write and
+is why `0x2fa4`'s walk ends on the barrier.
+
+What this does not change is as important as what it does. The model's failure is
+untouched: `UFSDxe` calls table `[2]`, `0x1b2c`, at `0x25f4`, the attach reads the
+count at `0x15000024` as zero, the `-1` sentinel survives and the arm that stores `4`
+runs — and now the count read is known to be `0x3b1c`'s, reached through `0x3590`
+with `w2 = 0x24`, in the same `base + 0x1800` block the bank loop would have written.
+What it does change is the phone-side direction of step 4.142's derivation. The
+install is a step of `HALIOMMU`'s own EntryPoint, and the installer's caller returns
+the install's status; so a `s` at slot 13 — `HALIOMMU`'s EntryPoint returned
+`EFI_SUCCESS` — is not merely compatible with the protocol being present when
+`UFSDxe` runs, it *implies* it, because a failed install makes that same status the
+EntryPoint's return. The derived map says `HALIOMMU` is slot 13 and `UFSDxe` slot 25,
+so the installer runs before the client on the phone as it does here, and the
+protocol's absence is not available as an explanation on either side. That is a
+mechanism where step 4.142 had only an ordering.
+
+- **instrument**: two static readings of
+  `uefi/Binaries/gauguin/QcomPkg/Drivers/HALIOMMUDxe/HALIOMMU.efi` (45,056 B, sha256
+  `61deaf79…`) — `aarch64-linux-gnu-objdump -D -b binary -m aarch64` over the whole
+  image, kept as `/tmp/haliommu.txt` (7,795 lines) and used for a `bl`-site census
+  (`0x20b4` ← `0x1dcc`, `0x2234` ← `0x1e40`, `0x23c8` ← `0x1f88`, `0x2604` ← `0x2030`,
+  `0x2750` ← `0x2050`/`0x2b9c`, `0x2fa4` ← `0x2f84`/`0x3224`, `0x311c` ← none,
+  `0x18c0` ← `0x15b4`, `0x382c` ← `0x2298`, `0x3888` ← `0x1ae0`/`0x2320`, `0x17b8` ←
+  six, `0x1488` ← `0x1210`, `0x1504` ← `0x14a4`), and a pygmy decoder for
+  `adrp` + `add`/`ldr` pairs, written for this step, which resolves PC-relative pages
+  the way the instruction does (`(pc & ~0xfff) + (imm << 12)`, so `adrp x8, 0x9000` at
+  `0x14d0` means `base + 0x90b0`) and enumerates every `.text` site that reaches into
+  the image's own `.data`, plus a plain byte dump of `.data` `0x9000`–`0x91c0`;
+  `work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/FV/Guid.xref` for the four
+  GUID names; and `uefi/Binaries/gauguin/QcomPkg/Drivers/UFSDxe/UFSDxe.efi`
+  (114,688 B, sha256 `c8bc07eb…`) re-read only to confirm the three table lookups
+  (`[IFACE+0]` → `0x18c0`, `[IFACE+16]` → `0x1b2c`, `[IFACE+64]` → `0x311c`) and the
+  GUID literal. No QEMU run, no probe, no panel, and no device reading of any kind:
+  `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is
+  present, so nothing here is device-side. Nothing was built for the device, nothing
+  was flashed, no partition was written, no stub or firmware source was changed and no
+  patch was written into any image; the only write is to `/tmp` and to this record.
+- **shows**: that the protocol's publisher is `0x1504`, called from the driver's own
+  start (`0x1210` in the routine entered at `0x1150`), and that its call is
+  `InstallMultipleProtocolInterfaces (&Handle, &GUID@U+0x9048, &Interface@U+0x9098,
+  NULL)` — the zeroed stack slot in `x0`, the GUID in `x1`, the interface in `x2` and
+  the terminator in `x3`; that `U+0x9048` and `U+0x9098` have no other referring site
+  in the image; that the interface is `{1, 0x14cc, 0x1500}` with the ten-method table
+  at `+0x18`, so `0x14cc` is a `GetMethods` whose single store is the only reference
+  to `U+0x90b0` in the image and `0x1500` is a bare `ret`; that the module EntryPoint
+  is the four-byte tail branch `b 0x4afc` at `U+0x1110` and that the routine
+  registering `U+0x1114` at `LoadedImage + 0x58` is a stub returning `EFI_SUCCESS`;
+  that the services pointer at `U+0x9170` is identified by five offsets that are each
+  `+0x10` above `EFI_BOOT_SERVICES` (`+0x40`, `+0x48`, `+0x98`, `+0x140`, `+0x148`),
+  with three of the five confirmed by argument shape
+  (`AllocatePool (EfiBootServicesData = 4, size, &out)` and the `tbnz x0, #63`
+  `EFI_ERROR` test at `0x3f34`, `FreePool` at `0x3f7c`, `HandleProtocol (handle,
+  &gEfiLoadedImageProtocolGuid, &out)` at `0x11bc`), so `0x3f5c`/`0x3f6c` are the
+  pool pair every allocation in create and attach goes through; that the driver also
+  *consumes* `gEfiStatusCodeRuntimeProtocolGuid`, located into `U+0x94c0` at `0x54a8`
+  through the same table's `+0x140` slot and read back at `0x5484` and `0x5540`; that
+  `.data` holds nine GUID literals at `U+0x9008`, three of them named by the build's
+  `Guid.xref` and the fourth the driver's own; that `0x18c0` allocates and stamps a
+  56-byte domain whose first word is the `1` that `0x1b2c` tests at `0x1ba4`; that
+  `0x311c` builds a per-ARID record (`[+32] = 0xE0` or `0x009F00E0`, `[+36] = 0`),
+  passes it to `0x2fa4` and ends on `dsb sy`, and that the driver's own init builds
+  the same ARID-0 record for its default domain at `U+0x9150` and calls table `[4]`
+  with it; that `0x2234`'s bound is the `+0x24` count masked to eight bits, that its
+  fixup rewrites the descriptor to `0x…f000` and sets the paired word's bit 0 from
+  `arg1 == 0`, and that it writes the bank index through `arg2` and returns; that
+  `0x20b4` seeds `[node+12] = 0xffffffff` only on its miss path; and that `0x17b8` is
+  `dsb sy`.
+- **adds**: the install site, with its four arguments and its one reference to each of
+  the GUID and the interface; the interface's full layout as measured
+  (`{1, GetMethods, stub}` and the table at `+0x18`); the `.data` GUID array and the
+  three names `Guid.xref` supplies for it; the identification of the boot-services
+  pointer at `U+0x9170` by five congruent offsets, and with it the names
+  `AllocatePool (EfiBootServicesData, …)` and `FreePool` for `0x3f5c` and `0x3f6c`;
+  the driver's own status-code channel through `gEfiStatusCodeRuntimeProtocolGuid`;
+  the read bodies of table `[0]`, `[4]` and `[8]` and the get-or-create wrapper
+  `0x155c`; the explanation of `0x2234`'s out-parameter and of `0x20b4`'s keyed
+  find-or-create; and the naming of `0x17b8` and `0x34a0`.
+- **corrects**: step 4.142's `does not close` row on every item this step reads —
+  "what `0x18c0` (create) and `0x311c` (configure) actually do, since neither was
+  disassembled in this step" is answered above; "which code path installs the protocol
+  in this model, since `LocateProtocol` succeeding proves an installation without
+  naming the installer" is answered by `0x1504` and its caller; "`0x4be0`, `0x4ce0`,
+  `0x4ea8`, `0x4c00`, `0x4c64`, `0x64c8`, `0x8ccc`, `0x17b8`, `0x2604` and `0x2750`"
+  is answered for `0x17b8` alone; and the note that the per-bank path "is read but
+  never executed" is superseded by the reading that the loop is bounded by a count the
+  model reads as zero, so its *first* iteration is skipped rather than its body being
+  unreachable. Also corrected: the earlier windows' anonymous "allocator" is
+  `AllocatePool (EfiBootServicesData, …)`, and step 4.142's two readings of
+  `U+0x9098` — the located interface and a locate's out-parameter — are one object, as
+  probe 15's own `[x11] = 0x1` and `[x11+8] = 0x9c4fa4cc` show.
+- **does not close**: the `+0x10` displacement of the services table is inferred from
+  five congruent offsets and argument shapes and not from a symbol, so a live read of
+  `[U+0x9170] + 0x40` or `+0x148` would confirm or refute it and nothing here is built
+  on it beyond the naming; the five unnamed GUIDs at `U+0x9010`–`U+0x9030`,
+  `U+0x9068`–`U+0x9078`; what `0x1500` (the interface's word 2) is *for*, beyond being
+  a `ret`; the other seven table methods (`0x1974`, `0x29cc`, `0x2e94`, `0x3244`,
+  `0x32d4`, `0x3378`, `0x3398`); `0x2604`, `0x2750`, `0x23c8` and the second entry
+  into the walker at `0x2f84`; `0x4be0`, `0x4ce0`, `0x4ea8`, `0x4c00`, `0x4c64`,
+  `0x64c8`, `0x8ccc` and `0x3f6c`'s argument at attach's exits, whose provenance the
+  head and tail of `0x1b2c` do not show; the six sites in `0x160c`–`0x1760` that use
+  the default domain at `U+0x9150`; what `U+0x19400` holds; `CmdDbDxe`'s
+  `P2Record[0]` of `0x8000000000000003`; the second image to return `-7` at 10.6 s;
+  the phone-side confirmation of the derived batch and the statuses behind its 27 `L`s;
+  and the goal itself.
+- **not an action**: nothing was built for the device, nothing was flashed, no
+  partition was written, no stub or firmware source was changed and no patch was
+  written into any image. The model's failure is still not a defect this step proposes
+  to fix — and the reading above gives it more, not less, support: the protocol is
+  installed and located on both sides, so what remains on the phone is why
+  `CoreLoadImage` rejects 27 images, which no host reading can supply. `userdata`, the
+  partition table and the firmware LUN remain untouched; the device is absent
+  (`adb devices -l` and `fastboot devices` both empty, no Qualcomm USB device); the
+  porting goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying
+  install and P5's peripherals not begun, and the end state still a Windows tablet
+  whose modem and cameras are undrivable.
