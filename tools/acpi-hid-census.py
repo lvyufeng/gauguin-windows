@@ -30,6 +30,11 @@ gauguin's own block addresses.
     python3 tools/acpi-hid-census.py --blocks          # gauguin's block list
     python3 tools/acpi-hid-census.py --drivers DIR     # which INFs bind these
 
+`--drivers` wants a driver set, and there are two worth pointing it at: the
+vendored board package (`~/work/woa-ref/inf-7280`) and the OS's own DriverStore,
+which `tools/os-driver-store.sh` pulls out of an image. They answer different
+halves of the question and the union is the coverage, not either one.
+
 Measured 2026-09-25, **65** reference tables - the 66th file under this tree is
 `Platforms/Xiaomi/gauguin/DSDT.aml`, which this build generates from
 `tools/acpi/gauguin.asl`, and `table_files` excludes it: a corpus that counts the
@@ -208,6 +213,22 @@ NAME_CID = re.compile(r'Name \(_CID, "(?:EisaId \(")?([^"]+)"')
 # to eight alphanumerics (QCOM1A0C) or a PNP id (PNP0C0E). Both are matched:
 # the question is coverage, and a block covered by a PNP device is covered.
 INF_ACPI = re.compile(r"ACPI\\\s*([A-Za-z0-9_]{3,16})", re.I)
+# A third net, and it does not answer `INF_ACPI`'s question. An .inf names ids it
+# does not bind: `URS\QCOM0A8B&HOST` is a *child* of the ACPI node QCOM0A8B,
+# created by whoever binds the node, and a quoted `_HID` default written by an
+# extension ("_HID",%REG_SZ%,"QCOM0A0F") is an id going into the registry. Both
+# are the set naming an id; neither is the set attaching a driver to it. So they
+# are kept in their own column and printed beside `NOT CLAIMED` rather than
+# folded into it - widening `INF_ACPI` would silently redefine "claimed" in
+# every count above.
+#
+# The id in the second group is not `QCOM`-shaped on purpose. Windows' own
+# driver packages name children of PNP ids too: `ufxsynopsys.inf` binds
+# `URS\PNP0CA1&FUNCTION` and `ufxchipidea.inf` binds `URS\PNP0C90&FUNCTION`, and
+# `PNP0CA1` is the `_CID` this port writes on URS0. A net that only sees four
+# hex digits after `QCOM` reads the OS's answer for that node as silence.
+INF_BUS = re.compile(r"([A-Za-z][A-Za-z0-9_]{1,11})\\\s*"
+                     r"([A-Za-z0-9_]{3,20}(?:&[A-Za-z0-9_]+)?)")
 
 
 def read_win_text(path):
@@ -231,17 +252,28 @@ def read_win_text(path):
 
 
 def load_driver_set(directory):
-    """(id -> [inf paths], encoding tally, file count) for a Windows INF tree.
+    """(id -> [inf paths], encoding tally, file count, notes).
 
     One reader, used by both `--drivers` and `--bind`, because the encoding
     question above is exactly the kind that gets answered once and then
     answered differently in the second copy.
+
+    `notes` is the second reader: how the set *names* an id besides claiming it,
+    as `{"bus": {id: {form: file}}, "text": {file: uppercased text}}`. It is what
+    separates two absences that the `ACPI\\` column reports identically -
+    `QCOM0A8B`, which two INFs in this set name as the parent of the children
+    they bind, and `QCOM24A5`, which this set does not name at all. Kept in one
+    pass rather than a second walk of the tree so the two readers cannot see
+    different file sets, and the text is kept whole rather than reduced to a
+    token regex because the question "does this set ever write this string" has
+    to be answerable for ids of any shape.
     """
     inffiles = []
     for root, _dirs, names in os.walk(directory):
         inffiles += [os.path.join(root, n)
                      for n in names if n.lower().endswith(".inf")]
     hids, encodings = {}, {}
+    notes = {"bus": {}, "text": {}}
     for inf in inffiles:
         try:
             raw = open(inf, "rb").read()
@@ -254,10 +286,30 @@ def load_driver_set(directory):
         else:
             enc = "utf-8"
         encodings[enc] = encodings.get(enc, 0) + 1
-        for m in INF_ACPI.finditer(read_win_text(inf)):
-            hids.setdefault(m.group(1).upper(), []).append(
-                os.path.relpath(inf, directory))
-    return hids, encodings, inffiles
+        text = read_win_text(inf)
+        rel = os.path.relpath(inf, directory)
+        notes["text"][rel] = text.upper()
+        for m in INF_ACPI.finditer(text):
+            # Once per *file*, not once per mention: an `.inf` names the id it
+            # binds in `[Manufacturer]`, in `[ControlFlags]`'s
+            # `ExcludeFromSelect`, again under the manufacturer's section and
+            # again as a `%ACPI\...DeviceDesc%` string key. `storufs.inf` does
+            # exactly that with `ACPI\QCOM24A5`, and the report read
+            # "claimed by <same file> x3 +1", which is one file claiming one id
+            # printed as a crowd.
+            bucket = hids.setdefault(m.group(1).upper(), [])
+            if rel not in bucket:
+                bucket.append(rel)
+        for m in INF_BUS.finditer(text):
+            if m.group(1).upper() == "ACPI":
+                continue
+            # Keyed by the id, valued by the whole form: `QCOM0A8B&HOST` and
+            # `QCOM0A8B&FUNCTION` are one id in two roles in two files, and
+            # collapsing them to the id loses the half that says which.
+            hid = m.group(2).split("&")[0].upper()
+            form = re.sub(r"\s+", "", m.group(0))
+            notes["bus"].setdefault(hid, {})[form] = rel
+    return hids, encodings, inffiles, notes
 
 
 # An ASL `_HID` is a plain string in every table this repo has, but `EisaId (...)`
@@ -340,17 +392,64 @@ def cmd_bind(args):
     from Device Manager, with the hardware behind it working and unused. So
     "the name I chose" and "the name a driver claims" have to be made the same
     act, or the mistake is only found on the far side of a Windows install.
+
+    One set is not the system, and which set is being read changes the answer.
+    A vendor package answers for the blocks *its* board has; the OS answers for
+    the ones Microsoft ships a driver for. Measured 2026-09-27: of the 34 ids
+    written in `gauguin.asl`, `~/work/woa-ref/inf-7280` claims 32 and leaves
+    `QCOM0A8B`/`QCOM24A5`, while a Windows 25H2 x64 `boot.wim`'s DriverStore
+    (339 INFs, 85 ids, via `tools/os-driver-store.sh`) claims exactly one of
+    them - `QCOM24A5`, in `storufs.inf` - and 33 the vendor set does. Neither
+    number is the coverage; the union is, and running one and reporting it as
+    the other is the same defect as the encoding bug above.
     """
-    hids, encodings, inffiles = load_driver_set(args.drivers)
+    hids, encodings, inffiles, notes = load_driver_set(args.drivers)
     print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids")
     print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}\n")
 
     if args.asl:
-        return bind_asl(args, hids)
-    return bind_lookup(args, hids)
+        return bind_asl(args, hids, notes)
+    return bind_lookup(args, hids, notes)
 
 
-def bind_asl(args, hids):
+def mention_lines(hid, notes):
+    """How this set names an id it does not claim - or that it never names.
+
+    The distinction this exists for is the one a single `NOT CLAIMED` line
+    erases. `ACPI\\<HID>` is how an `.inf` *binds*; a set can also name an id
+    without binding it, and the two absences look identical in the `ACPI\\`
+    column. Measured against `~/work/woa-ref/inf-7280` on 2026-09-27:
+    `QCOM0A8B` is in two of its `.inf` files, as `URS\\QCOM0A8B&HOST`
+    (`QcXhciFilter7280.inf`) and `URS\\QCOM0A8B&FUNCTION`
+    (`QcUsbFnSsFilter7280.inf`), and `QCOM24A5` is in none of them in any form.
+    The first is an id the set builds on - `URS\\` children are named after the
+    parent's `_HID`, so a build with the wrong `_HID` on `URS0` would have no
+    filter binding at all - and the second is an id the set has never heard of.
+    Both are true statements about *this set*; they are not the same statement.
+
+    Three readings, strongest first, and they are read separately rather than
+    ranked into one:
+      * named on another bus   - the id is the set's; only the attach is missing.
+      * named only as a value  - the set writes the string but binds no device
+        of that id (`HKR,...,"_HID",...,"QCOM0A0F"` and `%...DeviceDesc%` keys
+        are the shapes; both are text an extension writes into the registry, so
+        they say the set knows the name and not that anything answers to it).
+      * named nowhere          - no bus prefix, no value, no token at all.
+    """
+    bus = notes["bus"].get(hid)
+    if bus:
+        forms = ", ".join(f"`{f}` ({p})" for f, p in sorted(bus.items()))
+        return [f"but named by this set on another bus: {forms}"]
+    seen = sorted(p for p, text in notes["text"].items() if hid in text)
+    if seen:
+        return [f"named in {len(seen)} of this set's .inf files, but never after "
+                f"a bus prefix (a value it writes, not a device it binds): "
+                f"{', '.join(seen[:3])}" + (f" +{len(seen) - 3}" if len(seen) > 3 else "")]
+    return ["named nowhere in this set: no bus prefix, no quoted _HID default, "
+            "no token at all"]
+
+
+def bind_asl(args, hids, notes):
     """Every `_HID` in a file, against the set. Returns 1 if any QCOM one misses."""
     try:
         raw = open(args.asl, encoding="utf-8", errors="replace").read()
@@ -385,11 +484,34 @@ def bind_asl(args, hids):
             # the PMIC. Calling these "the OS supplies the driver" was this
             # tool describing its own rule - "not QCOM, so not looked up" - as a
             # fact about the hardware. They are covered by whatever claims the
-            # `_HID` beside them, and this set lists QCOM ids, so there is
-            # nothing here to check them against.
+            # `_HID` beside them, and a *vendor package* lists QCOM ids, so
+            # there is usually nothing here to check them against.
+            #
+            # "Usually" was doing real work in that sentence and this branch was
+            # reading it as "always", because it ran before the `who` lookup
+            # below. Measured 2026-09-27: against the full OS's DriverStore,
+            # `PNP0CA1` printed as "not bound as an ACPI device by this set"
+            # while `urssynopsys.inf` in that very set binds
+            # `%UrsSynopsys.DeviceDesc% = UrsSynopsys.Install, ACPI\QCOM24B6,
+            # ACPI\PNP0CA1` - the Synopsys USB 3.0 dual-role controller, on the
+            # compatible id this port writes as `URS0`'s `_CID`. A set can also
+            # name the id on another bus (`URS\PNP0CA1&FUNCTION`, the function
+            # child that parent enumerates). So the order is now: claimed
+            # first, then the bus note, and the "nothing to check it against"
+            # sentence only where neither holds - which is what it always said
+            # it meant.
+            named = notes["bus"].get(hid)
             standard.append(hid)
-            verdict = ("PNP id - a vendor CIM, not looked up in this set; the "
-                       "_HID beside it is what binds")
+            if who:
+                verdict = f"PNP id - claimed by {', '.join(who[:3])}" + \
+                          (f" +{len(who) - 3}" if len(who) > 3 else "")
+            elif named:
+                forms = ", ".join(f"`{f}` ({p})" for f, p in sorted(named.items()))
+                verdict = (f"PNP id - a vendor CIM; not bound as an ACPI device "
+                           f"by this set, but named on another bus: {forms}")
+            else:
+                verdict = ("PNP id - a vendor CIM, not looked up in this set; the "
+                           "_HID beside it is what binds")
         elif who:
             verdict = f"claimed by {', '.join(who[:3])}" + \
                       (f" +{len(who) - 3}" if len(who) > 3 else "")
@@ -398,6 +520,9 @@ def bind_asl(args, hids):
             verdict = "NOT CLAIMED by any .inf in this set"
         print(f"    {hid:<12} {len(where)}x  {verdict}")
         print(f"                 {', '.join(sorted(where)[:4])}")
+        if hid in unclaimed:
+            for line in mention_lines(hid, notes):
+                print(f"                 {line}")
     print()
 
     if unclaimed:
@@ -410,6 +535,10 @@ def bind_asl(args, hids):
         print("  Windows built from it those nodes are absent from Device Manager.")
         print("  Fine while the block is not needed; a silent failure the moment")
         print("  it is.")
+        print("  Where a line under the id says the set names it on another bus, the")
+        print("  id is the set's and only the attach is missing; where that line says")
+        print("  nowhere, the set does not carry a driver for the block at all. The")
+        print("  two are worth reading separately before acting on either.")
         print("  (This used to name UFS and the UART as the pair. Step 4.70 wrote a")
         print("  UART node and the set claims its id, so the examples are the list")
         print("  above and are no longer repeated here - a hardcoded example goes")
@@ -419,7 +548,7 @@ def bind_asl(args, hids):
     return 0
 
 
-def bind_lookup(args, hids):
+def bind_lookup(args, hids, notes):
     """Either look up the ids named on the command line, or list what is spare.
 
     The spare list is the useful half while the ASL is still being written: it
@@ -435,6 +564,8 @@ def bind_lookup(args, hids):
                       f"{f' +{len(who) - 4}' if len(who) > 4 else ''}")
             else:
                 print(f"  {hid:<12} NOT CLAIMED by any .inf in this set")
+                for line in mention_lines(hid, notes):
+                    print(f"  {'':<12}   {line}")
                 rc = 1
         return rc
 
@@ -983,7 +1114,7 @@ def cmd_drivers(args):
     them the set answers to. A set that covers all of them names the family, and
     names every block in the same breath.
     """
-    hids, encodings, inffiles = load_driver_set(args.drivers)
+    hids, encodings, inffiles, _notes = load_driver_set(args.drivers)
     if not inffiles:
         print(f"no .inf files under {args.drivers}")
         return 1
@@ -1072,10 +1203,13 @@ def main():
                     help="a Windows driver set to check coverage against")
     ap.add_argument("--bind", nargs="*", metavar="HID",
                     help="with --drivers: which driver claims these ids, or with "
-                         "none named, the pool of ids the set offers per block")
+                         "none named, the pool of ids the set offers per block; "
+                         "an id nothing claims is also reported as named "
+                         "elsewhere (another bus, a written value, or nowhere)")
     ap.add_argument("--asl", metavar="FILE",
                     help="with --drivers --bind: every _HID/_CID in this ASL file "
-                         "against the set (default tools/acpi/gauguin.asl)")
+                         "against the set, and for each id nothing claims, how "
+                         "else the set names it (default tools/acpi/gauguin.asl)")
     args = ap.parse_args()
     if args.blocks:
         cmd_blocks()

@@ -13280,8 +13280,8 @@ this table has not got.
 
 Every one of the thirteen ids is claimed by `qcpep.wd7280.inf`, which is the point
 of writing them: the census reads **23 of 25 distinct ids claimed** and the two
-unclaimed are the same two it has named for three steps, `QCOM0A8B` (UFS) and
-`QCOM24A5`.
+unclaimed are the same two it has named for three steps, `QCOM0A8B` (`URS0`) and
+`QCOM24A5` (`UFS0`).
 
 Four groups are deliberately absent, and each is its own measurement rather than a
 deferral:
@@ -13557,7 +13557,7 @@ takes its third branch or drops the method.
 - All three payloads match GenFv's map at 123 offsets and GUIDs, zero mismatches;
   `probe-fingerprint.py --expect P2FreeWhy` returns 0 with all ten instruments.
 - The census reads 40 `_HID`/`_CID` declarations, **26 distinct, 24 claimed**, and
-  the two unclaimed are the same two: `QCOM0A8B` (UFS) and `QCOM24A5`.
+  the two unclaimed are the same two: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
 - `FVMAIN` is still `0x704000` with 1,096 bytes of block slack, and
   `FVMAIN_COMPACT` took this step's 70 bytes of new AML without moving off
   1,089,206 - which is the block-rounding correction of 4.73a holding up rather
@@ -13788,7 +13788,7 @@ which is unreachable by design and the other two of which are not in this table.
 - The census, re-run with the fixed `ThermalZone` alternation:
   **`QCOM0427` claimed by `inf-7280/qcabd.inf`, bound to `ABD`**, 41 `_HID`/`_CID`
   declarations and 27 distinct, **25 claimed**, with the same two unclaimed as in
-  every step since 4.70: `QCOM0A8B` (UFS) and `QCOM24A5`. The zone labels still read
+  every step since 4.70: `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`). The zone labels still read
   `TZ0`-`TZ13` and not `IPCC`.
 - The device is absent from this host - `adb devices` and `fastboot devices` are both
   empty - so nothing here is a hardware reading. The payload resident in `boot` is
@@ -13973,7 +13973,7 @@ which is the same reason there is nothing for a `_CRS` to describe.
   habit or by attention. The 4.74 control now survives in two places.
 - The census: **`QCOM04DD` claimed by `inf-7280/qcscm.inf`, bound to `SCM0`** (line
   2538), 42 `_HID`/`_CID` declarations and 28 distinct, **26 claimed**, with the same
-  two unclaimed as in every step since 4.70 — `QCOM0A8B` (UFS) and `QCOM24A5`.
+  two unclaimed as in every step since 4.70 — `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
 - The device is absent from this host throughout — `adb devices` and `fastboot devices`
   both empty — so nothing here is a hardware reading. The payload in `boot` is still
   the **4.74** set and its panel reading is **still owed** under 先读屏，再刷下一次.
@@ -14232,7 +14232,7 @@ per-board resource that this board does not have.
   across three builds, and 4.74's worry about the default output directory is answered
   by practice rather than by intent.
 - The census: **43 `_HID`/`_CID` declarations and 29 distinct, 27 claimed**, with the
-  same two unclaimed as every step since 4.70 — `QCOM0A8B` (UFS) and `QCOM24A5`.
+  same two unclaimed as every step since 4.70 — `QCOM0A8B` (`URS0`) and `QCOM24A5` (`UFS0`).
   `QCOM0A2C` is bound to `PMAP`.
 - **The device metric was reconciled in this step**, because the number this session has
   been carrying and the number the AMLs give did not look like the same thing. Counting
@@ -30706,3 +30706,124 @@ package for an SM8250 or SM6350 board would carry the QUP SPI miniport, and
 | corrects | P3 item 1's remainder: the SPI engines are not unwritten work but unservable hardware under this driver set, so item 1 needs no further ACPI; the reading of `--drivers`' coverage column; and the plan's status line, which called them "genuinely open" |
 | does not close | the family byte, the existing nodes, the P2 gate and every device-side reading, all unchanged; whether a set with an SPI controller exists and which id it would name, which needs a different package to run `--bind` against; whether the two SPI windows should be declared *unserved* anyway so the absence is visible in Device Manager rather than absent from the namespace, which is a decision and not a measurement; the device-side half of everything |
 | not an action | nothing was built, flashed or written to any partition; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN are untouched; the porting goal is unchanged and unmet, with P3 unfinished and P4's `userdata`-destroying install and P5's peripherals not begun |
+
+## Step 4.150 — the two ids nothing claims are two different absences, and the second oracle makes `UFS0`'s id Microsoft's: `QCOM24A5` is bound by the OS's own `storufs.inf`, `URS0`'s `_CID PNP0CA1` is bound by `urssynopsys.inf`, `URS0`'s `_HID` is bound by neither set — and the install image that answers the last two had never been read
+
+`--bind` has ended every run since Step 4.70 with the same sentence: two of the
+table's ids, `QCOM0A8B` and `QCOM24A5`, are not claimed by any `.inf` in the
+driver set. One line, two names, which reads as one fact. It is two. `QCOM0A8B`
+is an id the vendor set *builds on* — `URS\QCOM0A8B&HOST` in
+`QcXhciFilter7280.inf` and `URS\QCOM0A8B&FUNCTION` in `QcUsbFnSsFilter7280.inf`
+are the children the board's own USB filters attach to, and a `URS\` child is
+named after its parent's id, so the set has the id and is missing only the
+attach. `QCOM24A5` is an id the vendor set has never heard of, in any form: 158
+`ACPI\` ids, 165 bare `QCOM····` tokens across the 112 `.inf` files, and no
+`24A5` among them. A tool that prints one word for both is answering "is it
+claimed" and reporting it as "does the set know this name".
+
+**So the tool grew a third net that does not feed the claim count.** `INF_BUS`
+reads `BUS\ID` for any bus and any id shape — not `QCOM`-shaped, because the
+answer this step needed most is spelled `URS\PNP0CA1&FUNCTION` — and
+`load_driver_set()` now returns a `notes` structure beside the id buckets: which
+non-`ACPI\` bus forms name each id, and the whole text of every `.inf`, upper-
+cased. `mention_lines()` reads three cases and prints them under the
+`NOT CLAIMED` row rather than folding them into it: named on another bus (the id
+is the set's, only the attach is missing), named only as a value the set writes
+(`HKR,Desktop\0,"_HID",%REG_SZ%,"QCOM0A28"` in `qcsubsys_ext_wpss7280.inf` is
+the measured shape, and the reading is one grep away from being wrong in either
+direction), and named nowhere at all. Widening `INF_ACPI` itself would have been
+the smaller edit and a worse one: it would silently redefine "claimed" in every
+count the tool prints, including the three above. All three readings are
+exercised — `QCOM0A8B` is the first, `QCOM24A5` the third, `QCOM0A28` the
+second — and the vendor set's copy of `QCOM0A8B` line now says the set names it
+on another bus, which is a different statement from `QCOM24A5`'s "never heard
+of it" and was previously indistinguishable.
+
+**The vendor set is one board's package, so it cannot answer for an id that is
+not that board's — and `QCOM24A5` is not.** The second oracle is the OS's own
+drivers, and `tools/os-driver-store.sh` pulls them out of an image so the same
+census can be pointed at them: 7-Zip to the `sources/*.wim`, the DriverStore
+package `.inf` files out of one index, nothing mounted. Read against
+`boot.wim`, the truth about `QCOM24A5` reverses. `storufs.inf` claims it —
+`[Qualcomm.NTamd64]`, `%ACPI\QCOM24A5.DeviceDesc%=UfsQualcomm8996Install,
+ACPI\QCOM24A5`, `Class=SCSIAdapter`, `AddService=storufs`,
+`FeatureFlags 0x40000000`, `HSSeries 0x2`, `BusType 0x13`, and the string key
+reads "Qualcomm Universal Flash Storage (UFS) Host Controller". The vendor
+set's silence about `UFS0` is the *package's* gap, not Windows'. The first run
+also printed `QCOM24A5` as "claimed by `<storufs.inf>` x3 +1": `INF_ACPI`
+matches the id in four sections of one file — `[ControlFlags]`'s
+`ExcludeFromSelect`, the manufacturer section, and the `%...DeviceDesc%` key —
+and the fix is to append a file to a bucket once. One file claiming one id is
+now one file.
+
+**And the shell script that made that possible had a number in it that had
+never been measured.** Its header said "Measured 2026-09-27 on Win11 25H2 x64,
+both images: 339 .inf files, 85 distinct `ACPI\` ids". 339 and 85 are
+`boot.wim`'s. The `install.wim` run had not been made. Read now, index 1 of
+`sources/install.wim` is **712 `.inf` files and 116 distinct `ACPI\` ids** —
+more than twice the set — and the header says so per image. The mistake is the
+same species as Step 4.147's self-counted corpus and Step 4.146's unread
+instruments: a figure that had been true of one measurement, printed as though
+it were true of two.
+
+**The extra half of that image is where `URS0` gets answered.** `urssynopsys.inf`
+is in `install.wim`'s DriverStore and not in `boot.wim`'s, and it binds
+`%UrsSynopsys.DeviceDesc% = UrsSynopsys.Install, ACPI\QCOM24B6, ACPI\PNP0CA1` —
+`Class=USB`, `ServiceBinary = %13%\urssynopsys.sys`, "Synopsys USB 3.0 Dual-Role
+Controller". `ACPI\PNP0CA1` is the `_CID` this port writes on `URS0`, and it is
+on that line in the *compatible* position, after the hardware id — which is
+exactly what makes it a match for a node whose `_HID` no driver claims. So the
+parent side of `URS0` binds, and it binds through the `_CID`, not the `_HID`.
+The role children follow: `ufxsynopsys.inf` binds `URS\PNP0CA1&FUNCTION` and
+`URS\QCOM24B6&FUNCTION`, the two ids of that same parent line, with the first
+written against **no** hardware id at all — a device with a QCOM `_HID` and this
+`_CID` produces `URS\QCOM24B6&FUNCTION`, a device with no QCOM id produces
+`URS\PNP0CA1&FUNCTION`. The two tables are consistent with one design and only
+one: the parent is matched on the `_CID`, the children are named after the
+`_HID`, and the vendor's `URS\QCOM0A8B&HOST`/`&FUNCTION` filters are keyed on
+`QCOM0A8B` because that is the `_HID` the board's URS node carries. Which is the
+pair this table already writes.
+
+**That reading is an inference from two tables' shape, not a measurement of
+`UrsSynopsys.sys`, and it is written down as one.** What is measured is that
+both halves exist — the parent driver in `install.wim`, the child filters in the
+vendor package — and that nothing in either set binds `ACPI\QCOM0A8B`, so a node
+whose `_HID` were `QCOM0A8B` *without* the `_CID PNP0CA1` would bind nothing at
+all. What is not measured is which id the parent uses to name its children; the
+`URS\QCOM24B6&FUNCTION` line is what makes "the `_HID`" the only reading that
+covers both spellings, and the prediction it makes — that `URS0`'s children
+appear as `URS\QCOM0A8B&…` and the vendor filters attach — is a thing the phone
+can falsify once it reaches BDS, and no host-side file can settle. So the pair
+`_HID QCOM0A8B` + `_CID PNP0CA1` is now supported by two oracles instead of one,
+and the part that is still a reading is named.
+
+**`--bind`'s own PNP branch was reading its rule as a fact about the hardware,
+for the second time.** The branch prints "a vendor CIM, not looked up in this
+set; the `_HID` beside it is what binds" — true of a vendor package, and it ran
+*before* the lookup that would have shown otherwise. Against `install.wim` it
+printed exactly that for `PNP0CA1`, an id `urssynopsys.inf` binds in the set
+being read. The comment above the branch already confessed the first instance
+("this tool describing its own rule as a fact about the hardware"); the fix is
+the ordering it should have had — claimed, then the bus note, then the sentence
+that is only true when neither holds. Re-run, the three sets give three
+different and correct verdicts for the same id, which is the point: the vendor
+set says nothing binds it, `boot.wim` says the function child is named after it,
+`install.wim` says the parent is claimed on it.
+
+**Left open, and one of them is a decision.** Whether the ARM64 build of
+`storufs.inf`, `urssynopsys.inf` and `ufxsynopsys.inf` reaches the same verdicts:
+these are x64 packages and the packages are per-architecture, so the ARM64 image
+has to be read before this is a statement about the phone rather than about an
+x64 installer. `--bind`'s hw-id/compatible-id distinction, which the PNP finding
+now depends on and the tool still does not print — it would have to parse models
+lines rather than grep for `ACPI\`, and it is the difference between "our `_HID`
+binds" and "our `_CID` does"; the `0A0E` SPI question and every device-side item
+from Step 4.149, unchanged.
+
+| | |
+|---|---|
+| instrument | `tools/acpi-hid-census.py --drivers <set> --bind --asl tools/acpi/gauguin.asl` against three sets — the vendor package `~/work/woa-ref/inf-7280` (112 `.inf`, 158 ids), `boot.wim` index 1 (339, 85) and `install.wim` index 1 (712, 116), the last two extracted by `tools/os-driver-store.sh`; plus direct reads of `storufs.inf`, `urssynopsys.inf`, `ufxsynopsys.inf`, `ufxchipidea.inf` and `qcsubsys_ext_wpss7280.inf` |
+| shows | the vendor set claims 32 of the table's 34 QCOM ids and names both of the rest, `QCOM0A8B` on another bus and `QCOM24A5` nowhere; the OS set claims 1 of the 34 — `QCOM24A5`, by `storufs.inf` as `ACPI\QCOM24A5` with `Class=SCSIAdapter` and `AddService=storufs` — and, in `install.wim` only, claims `URS0`'s `_CID PNP0CA1` by `urssynopsys.inf` as a compatible id after `ACPI\QCOM24B6`; the union of the two oracles is 33 of 34 and the one id neither claims is `URS0`'s `_HID`, whose children the vendor set names and whose `_CID` the OS binds |
+| corrects | "the same two are unclaimed", which the tool printed as one statement and the plan and this record repeated as one — the three readings are now printed separately; `tools/os-driver-store.sh`'s claim that both images measured 339 `.inf` and 85 ids, which was `boot.wim`'s count written twice; `--bind`'s PNP branch order; and fifteen parentheticals in `docs/00-plan.md`, `docs/07-uefi-platform.md` and this file that read `` `QCOM0A8B` (UFS) `` where the node is `URS0` and `` `QCOM24A5` `` is `UFS0`'s — corrected in place, because an id-to-node mapping is not a thing that was different at the time it was written |
+| does not close | the ARM64 reading, without which none of the OS-side claims is a statement about the phone; which id names `URS0`'s children, which is `UrsSynopsys.sys`'s behaviour and not in any `.inf`; `--bind`'s hardware-id versus compatible-id column; the P2 gate, the P3 gate and every device-side reading, all unchanged; P4's `userdata`-destroying install and P5's peripherals, not begun |
+| not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub or firmware source was changed and no patch was written into any image; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN remain untouched; the porting goal is unchanged and unmet, and the end state is still a Windows tablet whose modem and cameras are undrivable |
