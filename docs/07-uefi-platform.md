@@ -2983,6 +2983,37 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > (`34F25731-EB1C-5681-B482-EE776F5AF58B.ffs`) carries the disassembled image byte-for-byte at its
 > offset `0x1c`. See `docs/08` step 4.163.
 
+> **Extended 2026-09-27 by step 4.164 — the handshake can be released by one write, and what stands
+> behind it is named.** The poll at `ClockDxe + 0x11cbc` waits on bit 0 of the dword at `0x12000c`.
+> Writing zero to that word while the PC is inside the poll ends it in under a second, and the run does
+> not crash: it prints `HAL_clk_FabiaPLLEnableVote Activate Failure`, then `DebugAssert`'s row whose
+> only content is the caller id `4DB5DEA6-5302-4D1A-8A82-677A683B0D29` — the `FILE_GUID` 73 other
+> platforms' `ClockDxe.inf` declare, which the blob carries while gauguin's own inf says `34F25731-…`,
+> so the asserter is `ClockDxe`, as the PC says — then `ASSERT HALclkFabiaPLL.c +184: 0`, and stops at
+> `ClockDxe + 0xff4c`: `str xzr,[sp,#8]; ldr x8,[sp,#8]; cbz x8, 0xff4c`, which is edk2's
+> `CpuDeadLoop`, entered by `bl 0xff2c` at `0x81d0` (the same tail is inlined at `0xff2c` and `0x848c`,
+> its only two callers; frame 0 returns `ClockDxe + 0x81d4`). Two independent runs drew those three
+> rows at the same place (`qemu-panel-4.164-clearbit.txt` rows 1115-1119,
+> `qemu-panel-4.165-spincaller.txt` rows 898-902) and parked on the same
+> `pc=ClockDxe+0xff4c lr=ClockDxe+0xff48 sp=0x9ffce540`; `Fabia` appears twice in each clear-bit panel
+> and zero times in 4.163's, which is the no-write control and ends at `Unable to set rail` with the
+> poll unbroken. The write is to the QEMU guest's own `virt.flash0` RAM — it fabricates the
+> acknowledgement a clock controller would give — so it is an instrument result, and on hardware that
+> address is the controller's register. The same run's stack corrects 4.163's other open item: at the
+> handshake the caller chain is three `ClockDxe` frames (`+0x3a48`, `+0x3e0c`, `+0x1540`) on five
+> `SdccDxe` frames (`+0xf768`, `+0x9c08`, `+0x7668`, `+0x21a4`, `+0x2d74`, every offset inside that
+> image's 106,496 bytes at base `0x9C3AF000`), with no `VcsDxe` address anywhere in the 800-byte
+> window — so the driver waiting on the handshake is the SD-card controller, and `Unable to set rail`
+> (an ASCII string in `VcsDxe.efi`) is a neighbour on the console and not the caller. The load map the
+> stack was resolved against came from a sibling run's panel, which is sound because the two completed
+> panels' unique (address, name) sets are identical, 78 entries each: image load addresses are
+> deterministic for a given stub, payload and seed set. The ladder is now three rungs deep on the QEMU
+> guest — `Clock_InitTarget`'s `0xfffffffd` (4.160), the uncompletable handshake (4.163), this named
+> Fabia vote with its unconditional assert (4.164) — and all three are the same absence. That bounds
+> what more instrumentation buys: the run has already drawn the `P2` digest and walked BDS's connect
+> phase into the USB stack, and every wall behind it is another clock vote only a controller could
+> satisfy. See `docs/08` step 4.164.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

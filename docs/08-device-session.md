@@ -33314,3 +33314,175 @@ Rows:
   untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
   unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state
   remains a Windows tablet whose modem and cameras cannot be driven.
+
+---
+
+## Step 4.164 — one write releases the handshake, and what stands behind it is named: `HAL_clk_FabiaPLLEnableVote` fails to activate, `ClockDxe` asserts at `HALclkFabiaPLL.c +184`, and the run parks in its own `CpuDeadLoop` — while the stack says the caller on the other side of the handshake is `SdccDxe`, not the `VCS` rail row 4.163 read off the panel
+
+4.163 ended on a poll that cannot end: `ClockDxe + 0x11cbc`, `ldr w9,[x19]; tbnz w9,#0x0,` on bit 0 of
+the dword at `0x12000c`, an address QEMU backs with writable zero memory, so the driver's own `str` is
+the only write that ever sets the bit it then waits on. The cheap and decisive test was named there and
+is run here: clear the bit while the PC is inside the poll, and see what the run does next. It does
+something, and it is not a crash — it is a *named* failure, printed to the panel, and then an
+unconditional dead loop. Two independent runs agree on all of it.
+
+### The write, and its control
+
+`work/out/qemu-probe-4.163/gdbprobe28.py` is 4.163's probe with one addition: after the fault site has
+been passed and both `Z0` sites are removed, it samples the PC, and when the sample is the poll
+(`x19 == 0x12000c`, `pc & 0xfff == 0xcbc`, `lr & 0xfff == 0xcb0`) it writes zero to `0x12000c`, reads
+it back, and continues. One write happened, and the probe's own log shows the whole transition:
+
+```
+  spin identified: ClockDxe base = 0x9c3fa000  (pc=0x9c40bcbc lr=0x9c40bcb0 x19=0x12000c [x19]=0x1)
+  watch  3  0x9c3fa000+0x11cbc  SPIN  [x19]=0x1 -> wrote 0, reads back 0x0  (1 cleared)
+  watch  4  PC=0x9c409f4c  ClockDxe+0xff4c  lr=0x9c409f48  x0=0x0  x19=0x9c40d1d4  [x19]=0x6c430030
+```
+
+The derived base is the panel's own: `0x9c3fa000` is where row 483 and row 579 of this run's console
+say `ClockDxe.efi` was loaded, the same address 4.163's panel carried, and the same as the 4.163 probe
+derived. The write is to guest RAM and not to any file: it fabricates the acknowledgement a clock
+controller would give, so this is an instrument result, and on hardware `0x12000c` is that controller's
+real register. Its control is 4.163's own treatment panel — same stub, same payload, same four seeds,
+same suppression of `/pmic/target`, same `-gdb` harness, and no write — which ends at `Unable to set
+rail` and stays parked on the poll for the whole 175 s.
+
+### The wall behind it is named
+
+Three rows are on the panel of the clear-bit run that are on no panel of any no-clear run, and the
+second run drew them again at the same place (`work/out/qemu-panel-4.164-clearbit.txt` rows 1115-1119,
+`work/out/qemu-panel-4.165-spincaller.txt` rows 898-902):
+
+```
+|DALLOG Device [0x0]: DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v|
+|HAL_clk_FabiaPLLEnableVote Activate FailureERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1|
+|A-8A82-677A683B0D29|
+|ASSERT HALclkFabiaPLL.c +184: 0|
+```
+
+`Fabia` appears twice in each clear-bit panel and zero times in the 4.163 one. The `ERROR: C90000002:
+V03000007 I0 <guid>` row is `DebugAssert`'s own constants with the caller id as its only content
+(4.160), and the id resolves: `4DB5DEA6-5302-4D1A-8A82-677A683B0D29` is the `FILE_GUID` 73 other
+platforms' `ClockDxe.inf` declares — gauguin's own says `34F25731-…`, which is the FFS name — so the
+blob carries the shared GUID and the asserter is **`ClockDxe`**, which is what the PC says too.
+`HAL_clk_FabiaPLLEnableVote` is the Fabia PLL enable vote, a clock-controller operation with no
+controller in this machine, and the assert is `HALclkFabiaPLL.c +184: 0` — the value is literal zero,
+so the failure path is unconditional.
+
+Where that lands is disassembled, not inferred. `ClockDxe + 0xff4c` is
+
+```
+    ff48: f90007ff      str  xzr, [sp, #0x8]
+    ff4c: f94007e8      ldr  x8, [sp, #0x8]
+    ff50: b4ffffe8      cbz  x8, 0xff4c
+```
+
+which is edk2's `CpuDeadLoop` (`volatile UINTN Index; for (Index = 0; Index == 0;);`) — the store and
+the poll are of the same stack slot, so nothing outside this frame can end it. The function is entered
+by `bl 0xff2c` at `0x81d0` (the same dead-loop tail appears at `0xff2c` itself and at `0x848c`, its
+only two callers), and the probe's frame 0 returns `ClockDxe + 0x81d4` — the instruction after that
+`bl`. Both runs park on exactly it: `pc=ClockDxe+0xff4c lr=ClockDxe+0xff48 sp=0x9ffce540`, the `lr`
+being the return address of the `bl 0x100d4` at `0xff44` and unchanged through the loop. So the order
+the panel shows is the order the run took: the rail message, the Fabia vote failure, the assert, and a
+`CpuDeadLoop` that is terminal for the CPU. There is no third wall to sample past — this one does not
+loop, it stops.
+
+### Who called the handshake, and a correction to 4.163
+
+4.163 recorded the rail link as a suggestion and said so: the row above the spin is VcsDxe's
+(`Unable to set rail` is an ASCII string inside `VcsDxe.efi`), and a rail set that kicks a bit and
+waits for an acknowledgement is the shape of the loop — but adjacency on the panel is not ordering.
+`gdbprobe29.py` settles it from the stack instead: at the spin it reads `sp` upward and resolves every
+word inside a known image, and it walks the frame records. Both give the same chain, innermost first:
+
+```
+  [sp+0x18]  ClockDxe+0x3a48     fp frame 0  ret=ClockDxe+0x3a48
+  [sp+0x48]  ClockDxe+0x3e0c     fp frame 1  ret=ClockDxe+0x3e0c
+  [sp+0x88]  ClockDxe+0x1540     fp frame 2  ret=ClockDxe+0x1540
+  [sp+0x98]  SdccDxe+0xf768      fp frame 3  ret=SdccDxe+0xf768
+  [sp+0xb8]  SdccDxe+0x9c08      fp frame 4  ret=SdccDxe+0x9c08
+  [sp+0xf8]  SdccDxe+0x7668      fp frame 5  ret=SdccDxe+0x7668
+  [sp+0x128] SdccDxe+0x21a4      fp frame 6  ret=SdccDxe+0x21a4
+  [sp+0x168] SdccDxe+0x2d74      fp frame 7  ret=SdccDxe+0x2d74
+```
+
+`SdccDxe` loads at `0x9C3AF000` (rows 584/613/645/…) and its image on this disk is 106,496 bytes
+(`0x1A000`), so every one of those five offsets is inside it and not merely below the next base. The
+800-byte window holds no `VcsDxe` address at all. So the driver waiting on the handshake is
+**`SdccDxe`**, the SD-card controller — which does have clocks to vote — and 4.163's reading of the
+`VCS: Unable to set rail` row as this loop's owner is withdrawn: that message is VcsDxe's, printed
+before the SDC path reached the loop, and the two are neighbours on the console rather than caller and
+callee. This is the second time this tree has had to withdraw a panel-adjacency reading; the panel
+gives order and not nesting, and only the stack gives nesting.
+
+One methodological note worth keeping: the load map the probe resolved against came from the *other*
+completed panel, because `tools/qemu-panel-read.py` writes its panel when the harness exits and the
+probe samples before that. That is sound here for a checkable reason — the unique (address, name) sets
+of the two completed runs are identical, 78 entries each, no difference — so image load addresses are
+deterministic for a given stub, payload and seed set, and a run's map can be read off a sibling run of
+the same guest.
+
+### What this buys, and what is still wall
+
+The ladder is now three rungs deep on this guest and every rung has the same cause. 4.160 put
+`Clock_InitTarget` returning `0xfffffffd` on the absent clock controller; 4.163 found the same absence
+one layer down as a handshake that cannot complete; 4.164 finds it a third time behind that handshake,
+now as a *named* operation — `HAL_clk_FabiaPLLEnableVote` — that fails and takes the firmware down with
+an unconditional assert. None of the three is a firmware defect: each is the firmware correctly
+discovering that the hardware it was written for is not there. That is worth having stated plainly,
+because it bounds what more instrumentation can buy: the QEMU run has already drawn the P2 digest and
+walked BDS's connect phase to the USB stack, and every further wall behind it is another clock vote
+that only a controller could satisfy. Faking them one at a time is a known, finite, and uninformative
+exercise; the informative question for the port is on the phone, where the controller is real and the
+wall is the missing architectural protocols at `DxeMain.c:593`.
+
+Left open: whether `0x81d0`'s function is the Fabia PLL enable path itself or a caller of it (the
+assert message names the file and line, not the function, and the blob has no symbols); which of
+`SdccDxe`'s five frames is the driver's own clock-vote call and what rate it wanted; why the storage
+stack sequence (`PartitionDxe`, `SdccDxe`, `UFSDxe`, `Fat`, `TzDxe`, `SPMI`) appears eight times in the
+4.164 panel with the same load addresses, which is either a connect retry loop or the console clearing
+and reprinting itself — the panel rows alone do not distinguish them; whether the second Fabia vote
+would also assert once this one is released; and every item 4.163 left open, unchanged.
+
+Rows:
+
+- **instrument**: `work/out/qemu-probe-4.163/gdbprobe28.py` (the clear: `Z0` at `DALSys+0x335c` and
+  `+0x346c`, the `/pmic/target` record suppressed, both sites `z0`-removed, then PC sampling with a
+  `M12000c,4:0` write when the sample is the poll) and `gdbprobe29.py` (the same guest, plus a stack
+  window and an fp walk at the spin and a watch for the dead-loop signature) — `gdb28-run.log`,
+  `gdb29-run.log`; panels `work/out/qemu-panel-4.164-clearbit.txt` (1175 rows) and
+  `work/out/qemu-panel-4.165-spincaller.txt` (956 rows), against 4.163's `-setup.txt` (1032 rows) as
+  the no-write control; the run's own load rows for the base (`ClockDxe.efi` at `0x0009C3FA000`,
+  `SdccDxe.efi` at `0x0009C3AF000`) and the on-disk images for the extents
+  (`Binaries/gauguin/QcomPkg/Drivers/{ClockDxe/ClockDxe.efi,SdccDxe/SdccDxe.efi,VcsDxe/VcsDxe.efi}`);
+  the disassembly of `ClockDxe` at `0xff2c`-`0xff54` and `0x81c0`-`0x81d4`; and the `.inf` files that
+  carry `4DB5DEA6-5302-4D1A-8A82-677A683B0D29`.
+- **shows**: one write of zero to the polled word, read back as zero, ends the `ClockDxe + 0x11cbc`
+  handshake in under a second; the run then prints `HAL_clk_FabiaPLLEnableVote Activate Failure`, the
+  `DebugAssert` id row carrying `4DB5DEA6-…` (ClockDxe's own module GUID) and `ASSERT HALclkFabiaPLL.c
+  +184: 0`, and stops on `ClockDxe + 0xff4c` — `str xzr,[sp,#8]; ldr x8,[sp,#8]; cbz x8,.`, edk2's
+  `CpuDeadLoop`, entered by `bl 0xff2c` from `ClockDxe + 0x81d0`; the same three rows and the same
+  parked PC in a second independent run; and, at the handshake, a caller chain whose three ClockDxe
+  frames (`+0x3a48`, `+0x3e0c`, `+0x1540`) sit on five `SdccDxe` frames (`+0xf768`, `+0x9c08`,
+  `+0x7668`, `+0x21a4`, `+0x2d74`, all inside its 106,496-byte image) with no `VcsDxe` address in the
+  window.
+- **adds**: the identification of the poll as a handshake that a single memory write can release, i.e.
+  that its endlessness is the absent acknowledgement and not a firmware loop; the name of what stands
+  behind it (`HAL_clk_FabiaPLLEnableVote` / `HALclkFabiaPLL.c:184` / `CpuDeadLoop`) so the run's end
+  state is a printed diagnosis rather than a silent park; `SdccDxe` as the caller waiting on the
+  handshake; the fact that `4DB5DEA6-…` is the blob's own embedded module GUID and not gauguin's
+  `34F25731-…`; and the determinism check that lets one run's panel supply another's load map.
+- **corrects**: 4.163's rail attribution — the `DALLOG Device VCS: Unable to set rail` row is not this
+  handshake's caller; its string is VcsDxe's and the waiting driver is `SdccDxe`. And 4.163's "a rail
+  handshake …, offered as the suggestion it is" is answered: the shape was right and the owner was
+  wrong.
+- **does not close**: whether the assert's function is the vote itself or its caller, which `SdccDxe`
+  frame issues the vote and at what rate, the eight-fold storage-stack repeat in the panel, whether a
+  second Fabia vote asserts too, and every open item 4.163 listed.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, and no stub,
+  firmware source or Microsoft image was changed or patched. The single memory write is to the QEMU
+  guest's own RAM, inside `virt.flash0`, and it exists only in that virtual machine; no file on this
+  disk was modified except `docs/`. `userdata` (107 GB, unbacked), the partition table and the firmware
+  LUN remain untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin,
+  P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
+  state remains a Windows tablet whose modem and cameras cannot be driven.

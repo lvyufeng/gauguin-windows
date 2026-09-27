@@ -583,6 +583,27 @@ only write that ever sets the bit it then waits on. A rail handshake against a c
 does not have, one layer below 4.160's `Clock_InitTarget`; the `DALLOG … Unable to set rail` row just
 above it in the panel is the shape it would have and not proof. See `docs/08` step 4.163.
 
+That suggestion is now withdrawn and the wall behind the handshake is named. One write of zero to the
+polled word, made while the PC is inside the poll, releases the handshake in under a second — and the
+run does not crash, it *diagnoses*: `HAL_clk_FabiaPLLEnableVote Activate Failure`, then
+`DebugAssert`'s row carrying `4DB5DEA6-5302-4D1A-8A82-677A683B0D29` (the shared module GUID the blob
+carries, not gauguin's `34F25731-…` — i.e. `ClockDxe` itself), then `ASSERT HALclkFabiaPLL.c +184: 0`,
+and then it stops on `ClockDxe + 0xff4c`, which is `str xzr,[sp,#8]; ldr x8,[sp,#8]; cbz x8,.` —
+edk2's `CpuDeadLoop`, entered by `bl 0xff2c` from `ClockDxe + 0x81d0` and terminal for the CPU. Two
+runs drew the same three rows, against a no-write control that ends at `Unable to set rail` and stays
+parked. So the ladder is three rungs deep on this guest and every rung is the same absence:
+`Clock_InitTarget`'s `0xfffffffd` (4.160), the handshake that cannot complete (4.163), and now a named
+Fabia PLL vote whose failure is unconditional — each the firmware correctly discovering that the
+hardware it was written for is not there. That bounds what further instrumentation buys, which is the
+useful result: faking clock votes one at a time is finite and uninformative, and the informative
+question is on the phone, where the controller is real and the wall is the missing architectural
+protocols at `DxeMain.c:593`. The stack also settles 4.163's other open item the other way round: at
+the handshake the caller chain is three `ClockDxe` frames (`+0x3a48`, `+0x3e0c`, `+0x1540`) on five
+`SdccDxe` frames (`+0xf768`, `+0x9c08`, `+0x7668`, `+0x21a4`, `+0x2d74`, all inside its 106,496-byte
+image), with no `VcsDxe` address in the window — so the waiting driver is the SD-card controller and
+the `VCS: Unable to set rail` row above it on the console is a neighbour, not the caller. The panel
+gives order; only the stack gives nesting. See `docs/08` step 4.164.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
