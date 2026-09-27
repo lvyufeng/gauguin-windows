@@ -2817,6 +2817,24 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > still read nowhere is `P2 APRI`'s `matched`/`miss`/`entries`, which describes the promotion walk
 > over the volume and has no per-dispatch analogue. See `docs/08` step 4.158.
 
+> **Extended 2026-09-27 by step 4.159 — the Apriori walk is seeded, one blob per slot, and slot 21
+> fails in the driver rather than in `DebugLib`.** Adding step 4.139's `pdc-cap.bin` (`00 00 10 00`
+> at `0x424a1008`) to the instrument that already carries step 4.135's two RSC blobs buys the next
+> slot: the run ticks `K 20 Ss 20/69 free=1024 C4D86DF4-D250-5062-8078-1DA30EA6D240` — `PdcDxe`'s
+> FFS GUID, the first `K 20` row and the first `C4D86DF4` on any panel in this tree — and then dies
+> at `Clock_Dxe`'s own assert, `Clock_DriverInit` (no newline) followed by
+> `ERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1A-8A82-677A683B0D29` and
+> `ASSERT ClockDriver.c +260: 0`. That is a different shape from the two walls before it: those end
+> at `DebugLib.c +78: Format != ((void *) 0)`, `DebugVPrint`'s NULL-format guard, while this one is
+> `DebugAssert` called by `ClockDxe` with its own file and line, so the failing check is readable
+> without disassembly and the driver's four `DALSYS_LOGEVENT_FATAL_ERROR: Clock_Init{...} failed.`
+> strings (`ClockDxe.efi:0x13214`-`0x132b6`, against `Clock_DriverInit` at `0x131b5`) never print.
+> The three vendor walls now name each driver twice — gauguin's FFS GUID on the `K` row,
+> `60F4DF83`/`C4D86DF4`/`34F25731`, against the shared id inside the blob on the `ERROR` row,
+> `CB29F4D1`/`B43C22DB`/`4DB5DEA6`, the last at `ClockDxe.efi:0x1d018`. Since the phase still does
+> not finish, the correction above stands unchanged: `P2 APRI` is still the one family nothing has
+> read. See `docs/08` step 4.159.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

@@ -32072,3 +32072,106 @@ same 1,171,456 B artifact step 4.155 leaves in `work/out/usb-host/`. `userdata`,
 table and the firmware LUN remain untouched. The porting goal is unchanged and unmet, with P3
 unfinished, P4's `userdata`-destroying install and P5's peripherals not begun, and the end state
 still a Windows tablet whose modem and cameras are undrivable.
+
+## Step 4.159 — the seed ladder is one seed per Apriori slot and the third one buys slot 20: `pdc-cap.bin` at `0x424a1008` puts `K 20 Ss 20/69 free=1024 C4D86DF4-…` on the panel and moves the wall to `ClockDxe`'s **own** assert — `ClockDriver.c +260: 0`, the driver's file and line, where the two slots before it died inside `DebugLib.c` — and the run prints both names of one driver for the first time, `60F4DF83`/`C4D86DF4` on the `K` rows against `CB29F4D1`/`B43C22DB`/`4DB5DEA6` on the `ERROR` rows
+
+**The third seed is step 4.139's, applied to the payload that is current rather than to the one
+that was.** The standing instrument plus step 4.135's two RSC blobs plus one more device line —
+
+    -device loader,file=/tmp/pdc-cap.bin,addr=0x424a1008,force-raw=on
+
+— where `pdc-cap.bin` is four bytes, `00 00 10 00` (little-endian `0x00100000`), chosen in step
+4.139 from the instruction that reads it: `0x2784` in `PdcDxe.efi` computes
+`w8 = ((w10 >> 16) & 0xff) << 2` and fails when `w8 <= w2`, so bits [23:16] must be non-zero and
+`0x10` there gives `w8 = 64`. `work/out/qemu-panel-4.159-pdc-cap.txt` is the run, 678 screens over
+170.3 s, and its tail is
+
+    K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+    Rpmh Sleep callback registration failed, Status = 0x8000000000000003
+    K 19 Ss 19/69 free=1024 60F4DF83-C758-52B5-9AA0-92EA560EDB8F
+    K 20 Ss 20/69 free=1024 C4D86DF4-D250-5062-8078-1DA30EA6D240
+    Clock_DriverInitERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1A-8A82-677A683B0D29
+    ASSERT ClockDriver.c +260: 0
+
+**One seed, one slot, three times.** The three configurations differ in nothing but what is
+preloaded, and each one moves the wall exactly one Apriori entry:
+
+| configuration | last `K` row on the panel | the slot that dies, and how |
+|---|---|---|
+| standing instrument | `K 18 Ss 18/69 … 40256211-…` (NpaDxe) | slot 19, `RpmhDxe`, `ASSERT DebugLib.c +78: Format != ((void *) 0)` with caller id `CB29F4D1-…` |
+| + the RSC word and enable pair | `K 19 Ss 19/69 … 60F4DF83-…` (RpmhDxe) | slot 20, `PdcDxe`, the same `DebugLib.c +78` assert with caller id `B43C22DB-…` |
+| + `pdc-cap.bin` at `0x424a1008` | `K 20 Ss 20/69 … C4D86DF4-…` (PdcDxe) | slot 21, `ClockDxe`, **its own** assert, `ClockDriver.c +260: 0`, caller id `4DB5DEA6-…` |
+
+Every one of the 20 `K` rows is `Ss` with `free=1024`, so all twenty loaded and started and the
+ladder's 4096-page rung failed on all twenty occasions. `C4D86DF4-D250-5062-8078-1DA30EA6D240` is
+`PdcDxe`'s FFS GUID in `Guid.xref` and `C4D86DF4` occurs in exactly one `INF` under `Binaries/` —
+gauguin's — and it appears on a panel for the first time in this run. The slot that dies is
+Apriori line 22 of `APRIORI.xhci-host.inc`, `Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.inf`,
+one line behind `PdcDxe`.
+
+**The two names are now three for three, and this run prints both of them side by side.** Step
+4.158 argued from two pairs that a `K` row names a driver by its FFS entry and an `ERROR` row names
+the same driver by an id compiled into its binary. The third pair is measurable the same way, and
+the run above shows the FFS half and the caller-id half within three rows of each other:
+
+| driver | FFS entry — `Guid.xref`, the `K` row | caller id — the `ERROR` row | where the id sits | shared by |
+|---|---|---|---|---|
+| RpmhDxe | `60F4DF83-C758-52B5-9AA0-92EA560EDB8F` | `CB29F4D1-7F37-4692-A416-93E82E219766` | `RpmhDxe.efi:0xe018` | 57 other boards' stubs |
+| PdcDxe | `C4D86DF4-D250-5062-8078-1DA30EA6D240` | `B43C22DB-6333-490C-872D-0A73439059FD` | `PdcDxe.efi:0x7018` | 22 other boards' stubs |
+| ClockDxe | `34F25731-EB1C-5681-B482-EE776F5AF58B` | `4DB5DEA6-5302-4D1A-8A82-677A683B0D29` | `ClockDxe.efi:0x1d018` | 73 other boards' stubs |
+
+Each of the three FFS GUIDs occurs in exactly one `INF` in the tree — gauguin's stub — while each
+caller id occurs in many, all of them some other board's: `CB29F4D1` in 57 boards' `RpmhDxe.inf`
+and 73 boards' `NpaDxe.inf`, which carry the same id for the same driver pair; `B43C22DB` in 22
+boards' `PdcDxe.inf`; `4DB5DEA6` in 73 boards' `ClockDxe.inf`. The stub and the binary disagree in
+all three cases, and the reading that makes the ladder legible is
+that the `ERROR` row is naming the slot that died and not a different driver: `K 20` is followed by
+an `ERROR` whose caller id is the *next* driver's, which is the same relation the first two rows
+have. Nothing here needs the two names to mean the same thing — they are two names for one file,
+and which one a row uses is decided by whether the row came from the dispatcher or from inside the
+binary.
+
+**The assert changes kind at slot 21, and that is the driver's own report rather than the
+DebugLib's.** The first two walls end at `DebugLib.c +78: Format != ((void *) 0)`, which step 4.136
+read as `DebugVPrint`'s own guard firing on a NULL format — a formatting accident reached from a
+failure path, which is why the failing check's own file and line never reach the console. The third
+wall ends at `ClockDriver.c +260: 0`, which is `DebugAssert` called *by the driver* with its own
+file, its own line and the description string `"0"` — so `ClockDxe` reports a failed check of its
+own rather than an accident in formatting, and this is the first slot in the ladder whose failure
+is readable without a disassembler. The panel row above it is the driver's own banner:
+`Clock_DriverInit` is printed with no trailing newline, so the status-code handler's `ERROR:` row
+begins on the same screen row it left off on. The literals that surround the banner in
+`Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi` (192,512 B, sha256 `c200d38e…`) are
+`Clock_DriverInit` at `0x131b5`, `ClockDriver.c` at `0x131c6`, `Clock_InitTarget` at `0x1329d`, and
+`DALSYS_LOGEVENT_FATAL_ERROR: Clock_InitBases failed.` / `Clock_InitVoltage failed.` /
+`Clock_InitTarget failed.` / `Clock_InitNPA failed.` at `0x13214`-`0x132b6` — so the driver has a
+named sub-init for each of the four, and the fatal-log text for `Clock_InitTarget` is **not** the
+row that appeared: the assert at `ClockDriver.c +260` came first. Step 4.139 identified the wall as
+`Clock_InitTarget` by disassembly; this run shows only the facade and agrees with it.
+
+**What this buys, and what is still wall.** Three preloaded words now buy three slots, on a payload
+that is not the one they were found on, and the phase still does not finish: slot 21 is a driver
+assert, which spins the CPU and stops the Apriori walk exactly where slot 19 stopped it. So the
+`P2 APRI` row family step 4.158 named as the only unread one is still unread, and the route to it
+is unchanged — either seed `ClockDxe`'s target as `PdcDxe` was seeded, or print `P2 APRI` from
+`P2Tick` so that it does not depend on the phase finishing. Everything before slot 21 is now a
+known quantity on the current payload under this instrument: twenty consecutive dispatches that
+load and start, a free-run supply that does not move, two IORT nodes the payload does not declare
+(`SDC2` and `SDC_EMMC`), one read-only attribute request on the runtime page `0x9FF8C000` that
+fails, and the three vendor walls with their three names each.
+
+Left open: whether `ClockDriver.c +260` is a checkable state or another unpassable one, which needs
+the disassembly step 4.139 began and not another panel; `P2 APRI`'s eight fields; whether the
+sequence line's characters are indexed by Apriori ordinal or by promotion order; the arch-protocol
+display's nine names; and the step 4.153-4.156 items unchanged — whether the stock Setup-Media BCD
+boots a *substituted* `boot.wim`, `winpeshl.ini`, the 1 GB stick, `UrsSynopsys.sys`'s child naming,
+`ExcludeFromSelect` and the `*<PNP-id>` position. The rest of step 4.158's list is unchanged too.
+
+Not an action: no device was touched, nothing was flashed, no partition was written, no stub,
+firmware source or Microsoft image was changed or patched. The run is QEMU on the host with three
+four-byte-to-5-KiB blobs preloaded through `-device loader`, which writes guest RAM and not the
+payload; the payload is the same 1,171,456 B artifact step 4.155 leaves in `work/out/usb-host/`,
+and its only delta from the two runs of step 4.158 is the third loader line. `userdata`, the
+partition table and the firmware LUN remain untouched. The porting goal is unchanged and unmet,
+with P3 unfinished, P4's `userdata`-destroying install and P5's peripherals not begun, and the end
+state still a Windows tablet whose modem and cameras are undrivable.

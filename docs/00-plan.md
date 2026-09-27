@@ -461,6 +461,36 @@ largest free run is in `[1024, 4096)` pages. The caller id is not the FFS GUID: 
 `P2 APRI`'s `matched`/`miss`/`entries`, which describes the promotion walk itself and has no
 per-dispatch analogue.
 
+**Step 4.159 put step 4.139's third seed under that same payload and crossed the slot-20 wall, and
+what is behind it is a different kind of wall.** Three preloaded blobs now buy three slots: the
+standing instrument ticks 18, the two RSC seeds from step 4.135 buy slot 19, and step 4.139's
+`pdc-cap.bin` — four bytes, `00 00 10 00`, at `0x424a1008`, chosen from `PdcDxe.efi`'s own compare
+at `0x2784` where bits [23:16] must be non-zero — buys slot 20. The run
+(`work/out/qemu-panel-4.159-pdc-cap.txt`, 678 screens/170.3 s) is the **first reading in this tree
+with a `K 20` row and the first with `4DB5DEA6-…` in it**, and its tail is
+
+    K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+    Rpmh Sleep callback registration failed, Status = 0x8000000000000003
+    K 19 Ss 19/69 free=1024 60F4DF83-C758-52B5-9AA0-92EA560EDB8F
+    K 20 Ss 20/69 free=1024 C4D86DF4-D250-5062-8078-1DA30EA6D240
+    Clock_DriverInitERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1A-8A82-677A683B0D29
+    ASSERT ClockDriver.c +260: 0
+
+so slot 20 is `PdcDxe` (`C4D86DF4-…` is its FFS GUID, present on a panel for the first time) and the
+wall is now slot 21, `ClockDxe`. The assert changes kind: the first two walls end at
+`DebugLib.c +78: Format != ((void) 0)`, which is `DebugVPrint`'s guard firing on a NULL format — a
+formatting accident reached from a failure path — while this one ends at `ClockDriver.c +260: 0`,
+`DebugAssert` called by the driver with its own file, line and description, the first ladder failure
+in this tree readable without a disassembler. The row above it is that driver's own banner printed
+with no newline, `Clock_DriverInit` (`ClockDxe.efi:0x131b5`, 192,512 B, sha256 `c200d38e…`), and
+the literals around it name a sub-init per stage — `DALSYS_LOGEVENT_FATAL_ERROR: Clock_Init{Bases,
+Voltage,Target,NPA} failed.` at `0x13214`-`0x132b6` — none of which printed, so the assert preceded
+the fatal log. The names split three-for-three now: each `K` row names the driver by gauguin's own
+FFS GUID and each `ERROR` row names it by the shared id compiled into the vendor blob, `4DB5DEA6-…`
+at `ClockDxe.efi:0x1d018` being 73 boards' `ClockDxe` against gauguin's `34F25731-…`. All 20 `K`
+rows are still `Ss` with `free=1024`. The phase still does not finish, so `P2 APRI` remains the one
+row family nothing has read. See `docs/08` step 4.159.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
