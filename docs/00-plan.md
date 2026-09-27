@@ -462,7 +462,7 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152 and 4.153): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153 and 4.154): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the
@@ -535,6 +535,26 @@ open is the other thing this file has been carrying: which id names `URS0`'s chi
 URS children are `<parent>&FUNCTION` where the vendor filter's is `<parent>&HOST`, and that `PNP0D80`
 *is* named — by `machine.inf`, root-enumerated as `*PNP0D80` with a `NO_DRV` placeholder, a fourth
 position the census's `ACPI\` scan cannot see.
+Step 4.154 then read the image the P3 gate actually loads, which is the *third* ESD image rather
+than the first. The three are one medium in three pieces: image 1, `Windows Setup Media`, 274.6 MB,
+is the medium's whole EFI tree — `/efi/boot/bootaa64.efi`, `/bootmgr.efi`, `/efi/microsoft/boot/cdboot.efi`
+and its `_noprompt` twin, the BCD, `/boot/boot.sdi`, `efisys.bin`, the boot fonts, `bootres.dll` —
+and it holds **no `/sources/boot.wim`** among its 934 files under `/sources/`, because that is image
+2. The loaders are ARM64 by their PE headers, not by their names: `bootaa64.efi` (2,622,784 B),
+`bootmgr.efi` (2,608,560 B) and `cdboot.efi` (968,096 B) all carry machine `0xaa64`; the
+removable-media slot is `BOOTAA64.EFI` and there is no `bootarm64.efi` or `bootx64.efi` in any of
+the three images, so the obvious-looking analogue is the one name that would not be found; and
+`bootaa64.efi` hashes identically to image 2's `bootmgfw.efi`, so it is the boot manager under its
+fallback name rather than a separate program. Image 2 is the WinRE WIM, **233 DriverStore packages,
+all 233 `_arm64_`**, all 233 `.inf` readable with `--ref` and none empty, and `--bind` gives 63
+claimed ids — 55 hardware, 5 compatible-only, 3 `ExcludeFromSelect`. Both storage-path ids are among
+them: `storufs.inf` claims `ACPI\QCOM24A5` for `UFS0` and `urssynopsys.inf` claims `ACPI\PNP0CA1`,
+`URS0`'s `_CID`, in the `compatible` position, with all four URS files present in the boot image. That
+is a difference from x64, where the boot image carried the child driver only, and it means the
+earlier reading that booting the installer would leave `URS0` unbound does not transfer. The image
+also carries `diskpart.exe`, `Dism.exe` and `bcdboot.exe`, so Microsoft-signed files alone can
+partition, format, apply and re-boot, and the only non-Microsoft byte a P3 medium needs is a
+two-line `winpeshl.ini` — image 2's own 53-byte copy starts `recenv.exe`, not a prompt.
 Buttons are written as of Step 4.89 (`BTNS`, `ACPI0011`), the node that needed
 no shipped driver at all because the operating system supplies it, and the USB port is written
 as of Step 4.90 — the `RHUB`/`PRT1` pair under each of `URS0`'s two children, the node that

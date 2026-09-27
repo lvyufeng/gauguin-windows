@@ -31206,3 +31206,116 @@ unpacked `wimlib-imagex` were added under `~/work` and `~/opt`, which are build 
 not device state. The porting goal is unchanged and unmet, with P3 unfinished, P4's
 `userdata`-destroying install and P5's peripherals not begun, and the end state still a
 Windows tablet whose modem and cameras are undrivable.
+
+## Step 4.154 — the P3 gate's own image is the ESD's *second*, not its first, and on ARM64 it binds both of gauguin's storage ids where the x64 boot image bound one: the medium is image 1's EFI tree plus image 2 written out as `\sources\boot.wim`, the removable-media loader is `BOOTAA64.EFI` and hashes identical to `bootmgfw.efi`, and `bootarm64.efi` exists nowhere
+
+Step 4.153 obtained and read the ARM64 media. What was not asked is which of its three images the
+P3 gate actually loads, and the answer changes the plan: the three are one install medium in three
+pieces, not three alternatives. `wimlib-imagex info` on `professional_en-us.esd` gives `Windows
+Setup Media` (1), `Microsoft Windows Recovery Environment (arm64)` (2), `Windows 11 Pro` (3) —
+and image 1, 274.6 MB, is the medium's whole EFI tree with **no `/sources/boot.wim` among its 934
+files under `/sources/`**. That WIM is image 2. So the pairing is forced: image 1 provides the ESP,
+image 2 provides the OS the BCD in image 1 boots.
+
+The EFI tree, extracted from image 1 with the same `--ref` set image 3 needed:
+
+    /efi/boot/bootaa64.efi          2,622,784 B   PE\0\0 machine 0xaa64
+    /bootmgr.efi                    2,608,560 B   PE\0\0 machine 0xaa64
+    /efi/microsoft/boot/cdboot.efi    968,096 B   PE\0\0 machine 0xaa64
+    /efi/microsoft/boot/bcd            16,384 B   regf
+    /boot/boot.sdi                  3,170,304 B   $SDI
+    /efi/microsoft/boot/efisys.bin  1,720,320 B   \xeb<\x90 (FAT boot sector)
+    plus /efi/microsoft/boot/fonts/, resources/bootres.dll, cipolicies/, winsipolicy.p7b
+
+Three of those readings are worth more than the file list. The loaders are ARM64 **by their own
+headers**, not by their names — `0xaa64` in the PE machine field, which is the one property a
+renamed or substituted file could not fake. The removable-media slot is `BOOTAA64.EFI`: a grep
+for `bootarm64` or `bootx64` across all three image listings returns zero hits, so the name that
+reads as the obvious analogue of `bootx64.efi` is not the name Microsoft uses, and a medium
+written with it — or with the x64 spelling — is one the firmware finds nothing on. And
+`bootaa64.efi` is not a separate program: its sha256 is
+`6a5aa7f0bcd53267ae551ebe0b667b4a60eb02535b52b53480173f0c2eb8c332`, identical to image 2's
+`/Windows/Boot/EFI/bootmgfw.efi`, so the fallback name is the boot manager renamed into the
+removable-media slot rather than a loader of its own.
+
+The BCD is a registry hive — `regf`, 16,384 B — and its own UTF-16 strings name the chain it
+will follow, so it can be read without a hive parser:
+
+    \boot\boot.sdi
+    \sources\boot.wim
+    \windows\system32\boot\winload.efi
+    \windows                                (device)
+    Windows Setup / Windows Boot Manager / en-US
+    \bin\media\client\efi\arm64\BCD          (build-time source path)
+
+The last line is Microsoft's own record of which architecture tree this BCD was built in, which
+makes three independent confirmations of the arch (PE machine, the `bootaa64` name, this path).
+The first two lines are what make `\sources\boot.wim` a *contract* rather than a convention: the
+medium's BCD already looks for a WIM at that path beside a `\boot\boot.sdi`, both of which image
+1 ships (the `.sdi`) and image 2 *is* (the WIM).
+
+Then image 2, which is the image the gate depends on and which this step measured rather than
+inferred. 233 DriverStore packages, **all 233 `_arm64_`** — no `_amd64_`, no `_x86_`, no
+exception. All 233 `.inf` extract with `wimlib-imagex extract … 2 '/Windows/System32/DriverStore/FileRepository/*/*.inf' --ref=…`
+in one pass, **zero zero-byte** — where image 3's larger 389-package set left three unreadable
+(`helloface`, `ntprint`, `prnms003`). The delta-WIM penalty that image 3 pays is smaller here
+because this image is not delta: the glob works, and the per-path-with-tolerance loop Step 4.153
+needed is not needed for it.
+
+`--bind` against those 233 gives **63 distinct `ACPI\` ids claimed** — 55 hardware, 5
+compatible-only, 3 `ExcludeFromSelect`-only, and the same five `[Strings]` key names that bind
+nothing (`ARMH_PL180`, `DOCKDEVICE_DESC`, `FIXEDBUTTON_DESC`, `INT33BA`, `THERMALZONE_DESC`).
+Both of this table's storage-path ids are among the 63:
+
+    QCOM24A5     1x  claimed by storufs.inf            UFS0 (line 166)
+    PNP0CA1      1x  claimed by urssynopsys.inf        URS0 (line 5634)
+                     compatible id - bound in the position a node is matched on
+                     when nothing claims its hardware id
+
+And this is where the ARM64 image differs from the x64 one rather than repeating it. Step 4.152
+recorded that the x64 `boot.wim` is 339 `_amd64_` packages whose only URS file is the
+function-side child driver, which is why this repository's own note says booting the installer
+would leave `URS0` unbound. On ARM64 that is false: all four URS files — `urssynopsys.inf`,
+`ufxsynopsys.inf`, `urschipidea.inf`, `ufxchipidea.inf` — are in the boot image, so `URS0`'s
+`_CID` is claimed by the very image the P3 medium would load. The x64 boot image and the ARM64
+boot image are therefore **not** the same set with different architecture suffixes, and an
+inference from the first to the second would have been wrong in the direction that costs this
+port a device. The 33 QCOM ids no driver claims is the same 33 in both OS images; the
+`QCOM24A5` count is the same 1.
+
+What the image can do by itself, which is the other half of the gate. It carries `winpeshl.exe`,
+`wpeinit.exe`, `wpeutil.exe`, `cmd.exe` and the three that do the work — `diskpart.exe`,
+`Dism.exe`, `bcdboot.exe` — so partitioning, formatting, applying an image and writing a boot
+entry are all covered by Microsoft-signed files already in hand; no ADK, no custom PE, no
+vendor driver. The one file that would not be Microsoft's is `winpeshl.ini`, and image 2's own
+copy is 53 bytes of CRLF text:
+
+    [LaunchApp]
+    AppPath=X:\sources\recovery\recenv.exe
+
+so the stock image starts Recovery, not a prompt. WinPE's `winpeshl.exe` looks for
+`%SYSTEMROOT%\System32\winpeshl.ini` and runs `wpeinit.exe` then `cmd.exe` when it is absent —
+documented behaviour, and stated here as documented: it is not measurable from this host, and
+the device is where it gets checked.
+
+So the P3 medium resolves to: image 1's EFI tree written into an ESP with `bootaa64.efi` (or
+`bootmgfw.efi`) at `\EFI\BOOT\BOOTAA64.EFI`, image 2 exported as `\sources\boot.wim` beside
+`\boot\boot.sdi` and the stock `\EFI\MICROSOFT\BOOT\BCD`, and at most a two-line `winpeshl.ini`.
+Every one of those bytes comes from Microsoft-signed media already on this host, and the question
+the gate asks — does the platform reach a Windows that can see UFS — has the media's own answer
+in it, since `storufs.inf` in that very image claims `ACPI\QCOM24A5`.
+
+Left open: whether the stock Setup-Media BCD boots a *substituted* `boot.wim` unchanged, which
+is the medium's one unverified assumption and is only checkable by building it; the `winpeshl.ini`
+fallback above, documented rather than measured; `UrsSynopsys.sys`'s child naming and the
+`ExcludeFromSelect` and `*<PNP-id>` questions carried from Step 4.153; and the P2 gate, which is
+where the next device window starts.
+
+Not an action: nothing was built for the device, nothing was flashed, no partition was written,
+no stub or firmware source was changed and no patch was written into any image. No QEMU run, no
+probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no
+Qualcomm USB device is present. `userdata`, the partition table and the firmware LUN remain
+untouched; the extractions went to `/tmp/p3boot` and `/tmp/winre-infs` and are build inputs, not
+device state. The porting goal is unchanged and unmet, with P3 unfinished, P4's
+`userdata`-destroying install and P5's peripherals not begun, and the end state still a Windows
+tablet whose modem and cameras are undrivable.

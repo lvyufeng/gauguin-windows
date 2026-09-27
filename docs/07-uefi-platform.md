@@ -2667,6 +2667,58 @@ install-no-driver placeholder rather than a driver, so "claimed" would be the wr
 well. `PNP0CA2` and `PNP0CA3` return zero files in the arm64 set, so the tool's note that
 groups the three as vendor CIMs is right about those two.
 
+**Step 4.154 read the image the P3 gate actually loads, and on ARM64 it is not the image the
+x64 reading was of.** The ESD's three images are the three pieces of one install medium, not
+three alternatives. Image 1, `Windows Setup Media`, 274.6 MB, carries the medium's whole EFI
+tree — `/efi/boot/bootaa64.efi`, `/bootmgr.efi`, `/efi/microsoft/boot/cdboot.efi` and its
+`_noprompt` twin, `/efi/microsoft/boot/bcd`, `/boot/boot.sdi`, `/efi/microsoft/boot/efisys.bin`,
+the boot fonts, `bootres.dll` and `cipolicies/` — and **no `/sources/boot.wim`**: 934 files
+under `/sources/`, `setup.exe` among them, and the WIM the BCD boots is not one of them. Image
+2 is that WIM, which is why the two are a pair.
+
+The loaders are ARM64 by their own headers rather than by their names. `bootaa64.efi`
+(2,622,784 B), `bootmgr.efi` (2,608,560 B) and `cdboot.efi` (968,096 B) are all `PE\0\0` with
+machine `0xaa64`. The removable-media slot is `BOOTAA64.EFI`, and there is no `bootarm64.efi`
+or `bootx64.efi` anywhere in the three images — the first is a name that reads as the obvious
+analogue and is not the one Microsoft uses, the second belongs to the other architecture. A
+medium written with either is one the firmware finds nothing on. `bootaa64.efi` is not a
+separate program: its sha256 is `6a5aa7f0bcd53267ae551ebe0b667b4a60eb02535b52b53480173f0c2eb8c332`,
+which is byte-identical to image 2's `/Windows/Boot/EFI/bootmgfw.efi`, so the removable-media
+loader *is* the boot manager under its fallback name. `boot.sdi` is a real SDI (`$SDI`,
+3,170,304 B) and `efisys.bin` a FAT boot sector (1,720,320 B). The BCD is a registry hive —
+`regf`, 16,384 B — and its own strings name the chain it will follow: `\boot\boot.sdi`,
+`\sources\boot.wim`, `\windows\system32\boot\winload.efi`, the device `\windows`, `Windows
+Setup`, `Windows Boot Manager`, and its build-time source path
+`\bin\media\client\efi\arm64\BCD`.
+
+Image 2 is where the gate's answer is. **233 DriverStore packages, all 233 `_arm64_`**, and
+all 233 `.inf` extract with the same `--ref` set, none of them empty — where image 3's larger
+389 gave three unreadable. `--bind` gives **63 claimed ids**: 55 hardware, 5 compatible-only,
+3 `ExcludeFromSelect`-only, and the same five `[Strings]` key names that bind nothing. Both of
+this table's storage-path ids are in that 63. `storufs.inf` claims `ACPI\QCOM24A5` for `UFS0`,
+and `urssynopsys.inf` claims `ACPI\PNP0CA1` — `URS0`'s `_CID`, in the `compatible` position.
+All four URS files are present in the boot image, not only the function-side children, and that
+is a **difference from x64 rather than a repeat of it**: the x64 `boot.wim` was 339 `_amd64_`
+packages with the child driver only, which is why the note above says booting the installer
+would leave `URS0` unbound. On this image it would not, so an inference from the x64 boot image
+to the ARM64 one would have been wrong in the direction that costs the port a device.
+
+The image also carries what it needs to install rather than only to boot — `winpeshl.exe`,
+`wpeinit.exe`, `wpeutil.exe`, `cmd.exe`, and the three that do the work, `diskpart.exe`,
+`Dism.exe`, `bcdboot.exe` — so Microsoft-signed content alone covers partitioning, formatting,
+applying an image and writing a boot entry. The one file that would not be Microsoft's is
+`winpeshl.ini`: image 2 ships a 53-byte one, `[LaunchApp]` / `AppPath=X:\sources\recovery\recenv.exe`,
+so it starts Recovery rather than a prompt. WinPE's `winpeshl.exe` looks for
+`%SYSTEMROOT%\System32\winpeshl.ini` and runs `wpeinit.exe` then `cmd.exe` when it is absent —
+documented behaviour, and the next thing to check on the device rather than a measurement from
+this host.
+
+So a P3 medium is answerable from files already here: image 1's EFI tree, image 2 written out
+as `\sources\boot.wim`, and at most a two-line `winpeshl.ini`. Nothing in it is a custom driver
+and nothing in it needs the vendor package — which is the point, because the gate is "does the
+platform reach a Windows that can see UFS", and the media's own answer to `QCOM24A5` is
+already yes.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

@@ -44,6 +44,8 @@
 # the URS *parent*: `urssynopsys.inf` binds `ACPI\QCOM24B6, ACPI\PNP0CA1`, so the
 # `_CID` this port writes on URS0 is claimed there and appears claimed nowhere
 # in boot.wim, whose only URS file is the function-side child driver.
+# That last clause is an x64 measurement and does *not* transfer - see Step 4.154
+# at the end of this header.
 #
 # Read out of an *x64* image, and that is measured rather than taken from the
 # ISO's name: a DriverStore folder is `<inf>_<arch>_<hash>`, so the suffix
@@ -98,6 +100,35 @@
 # with `libwim15t64`, `libntfs-3g90` and `libfuse3-4`, and run with
 # `LD_LIBRARY_PATH=$HOME/opt/wimlib/usr/lib/x86_64-linux-gnu`. The same unpack
 # provides `mkwinpeimg`, which is what a P3 boot medium will be built with.
+#
+# Step 4.154 read the ARM64 image the P3 gate actually loads, and it is the ESD's
+# *second* image rather than its first. The three are one medium in three pieces:
+# image 1 `Windows Setup Media` (274.6 MB) is the medium's whole EFI tree and has
+# no `/sources/boot.wim` among its 934 files under `/sources/`; image 2 (WinRE) is
+# that WIM; image 3 is the OS. So the ARM64 twin of the x64 `boot.wim` run above
+# is **image 2**, and its numbers are 233 DriverStore packages, **all 233
+# `_arm64_`**, all 233 `.inf` extractable in one glob with the `--ref` set and
+# none of them empty - the delta penalty above is image 3's, not this one's.
+# `--bind` gives 63 claimed ids: 55 hardware, 5 compatible-only, 3
+# `ExcludeFromSelect`-only, and the same five `[Strings]` key names.
+#
+# The correction, and the reason the x64 clause four paragraphs up is marked: on
+# ARM64 the boot image claims **both** of this table's storage ids. `storufs.inf`
+# claims `ACPI\QCOM24A5` for UFS0, and `urssynopsys.inf` claims `ACPI\PNP0CA1` -
+# URS0's `_CID`, in the `compatible` position - because all four URS files are
+# present in image 2, not only the function-side children. The x64 boot.wim and
+# the ARM64 boot image are therefore not the same set with different suffixes, so
+# "nothing binds this" read off one is not a statement about the other. Which
+# image you read is part of the answer, and so is which architecture it is.
+#
+# For the medium itself, two facts worth carrying: the removable-media loader slot
+# is `BOOTAA64.EFI` - a grep for `bootarm64` or `bootx64` across all three images
+# returns nothing, and the obvious-looking analogue is the one name firmware would
+# not find - and image 1's `bootaa64.efi` hashes identically to image 2's
+# `bootmgfw.efi`, so it is the boot manager renamed into that slot. The BCD is a
+# `regf` hive whose own strings name `\boot\boot.sdi` and `\sources\boot.wim`, so
+# the medium's contract with this script is explicit: image 1's EFI tree, image 2
+# written out at that path, and at most a two-line `winpeshl.ini`.
 #
 # An earlier draft of this header said "both images: 339 .inf files, 85 distinct
 # `ACPI\` ids". That was boot.wim's count written twice: the install.wim run had
