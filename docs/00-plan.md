@@ -519,6 +519,26 @@ only content is the caller id. What separates the five exits is one register: `X
 reads `0xa7b0`/`0xa7f4`/`0xa804`/`0xa888`/`0xa898` for exits 1-5, so one breakpoint there decides
 it without a new seed. See `docs/08` step 4.160.
 
+That breakpoint was set, and the exit that fires is **4**: `X30 = 0x9c40d888` at RVA `0xa7b4` is
+`0xa888`'s `bl 0xb348` for domain 0, the `w0 = 0` rate call, with `x0 = 0xffffffff` — `0xb348`'s own
+failure value — as the branch's operand. The helper it fails in is a bounded poll, and that makes
+4.160's remaining question decidable from code alone: `0xb8f0` re-reads one status register at most
+200 times, returns `1` only once bit 31 of it has gone to 1 (with the low six bits of that family's
+`+16` register as the rate), and returns `0` otherwise, on which `0xb348` returns `-1`. A zeroed
+register model therefore fails this call **by construction** — the zeroed clock registers are exit
+4's cause, not a bystander. Acting on that, `/tmp/apcs-clk.bin`'s four nonzero words loaded at
+`0x46d21700` — the stage-2 image, via the block-193 redirect recorded in `s2_l2.inc`, of the two
+registers `0xb8f0` polls — carry the same 175 s panel **past `ClockDriver.c +260`**: no
+`Clock_DriverInit` row, no `ERROR: C90000002`, no assert, and 140 driver loads instead of 34, through
+`ShmBridgeDxe`, `ScmDxe`, `SdccDxe`, `UFSDxe`, `PmicDxe`, `BdsDxe`, `GpiDxe` and `I2C` to a new and
+different wall in `AdcDxe` — a synchronous exception at `DALSys.dll+0x346c`, `FAR
+0xAFAFAFAFAFAFAFAF` (`PcdDebugClearMemoryValue`, `MdePkg.dec:2440`), inside the function whose own
+exhausted-search message is `DAL device (0x%s) not found`. So the ladder has moved for the first
+time since 4.139's seeds, and it moved onto a driver data structure with an uninitialised field
+rather than a clock register. It has not moved onto a clock controller: the ready bit and the rate
+index are fabricated by the instrument, and on hardware those registers are the controller's real
+state. See `docs/08` step 4.161.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first

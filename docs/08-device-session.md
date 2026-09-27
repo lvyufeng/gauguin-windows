@@ -32446,3 +32446,378 @@ Rows:
   goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying install and P5's
   peripherals not begun, and the end state still a Windows tablet whose modem and cameras are
   undrivable.
+
+## Step 4.161 — the exit that fired is 4, and the seed that clears it takes the wall off `ClockDxe` altogether: `X30 = 0x9c40d888` at RVA `0xa7b4` is `0xa888`'s `bl 0xb348` for domain 0, `0xb8f0` inside it succeeds only when a status bit has gone to 1 so a zeroed register model fails it by construction, `/tmp/apcs-clk.bin`'s four nonzero words at machine `0x46d21700` — the stage-2 image of `0x18321700` — carry a 175 s run past `ClockDriver.c +260` to 140 driver loads, and the wall it lands on is a wild-pointer abort inside `DALSys.dll` at `+0x346c`, in the function whose own message at `0x6f4b` is `DAL device (0x%s) not found`, on a table entry whose `+24` field is still the `0xAF` fill
+
+Step 4.160 left two questions and both are closed here, one by an instrument and one by a seed. The
+instrument is the one 4.160 itself ordered — a breakpoint at RVA `0xa7b4` with `X30` read out — and
+it says **exit 4**: the `w0 = 0` domain-0 rate call, `X30 = 0x9c40d888`. The seed is
+`/tmp/apcs-clk.bin`, one of four blobs step 4.140 swept in without a derivation, and under a
+175-second panel it does what no step since 4.139 has done: the run **gets past `ClockDriver.c
++260`**, loads 140 drivers, and dies somewhere else, at a different kind of fault. 4.160's second
+question — whether this machine's zeroed registers are the *cause* of exits 4 and 5 or merely
+adjacent to them — is answered in the form that matters operationally: `0xb8f0`, the helper exit 4
+depends on, **cannot return success against a zeroed register**, because it returns success only
+after a status bit it polls has gone to 1, and it gives up and fails after 200 reads.
+
+### The instrument, and the register that fired
+
+`work/out/qemu-probe-4.161/gdbprobe21.py` sets one software breakpoint at `ClockDxe` base +
+`0xa7b4` — the epilogue every failing `Clock_InitTarget` exit jumps to — and reads the register file
+at the stop. The base `0x9c403000` is 4.139's derivation (`X21 − 0x131c6`), and the run re-checks it
+in the guest instead of trusting it: the breakpoint reply is `OK` (`gdb21-run.log:4`), and at the
+stop the two strings at `base+0x131c6` and `base+0x131d4` read `ClockDriver.c` and `0`, and the word
+at the breakpoint address reads `e07b1e32` — the little-endian `0x321e7be0`, `orr w0, wzr,
+#0xfffffffd`, untouched by the breakpoint. The argv is `gdb21-run.log:1`: `/tmp/phone-payload.raw`
+under the SMEM-only stub `/tmp/qemu-el3-lc5j822m/el3.bin` (`f567b832…`) with `rsc-word.bin`,
+`rsc-enable.bin` and `pdc-cap.bin` — 4.159's seed ladder, no new loader line, so the capture point is
+the only change from 4.159's instrument.
+
+The stop lands at 7.3 s with `PC = 0x9c40d7b4` and **`X30 = 0x9c40d888`**, which against 4.160's
+discriminator table is exit 4 and only exit 4:
+
+| exit | `X30` at `0xa7b4` | the `bl` it came from | measured |
+|---|---|---|---|
+| 1 | `0xa7b0` | `bl 0xa93c`, the clock-controller probe | — |
+| 2 | `0xa7f4` | `bl 0x33d8`, the domain-name lookup | — |
+| 3 | `0xa804` | `bl 0x3468`, the tagged-index lookup | — |
+| **4** | **`0xa888`** | **`bl 0xb348`, domain 0, `w0 = 0`** | **`0x9c40d888`** |
+| 5 | `0xa898` | `bl 0xb348`, domain 2, `w0 = 2` | — |
+
+Two registers in the same dump corroborate it independently of `X30`. `x0 = 0xffffffff` is the
+value the failing call returned and that `cbnz w0, 0xa7b4` is branching on — `0xb348`'s own failure
+value, loaded at `0xb3e4` as `mov w0, #0xffffffff`. And `x9 = 0x18325f00` is the domain-entry base
+`0xb348` computes as `[ctx+96] + 0x60*w0` — with `w0 = 0` it is `[ctx+96]` itself, and it is the one
+address `0xb8f0` names as its family-1 register. Neither is needed to pick the exit; both are what
+the exit predicts.
+
+### `0xb348`, and the poll inside it that a zeroed register cannot pass
+
+Exit 4's helper is short enough to read in full, and it fails in one place:
+
+```
+b348: sub  sp, sp, #0x40
+b35c: mov  x19, x1                     ; the out-pointer for the rate
+b360: mov  w20, w0                     ; the domain, 0 here
+b364: bl   0x1cc0                      ; fetch the driver context
+b36c: ldr  x21, [x0, #96]              ; the domain-entry base
+b370: ldr  w9, [x8, #920]              ; .data 0x2c398
+b374: cbz  w9, 0xb384                  ; non-zero -> early-out (below)
+b378: mov  w8, #0xa300
+b37c: movk w8, #0x11e1, lsl #16        ; 0x11e1a300 = 300 MHz, and no call at all
+b38c: umaddl x9, w20, #0x60, x21       ; domain entry, stride 0x60
+b394: ldr  x10, [x9, #8]
+b398: ldr  x22, [x10, #8]              ; the rate-descriptor pointer
+b39c: bl   0xb8f0                      ; the poll -- this is where it fails
+b3a0: and  w8, w0, #0xff
+b3a4: cbz  w8, 0xb3e4                  ; w0 = 0 -> return -1
+b3a8: ldr  w8, [sp, #12]               ; the index 0xb8f0 wrote
+b3b8: add  x11, x22, x8, lsl #3
+b3bc: add  x13, x11, #0x8
+b3c0: str  x13, [x12, #16]             ; the domain entry's +16 gets a pointer
+b3c8: mov  w0, wzr
+b3cc: str  w8, [x19]                   ; the rate, out
+b3e4: mov  w0, #0xffffffff             ; #-1
+```
+
+So the success path is: poll, take the index the poll returned, index a pointer array at `x22` (which
+`0xb348` itself read as `[[entry+8]+8]`, a descriptor the driver built at run time and not a table in
+the file), store the pointer at `+8` of that array into the domain entry's `+16`, and write the
+32-bit rate at `[x11+8]` to the caller's out-word. The failure is one branch, `0xb3a4`, on a zero
+return from `0xb8f0`.
+
+`0xb8f0` is a bounded poll over three register families, and its control flow is the whole story:
+
+```
+b8f4: mov  w8, #0x1700
+b8fc: movk w8, #0x1832, lsl #16        ; 0x18321700
+b8f8: mov  w9, #0x5f00
+b904: movk w9, #0x1832, lsl #16        ; 0x18325f00
+b900: mov  w10, #0xc8                  ; 200
+b908: cmp  w0, #0x2                    ; family 2 -> ldr w15, [x8]
+b910: cmp  w0, #0x1                    ; family 1 -> ldr w13, [x9]
+b91c: ldr  w11, [x8, #8192]            ; family 0 -> 0x18323700
+b920: lsr  w12, w11, #31               ; bit 31 only, into a stack byte
+b948: sub  w10, w10, #0x1
+b94c: cbz  w10, 0xb958                 ; 200 reads and out
+b954: cbz  w17, 0xb908                 ; bit clear -> read again
+b958: ldrb w10, [sp, #12]
+b95c: cbz  w10, 0xb998                 ; never set -> w0 = 0, *out = 0
+b974: mov  w10, #0x3710
+b978: movk w10, #0x1832, lsl #16       ; family 0 -> 0x18323710
+b97c: orr  w0, wzr, #0x1               ; set -> w0 = 1, *out = [reg+16] & 0x3f
+```
+
+Read as behaviour rather than as instructions: the helper waits for bit 31 of one status register to
+go to 1, re-reading it at most 200 times, and then either returns **1** with the low six bits of the
+same family's `+16` register in the out-word, or returns **0** with a zero in the out-word if the bit
+never set. `0xb348` fails on 0. That is the mechanism, and it makes step 4.156-4.160's reading of
+this wall exact: the register model this instrument gives the guest has zeros in these registers, the
+bit therefore never sets, the poll exhausts its 200 reads, `0xb8f0` returns 0, and `0xb348` returns
+`-1` into `Clock_InitTarget`'s epilogue at `0xa888`. The zeroed register is not adjacent to exit 4 —
+it is exit 4's cause, and it is a *guaranteed* cause rather than a probabilistic one.
+
+One further thing the addresses say. The two registers the poll reads, `0x18321700` and `0x18323700`,
+sit exactly `0x5f0` above two of the six bases 4.160 tabulated for `0xa93c`'s probes
+(`0x18321110 + 0x5f0 = 0x18321700`, `0x18323110 + 0x5f0 = 0x18323700`). They are the same register
+file read at a different offset, and the probes at `+0x2000` and `+index*32` never touch the poll's
+addresses — which is why 4.160 could prove the six probe reads cannot fail and still not see this
+one. That is the gap the next section closes.
+
+### The seed: four nonzero words, two register files, and the driver's own `+8192`
+
+`/tmp/apcs-clk.bin` is 8,212 bytes (`0x2000 + 0x14`), sha256
+`00e90d4e0ff1dc06cfce8a932627c2e53fb70b64de52876961ac9e0728c42d5c`, and it holds exactly **four
+nonzero words**:
+
+| offset | value | what it is |
+|---|---|---|
+| `+0x0000` | `0x80000000` | bit 31 — the poll's status bit, family 2 (`0x18321700`) |
+| `+0x0010` | `0x00000002` | the six-bit rate field, family 2 (`0x18321710`) |
+| `+0x2000` | `0x80000000` | bit 31, family 0 (`0x18323700`) |
+| `+0x2010` | `0x00000002` | the six-bit rate field, family 0 (`0x18323710`) |
+
+Loaded at machine `0x46d21700` it is therefore two register images in one file, `0x2000` apart, and
+the offset is the driver's own: family 0's status register is the one `0xb8f0` reads as
+`[x8, #8192]` and family 2's as `[x8]`, so one blob placed below the pair covers both. The two
+families in the seed are the two the *code* polls; the `0x5f0` above the probes is not something the
+seed's author had to know, because the blob's size and its `+0x2000` layout encode exactly the two
+offsets `0xb8f0` uses relative to each other.
+
+The machine address is not a guess either. Under `--el3-zero-mem` the stage-2 tables this tree builds
+redirect 55 of the low gigabyte's 2 MB blocks into `0x40000000..0x46e00000`, one block each, and
+`tools/qemu-el3-stub.S`'s `s2_l2.inc` names them: the entry for **block 193, `0x18200000`**, is
+`S2_BLOCK | 0x46c00000 … - redirected` (line 200 of the file), so the identity is
+`0x18200000 + n ↔ 0x46c00000 + n` and `0x18321700 ↔ 0x46d21700`, `0x18323700 ↔ 0x46d23700`. Which
+is where `/tmp/apcs-clk.bin` is loaded, and the blob's `0x2014` bytes then cover both register files.
+
+The derivation of those four words is, however, **not in this record**, and the step has to say so
+rather than present the seed as if it had one. `/tmp/apcs-clk.bin` appears once in the tree —
+`docs/08-device-session.md:28377`, in step 4.140's instrument list, among "*the four seeds
+`/tmp/rsc-word.bin`, `/tmp/rsc-enable.bin`, `/tmp/pdc-cap.bin`, `/tmp/apcs-clk.bin`*" — with no
+account of how its words were chosen, and the RVAs its own comments cite predate
+`/tmp/phone-payload.raw`. Steps 4.158 and 4.159 both found the wall moving at `ClockDxe` and read the
+seed as inert; 4.161 shows it is load-bearing, and the honest statement of its status is that it is a
+seed whose *effect* is now measured and whose *derivation* is owed. What this step can say in its
+defence is that its four words and its `+0x2000` layout are exactly the four fields and the one
+offset `0xb8f0` reads per polled family — a coincidence that would be hard to arrange by accident —
+and that the disassembly above is independent of it.
+
+### A/B 1: two 175-second panels, one loader line apart
+
+The seed's effect was measured twice, on two instruments that share nothing but the payload.
+
+The first is the panel, and it is the direct experiment. Both runs are
+`tools/qemu-panel-read.py` against `/tmp/phone-payload.raw` under the same stub — the two files'
+headers pin the same sha256, `a082b796…`, the SMEM **and** AOP stub, with the same seed notes — the
+same `-m 4096`, the same 175 s, and the same three seed blobs. They differ in one loader line, the
+one the treatment carries:
+
+```
+-device loader,file=/tmp/apcs-clk.bin,addr=0x46d21700,force-raw=on
+```
+
+- `work/out/qemu-panel-4.161-control.txt` (670 screens, 175.1 s, **309 rows, 34 `Loading driver`
+  rows, no `K` row**) ends the way 4.159's run did:
+
+  ```
+  Loading driver at 0x0009C3FA000 EntryPoint=0x0009C3FB000 ClockDxe.efi
+  Clock_DriverInitERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1A-8A82-677A683B0D29
+  ASSERT ClockDriver.c +260: 0
+  ```
+
+- `work/out/qemu-panel-4.161-apcs-clk.txt` (700 screens, 175.2 s, **741 rows, 140 `Loading driver`
+  rows**) loads `ClockDxe` and **does not print either row** — no `Clock_DriverInit`, no
+  `ERROR: C90000002:…`, no `ASSERT ClockDriver.c +260: 0` anywhere in the file — and the dispatch
+  continues straight through:
+
+  ```
+  563 Loading driver at 0x0009C3FA000 EntryPoint=0x0009C3FB000 ClockDxe.efi
+  564 Loading driver at 0x0009C446000 EntryPoint=0x0009C447000 ShmBridgeDxe.efi
+  565 Loading driver at 0x0009C42D000 EntryPoint=0x0009C42E000 ScmDxe.efi
+  566 Loading driver at 0x0009C43A000 EntryPoint=0x0009C43B050 DiskIoDxe.efi
+  567 Loading driver at 0x0009C3ED000 EntryPoint=0x0009C3EE050 PartitionDxe.efi
+  568 Loading driver at 0x0009C3E4000 EntryPoint=0x0009C3E5050 EnglishDxe.efi
+  569 Loading driver at 0x0009C3AF000 EntryPoint=0x0009C3B0000 SdccDxe.efi
+  ```
+
+  The two streams are identical for their first 209 stripped rows and diverge only where the run the
+  control ends at is met; the control's own log ends at the assert, and the treatment's goes on to a
+  different terminal failure (below). The panel's rerun loop is what makes both files long: each
+  cycle that hangs is reset and re-runs, which is why the control's 309 rows carry four boot banners
+  and the treatment's 741 carry seven.
+
+The second is the probe, and it is the cheaper half of the same A/B.
+`work/out/qemu-probe-4.161/gdbprobe22.py` is `gdbprobe21.py` with the one `apcs-clk.bin` loader line
+added (`gdb22-run.log:1-2` list both argvs, and the diff between them is that line), and its
+breakpoint at `0xa7b4` **is never hit**: `no stop in 60.0s - interrupting`, then `after ^C:
+T02thread:01;` — the CPU was executing normally, not parked at the breakpoint the unseeded run hits
+at 7.3 s. The script then dies with `TypeError: … 'NoneType' and 'int'` on the missing register read,
+which is a defect in it rather than in the reading, and the traceback in the log is the record of
+both facts.
+
+Two caveats, because both matter to how much the A/B proves. The probe's stub is **not** the panels':
+`f567b832…` (`/tmp/qemu-el3-lc5j822m/el3.bin`, 16,432 B) builds the SMEM pool seed but not the AOP
+mailbox seed, while the panels' `a082b796…` (16,448 B) builds both — the difference is visible in
+the two files as the presence of the constant `0xc3f000c` in one and not the other. Each A/B holds
+its stub fixed, so neither is confounded by it, but the two A/Bs are not the same instrument and the
+record should not merge them. And the panel files do not record their own loader lines:
+`tools/qemu-panel-read.py` prints the full argv to stdout (`:455`) rather than into the header, so
+the loader set for those two runs lives in the probe logs and in this step's text, not in the files
+themselves — a gap in the instrument worth closing before the next seed.
+
+### The new wall, and it names itself
+
+What the treatment reaches is worth reading in full, because it is the first run in this tree that
+gets past `ClockDxe` under this payload and it therefore shows what is behind that wall. Between
+`ClockDxe` (row 563) and the crash there are 140 driver loads, including `SdccDxe` and `UFSDxe` and
+then, at rows 649-667, `SPMI`, `ResetSystemRuntimeDxe`, `PmicDxe`, `WatchdogTimer`,
+`SecurityStubDxe`, `EmbeddedMonotonicCounter`, `RealTimeClock`, `PrintDxe`, `DevicePathDxe`,
+`CapsuleRuntimeDxe`, `HiiDatabase`, **`BdsDxe` (663)**, `GpiDxe` (664), `I2C` (666) and `AdcDxe`
+(667). Three new row families appear in the vendor drivers, none of which any earlier panel has
+printed:
+
+```
+569 Loading driver at 0x0009C3AF000 EntryPoint=0x0009C3B0000 SdccDxe.efi
+570 ERROR: Failed to Get Shared Imem Boot Device type
+571 Loading driver at 0x0009C376000 EntryPoint=0x0009C377000 UFSDxe.efi
+572 ERROR: Failed to Get Shared Imem Boot Device type
+573 UFS IOMMU domain attach ARID 0x0 failed
+574 UFSSmmuConfig failed, status 0x7
+575 Error: Image at 0009C376000 start failed: Device Error
+...
+652 PmicDxe: PMIC was not detected
+653 Error: Image at 0009C1E7000 start failed: Device Error
+```
+
+`ERROR: Failed to Get Shared Imem Boot Device type` prints ten times, against the SdccDxe and UFSDxe
+loads: both drivers ask the shared-IMEM window which storage the platform booted from, and under this
+instrument that window is the seeded-but-zero SMEM, so neither driver can resolve it and both fail.
+`PmicDxe` follows with the same shape — its device is not on this machine either. Then `AdcDxe`
+loads, and the run stops being a driver failing politely:
+
+```
+668 Synchronous Exception at 0x000000009C49C46C
+669 PC 0x00009C49C46C (0x00009C499000+0x0000346C) [ 0] DALSys.dll
+670 PC 0x00009C49C460 (0x00009C499000+0x00003460) [ 0] DALSys.dll
+671 PC 0x00009C49B394 (0x00009C499000+0x00002394) [ 0] DALSys.dll
+672 PC 0x00009C49B430 (0x00009C499000+0x00002430) [ 0] DALSys.dll
+673 PC 0x00009C0B6BC0 (0x00009C0B4000+0x00002BC0) [ 1] AdcDxe.dll
+674 PC 0x00009C0B5410 (0x00009C0B4000+0x00001410) [ 1] AdcDxe.dll
+675 PC 0x00009C0B5214 (0x00009C0B4000+0x00001214) [ 1] AdcDxe.dll
+676 PC 0x00009CD02654 (0x00009CCF6000+0x0000C654) [ 2] DxeCore.pdb
+...
+720 SP 0x000000009FFCEA80  ELR 0x000000009C49C46C  SPSR 0x80000205  FPSR 0x00000000
+721 ESR 0x96000004          FAR 0xAFAFAFAFAFAFAFAF
+722 ESR : EC 0x25  IL 0x1  ISS 0x00000004
+723 Data abort: Translation fault, zeroth level
+740 ASSERT [ArmCpuDxe] DefaultExceptionHandler.c(339): ((BOOLEAN)(0==1))
+```
+
+The crash is a dereference of the address `0xAFAFAFAFAFAFAFAF`, and the register dump says why:
+`X8 = 0xAFAFAFAFAFAFAFAF`. `0xAF` is MdePkg's debug clear-memory value
+(`MdePkg/MdePkg.dec:2440`, `PcdDebugClearMemoryValue|0xAF`), written by `DebugClearMemory` and by
+`DxeCore`'s pool and page frees in a DEBUG build, so the pointer that was followed was a field of a
+structure that had been allocated and never initialised. The images in the backtrace are this tree's
+own and can be disassembled directly: the crash offset `0x346c` is a `.text` offset of the
+`Binaries/gauguin/QcomPkg/Drivers/DALSYSDxe/DALSys.efi` this tree carries (307,200 B, sha256
+`a22a71eef6a7e12fd2a20e1b3fbd72820ec0a98f1af054339191d529066f3d0d`), and the identity is not an
+inference from the name in the dump — the same 307,200 bytes appear, byte for byte, in both FVs that
+can be inflated here (`…/DEBUG_CLANGPDB/FV/FVMAIN.Fv`, and the `/tmp/fv-vol.bin` this session's probe
+work produced from the payload under test), and the same holds for `AdcDxe.efi` (40,960 B), whose
+`+0x2bc0` is likewise inside its `.text`.
+
+At `0x346c` the instruction is `ldr x8, [x8, x9]`, and the instruction before it is
+`0x3460 ldr x8, [x21, #24]` — so the field that was followed is `+24` of an element the function is
+walking. The walk is over a 32-slot table at `.data 0x44f88` (`adrp x25, 0x44000; add x25, x25,
+#0xf88`), each non-NULL slot contributing an inner array at `+24` with a count at `+16` and a stride
+of `0x28`, whose entries are compared against a hash of the function's `x0`. Which function it is, it
+says itself: when the walk exhausts, it logs the string at `0x6f4b` —
+`DAL device (0x%s) not found` — with the name it was given. So the synchronous exception is inside
+**DALSys's own device-lookup walk**: a registered DAL device object whose `+24` array pointer is
+still the pool fill, followed by a caller that asked for a device by name. The caller is `AdcDxe`,
+and the frame above it is `AdcDxe+0x2bc0`, the return from the `bl 0x2530` at `0x2bbc` — inside a
+loop at `0x2ba0`-`0x2bd0` that calls it with `w0 = 0` (`mov x0, xzr`, a NULL device handle),
+`w2 = 0x40004`, and a name taken from a table at `0x2bb4`, in a driver whose own strings include
+`/core/hwengines/adc/pmic_0/vadc`.
+
+What that means, stated no more strongly than the bytes allow: the wall behind `ClockDxe` is
+`AdcDxe`'s ADC bring-up reaching into `DALSys` after `PmicDxe` reported no PMIC, and finding a DAL
+device object whose field was never written. It is a driver data structure with a hole in it, the
+same family as `EnvDxe`'s SMEM word and `PdcDxe`'s capacity word and `ClockDxe`'s rail table — the
+difference being that this one is reached by a *dispatch phase* driver rather than inside the
+Apriori walk, and on this instrument the hole may well be this instrument's own: the PMIC and the
+UFS/SD controller it cannot provide are exactly what the three new row families are about. Which
+registration left the field empty, and whether it would be empty on hardware, is not decided here.
+
+### What this buys, and what is still wall
+
+Three things, in order of how much they change the ladder.
+
+**The exit question is closed.** `X30 = 0x9c40d888` is exit 4 — the `w0 = 0` domain-0 rate call —
+and exits 1, 2, 3 and 5 are ruled out by measurement rather than by argument. `Clock_InitTarget`'s
+wall is a rate lookup that asks a register for a clock that is ready.
+
+**The cause question is closed, and it was the right question.** `0xb8f0` returns success only after
+a status bit goes to 1, and gives up after 200 reads. A zeroed register model therefore fails this
+call *by construction*, which is a stronger statement than 4.160 could make and a narrower one than
+4.159's text assumed: it is not that the driver dislikes zeros, it is that the driver is waiting for
+a bit *and* a clock-controller register that a zero page will never set. That also means the seed's
+mechanism is now legible from the driver's code alone — the four words are the four fields, the
+`+0x2000` is the driver's own `[x8, #8192]`, and nothing about the seed needs to be a mystery for the
+run to be believed.
+
+**The ladder moved, for the first time since 4.139's seeds, past the driver that has held it.** 140
+driver loads, `BdsDxe` among them, and a wall that is not `ClockDxe`.
+
+What it does *not* buy is a clock controller. Passing `Clock_InitTarget` by fabricating a ready bit
+and a rate index is an instrument result, not bring-up: on the device those registers are the clock
+controller's real state, the seed would be a lie, and the honest summary of this step's second half
+is that it removes a *seeded* wall to expose the *next* one. It also does not make `P2` pass — the
+phase's own `P2 APRI` row family is still unread, and the `K` rows are absent from both 4.161 panels
+for the reason 4.157 found, that this payload's build does not print them.
+
+Left open: whose registration left the DAL device entry's `+24` empty and whether `AdcDxe`'s call is
+the same `DAL_DeviceAttach`-shaped lookup its message names; what the ten
+`Failed to Get Shared Imem Boot Device type` rows and the `0x8000000000000003` in `Rpmh Sleep
+callback registration failed` are keyed on; whether the wild pointer appears once `PmicDxe` succeeds;
+the derivation of `/tmp/apcs-clk.bin`, which is owed and which 4.159's and 4.160's texts wrongly
+treated as inert; `P2 APRI`'s eight fields; the R1-versus-R2 question for the phone's 46-character
+`P2 SEQ`; `ClockDriver.c` line 260 as source; the P3 items 2-4 (`DisplayDxe`, `UsbBusDxe`,
+`ButtonsDxe`); and the step 4.153-4.156 items unchanged — the substituted `boot.wim`, `winpeshl.ini`,
+the 1 GB stick, `UrsSynopsys.sys`'s child naming, `ExcludeFromSelect` and the `*<PNP-id>` position.
+
+Rows:
+
+- **instrument**: `work/out/qemu-probe-4.161/gdbprobe21.py` + `gdb21-run.log` (one `Z0` breakpoint at
+  `0x9c40d7b4`, the register dump at the 7.3 s stop) and `gdbprobe22.py` + `gdb22-run.log` (the same
+  plus `apcs-clk.bin`, no stop in 60 s, and the `TypeError` its missing register read raises —
+  `gdbprobe22.py` has since been given a guard for the no-stop case, which the log predates); the two
+  panels `work/out/qemu-panel-4.161-control.txt` and `work/out/qemu-panel-4.161-apcs-clk.txt`, run
+  with `tools/qemu-panel-read.py` (175 s each, one loader line apart); and `aarch64-linux-gnu-objdump`
+  over `Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi`,
+  `…/DALSYSDxe/DALSys.efi` and `…/AdcDxe/AdcDxe.efi`, all three at raw pointer equal to VA.
+- **shows**: exit 4 fired (`X30 = 0x9c40d888`), so `Clock_InitTarget`'s wall is `0xb348`'s domain-0
+  rate lookup; `0xb8f0` succeeds only on a status bit that never sets against a zeroed register, so
+  the machine's zeros are exit 4's cause by construction; `/tmp/apcs-clk.bin`'s four words are those
+  four fields; and with them the same panel configuration passes `ClockDriver.c +260` and reaches 140
+  driver loads, `BdsDxe`, and a synchronous exception in `DALSys` at `+0x346c` on the `0xAF` fill.
+- **adds**: the `0xb348` and `0xb8f0` disassembly with their semantics; the two polled register
+  addresses and their `0x5f0` relation to 4.160's six probe bases; the `0x18200000 + n ↔ 0x46c00000 +
+  n` stage-2 identity read out of `s2_l2.inc`'s 55th redirected block; the seed's four nonzero words
+  and its two mappings; the three new row families and the 10-row `Failed to Get Shared Imem Boot
+  Device type` count; the crash's image identity proved by byte-comparison against both inflatable
+  FVs, not by the name in the dump; and `DAL device (0x%s) not found` at `0x6f4b` as the faulting
+  function's own message.
+- **corrects**: 4.158's and 4.159's treatment of `/tmp/apcs-clk.bin` as an inert member of the seed
+  set — it is the seed that moves this wall, and its derivation is owed; and the implication 4.160's
+  closing paragraph draws, that the zeroed reads are only "adjacent" to exits 4 and 5, which the
+  poll's semantics make a cause.
+- **does not close**: why the DAL device entry's `+24` is unset, what the shared-IMEM and PMIC
+  failures are keyed on, `P2 APRI`, the P3 items 2-4, and every on-device item.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, and no
+  stub, firmware source or Microsoft image was changed or patched. The only writes outside `work/out`
+  are to `docs/`. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
+  untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
+  state remains a Windows tablet whose modem and cameras cannot be driven.

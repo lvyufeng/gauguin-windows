@@ -2860,6 +2860,46 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `0xa7b0`/`0xa7f4`/`0xa804`/`0xa888`/`0xa898` for the five exits, so one breakpoint decides which
 > fired. See `docs/08` step 4.160.
 
+> **Extended 2026-09-27 by step 4.161 — the exit that fired is 4, and the seed that clears it moves
+> the wall off `ClockDxe` entirely.** That one breakpoint at RVA `0xa7b4` was set, and at 7.3 s the
+> register file reads `X30 = 0x9c40d888` — `0xa888`, the `bl 0xb348` for **domain 0** with `w0 = 0`,
+> the rate call — with `x0 = 0xffffffff`, `0xb348`'s own failure value, as the operand of the
+> `cbnz w0, 0xa7b4` that got there. Exits 1, 2, 3 and 5 are ruled out by measurement. The helper the
+> call dies in is a bounded poll, and reading it settles 4.160's remaining question: `0xb8f0`
+> re-reads one status register at most 200 times (`mov w10, #0xc8`), takes bit 31 of it, returns `1`
+> with the low six bits of that family's `+16` register as the rate once the bit has set, and returns
+> `0` — on which `0xb348` loads `#0xffffffff` at `0xb3e4` — if it never does. Family 0 is
+> `0x18323700`, reached as `[x8, #8192]` from `0x18321700`; family 1 is `0x18325f00`; family 2 is
+> `0x18321700`. So the zeroed clock registers are exit 4's **cause by construction**, not a
+> bystander, and the two polled addresses sit exactly `0x5f0` above two of `0xa93c`'s six probe bases
+> (`0x18321110`, `0x18323110`) — the same register file at an offset the probes never touch, which is
+> why 4.160 could prove those six reads cannot fail and still miss this one. On that basis
+> `/tmp/apcs-clk.bin` — 8,212 B, exactly four nonzero words, `0x80000000` at `+0` and `+0x2000`,
+> `2` at `+0x10` and `+0x2010`, i.e. the two family status bits and their two rate fields — loaded at
+> machine `0x46d21700`, the stage-2 image of `0x18321700` via the block-193 redirect
+> (`S2_BLOCK | 0x46c00000 /* 0x18200000 - redirected */`) recorded in `s2_l2.inc`, carries a 175 s
+> panel **past `ClockDriver.c +260`**: the treatment prints neither `Clock_DriverInit` nor
+> `ERROR: C90000002:…` nor the assert, and reaches 140 driver loads against the control's 34,
+> through `ShmBridgeDxe`, `ScmDxe`, `DiskIoDxe`, `PartitionDxe`, `EnglishDxe`, `SdccDxe`, `UFSDxe`,
+> `TzDxe`, `SPMI`, `PmicDxe`, `BdsDxe`, `GpiDxe` and `I2C`. It dies in `AdcDxe`, at
+> `Synchronous Exception at 0x000000009C49C46C` — `DALSys.dll+0x346c`, `FAR
+> 0xAFAFAFAFAFAFAFAF`, ESR `0x96000004` (`EC 0x25`, translation fault) — inside the function whose
+> exhausted-search message at `0x6f4b` is `DAL device (0x%s) not found`, on `ldr x8, [x8, x9]` where
+> `x8` came from `[x21, #24]`; `0xAF` is `PcdDebugClearMemoryValue` (`MdePkg.dec:2440`), so the field
+> followed was never written. The caller is `AdcDxe+0x2bc0`, the return from `bl 0x2530` at
+> `0x2bbc` with `x0 = xzr` and `w2 = #0x40004`, in the driver that names
+> `/core/hwengines/adc/pmic_0/vadc`. Both images are byte-identical to the
+> `Binaries/gauguin/QcomPkg/Drivers/{DALSYSDxe/DALSys.efi,AdcDxe/AdcDxe.efi}` this tree carries
+> (checked against both inflatable FVs), so the RVAs apply directly. New row families in the
+> treatment and in no earlier panel: `ERROR: Failed to Get Shared Imem Boot Device type` (ten times,
+> against `SdccDxe` and `UFSDxe`), `UFS IOMMU domain attach ARID 0x0 failed`,
+> `UFSSmmuConfig failed, status 0x7`, `PmicDxe: PMIC was not detected`. Passing the wall by
+> fabricating a ready bit and a rate index is an **instrument** result and not bring-up — on hardware
+> those registers are the clock controller's real state — and `/tmp/apcs-clk.bin`'s derivation is not
+> in this record (one mention, `docs/08-device-session.md:28377`) while its effect now is, so 4.159's
+> and 4.160's reading of it as an inert member of the seed set is corrected here. See `docs/08` step
+> 4.161.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform
