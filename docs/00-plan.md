@@ -48,7 +48,18 @@ step 4.165:** the walk-stop reading is now measured against the same payload on 
 same volume gives the whole walk there — `P2 STATS discovered=80 apriori=69/70 started=73 diag=7
 noload=0` with a 69-character `SEQ` — while the phone's line is 46. So the 46 is not a property of
 this volume; it is either a property of the machine or a reading of a payload that is not this one,
-which is the `90b21643…` / `ecc10a22…` fork below. See `docs/08` step 4.165.) Zero `?`
+which is the `90b21643…` / `ecc10a22…` fork below. See `docs/08` step 4.165. **Amended again
+2026-09-27 by step 4.166:** the fork is now decidable from the panel without hashing anything — a
+payload that prints `P2 WALK` is the `usb-host` class and one that prints `Loading driver at` is the
+phone's, because a literal count over the two inflated volumes finds the phone's carrying only
+`P2 SEQ`, `P2 STATS`, `P2 DIAG` and `Loading driver at` while `usb-host`'s carries those three plus
+`P2 WHY`, `P2 ERR`, `P2 FREE`, `P2 WALK`, `P2 APRI`, `P2 RETRY`, `P2 FWHY` and `P2 BIN`. The rows this
+section has been calling owed are therefore absent from the device's image by construction and
+present in the tree's — whose `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` is byte-identical (`cmp`
+clean) to the `usb-host` volume, so no rebuild is needed to obtain them. And the physical-stop pair
+named in the sentence above can now be stated as a DRIVER-rank boundary: `seen` 48 or 49, with
+`DALTLMM` at rank 47 the last entry inside the batch, `FeatureEnablerDxe` at 48 the file between the
+two that is not an Apriori entry, and `SimpleFbDxe` at 49 the lowest unhit one that has a file.) Zero `?`
 says the 46 promoted drivers were all *attempted* — a statement about the drain,
 not about the walk. The names move too, because `P2 SEQ`'s slot *k* belongs to the
 *k*-th entry that **matched** and a stopped walk's batch is not `ap1..apN`: at
@@ -713,6 +724,26 @@ Work:
 > `UsbConfigDxe` and left that one question open. The bucket deltas from the record to the
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
+>
+> **Step 4.166 (2026-09-27) measured what the volume already contains for items 3 and 4, and one
+> of them is not work to add.** The phone's volume holds **five FFS `APPLICATION` (0x09) files** —
+> `MassStorage` (297,528 B), `BootManagerMenuApp` (98,404), `MsBootPolicy` (357,436), `UFPLoader`
+> (22,580) and `ufpdevicefw` (443,974) — the same five and the same sizes in `usb-host`'s, and
+> **none of them is in the Apriori array or could be**: the promotion loop matches only what the
+> walk discovered and the walk is type-filtered to `DRIVER` and `DXE_CORE`, so an application is
+> reachable only by the DXE core's loader at BDS's request. Microsoft's boot-policy application is
+> therefore already in the image, and item 4's "way to choose boot entries" is not a driver to
+> write but a BDS to reach — which is the same nine-name wall this section's blockquotes keep
+> arriving at. The volume also carries the 36 `FREEFORM` blobs that platform data lives in: twenty
+> `Panel_*.xml` panel tables, `QcomChargerCfg.cfg`, `BDS_Menu.cfg`, `uefipil.cfg` and a dozen boot
+> logos and battery symbols. And item 3's USB-stick half has no PCI stack to build on: a 16-byte
+> scan of both volumes finds **no** `PciRootBridgeIo`, no `PciHostBridgeResourceAllocation`, no
+> `PciBusDxe` and no `PciHostBridgeDxe`, and every occurrence of the `PciIo` constant is a
+> consumer's — `ConPlatformDxe`, `BdsDxe`, `BootManagerMenuApp` and `MsBootPolicy` in the phone's
+> volume, plus `XhciPciEmulation` and `XhciDxe` in `usb-host`'s, the two this plan added. So the
+> XHCI path is the whole of the PCI world in this firmware by design, and adding a PCI bus stack
+> would be an FDF `INF` question plus a `PciHostBridgeLib` one, not a discovery one. See
+> `docs/08` step 4.166.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

@@ -33742,3 +33742,244 @@ Rows:
   and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install
   and P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and
   cameras cannot be driven.
+
+## Step 4.166 — the rows 4.165 called owed need no new build: the tree's own `FVMAIN.Fv` is byte-identical to the `usb-host` volume and the phone's payload carries four of the twelve `P2` literals, so `P2 WALK`/`P2 APRI`/`P2 WHY`/`P2 ERR`/`P2 FREE` are absent from the device's payload by construction and present in the one already built — and against the batch those literals would index, the walk's cut is a DRIVER-rank boundary with `DALTLMM` at 47 and `SimpleFbDxe` at 49
+
+4.165 ended by listing what the next device window has to read and, in the same breath, which build is
+flashed in `boot`. Both halves are still open, but one of them turns out not to be a build question at
+all. This step measures the two payloads' **string contents** rather than their behaviour, and the
+answer is that the rows the record has been calling owed are a property of the image, not of the
+machine: the device's payload does not contain the code that prints them.
+
+### The build identity, and this time with `cmp`
+
+The current build tree's own volume,
+
+    work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv
+      7,536,640 bytes, sha256 ca60789d47e263d4228f2ccb...
+
+is **byte-identical** to `/tmp/fv-usb.bin` — `cmp` exits 0, not merely equal hashes — and differs from
+the phone's payload's volume (`/tmp/fv-old.bin`, 7,348,224 bytes, `c8f57e46046c86c5...`) at the first
+byte. So the tree as it stands *is* the unflashed `usb-host` image's volume: the image 4.165 named as
+the next flash is the one this tree builds, and no rebuild is needed to obtain anything it prints.
+(This is 4.165's identity restated through `FVMAIN.Fv` instead of through the `.fd` and the boot image;
+it is the same identity, and it is the one that makes the census below actionable.)
+
+### The instrument census: twelve literals, two payloads
+
+Counting occurrences of each recorder literal over both inflated volumes, in the byte order the
+volumes use. 4.165 stated this split in prose for the phone's payload against "every build from
+`p2-4.14` on"; what is measured here is the whole set over both volumes, including `usb-host` itself
+and the four literals the earlier note did not name:
+
+| literal | phone (`c8f57e46...`) | `usb-host` (`ca60789d...`) |
+|---|---|---|
+| `P2 SEQ` | 2 | 2 |
+| `P2 STATS` | 1 | 1 |
+| `P2 DIAG` | 1 | 1 |
+| `Loading driver at` | 1 | 0 |
+| `P2 WHY` | 0 | 1 |
+| `P2 ERR` | 0 | 2 |
+| `P2 FREE` | 0 | 1 |
+| `P2 WALK` | 0 | 1 |
+| `P2 APRI` | 0 | 6 |
+| `P2 RETRY` | 0 | 1 |
+| `P2 FWHY` | 0 | 1 |
+| `P2 BIN` | 0 | 4 |
+
+**The phone's payload can print `P2 SEQ`, `P2 STATS`, `P2 DIAG` and `Loading driver at`. That is the
+whole of it.** Every other `P2` label on the record's owed list — the two rows that say *why* a load
+failed (`P2 WHY`, `P2 ERR`), the heap row (`P2 FREE`), the row that carries the scan prefix
+(`P2 WALK`), and the six-site array census (`P2 APRI`) — is not merely unread on the device, it is
+unreachable there, because the string does not exist in the image the device runs. Conversely the
+`usb-host` volume carries all of them and drops `Loading driver at`, which is the reverse asymmetry:
+the load-address line the 4.163-4.165 probes' load maps were built from is a phone-payload facility.
+
+This also settles one of 4.165's `does not close` items in the negative direction: "which build is
+actually flashed in `boot`" can now be answered by the *presence of `P2 WALK`* rather than by a hash,
+if the flash is ever performed and the panel read — a payload that prints `P2 WALK` is the `usb-host`
+class, one that prints `Loading driver at` is the phone's.
+
+### What this does to the owed list
+
+The rows are owed to the *record*, not to the *image*. `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+(`f1a7106b76f98e11...`, 1,171,456 bytes, sha of the 4.165 note) is already built, already named as the
+next flash, and already carries `P2 WALK seen=`, `P2 APRI bytes=/entries=`, `P2 FREE largest=`,
+`P2 WHY` and `P2 ERR`. So the next device window does not need a new build to get them; it needs
+`fastboot boot` of an image that exists. That is a smaller step than the record has been implying, and
+it is the one the P3 line should take when a device is present.
+
+The two rows that matter most are `P2 WALK`'s `seen=` and `P2 APRI`'s `entries=`, because they are the
+pair that decides the fork `tools/apriori-prefix.py` cannot decide from letters: `entries=70` with a
+stopped walk (the array whole, the scan cut) or `entries=47` (the array read 368 bytes short, a
+contiguous `ap1..ap46` batch). No letter string can choose between them — the slots are the
+hypothesis under test — and these two lines can.
+
+### The batch, and its boundary is a DRIVER rank and not a physical one
+
+Re-derived on `/tmp/phone-payload.raw` with `tools/apriori-prefix.py`'s own machinery: the volume holds
+**122 files, 80 of them `DRIVER` (0x07)**, the Apriori array is **70 entries** and **69 of them have a
+DRIVER-type file** — the absent one being `ap1 = DxeCore`, whose file is `DXE_CORE` (0x05) at `0x4f8`,
+170,032 bytes, which the walk's DXE_CORE branch never hands to `CoreAddToDriverList`. `seen` values
+**48** and **49** are the only ones giving exactly 46 promotions, and they give the same 46 entries.
+
+The cut, then, is a boundary in the order the walk hands drivers over — DRIVER rank, 0-based:
+
+    47  DALTLMM            <- highest rank inside the 46
+    48  FeatureEnablerDxe  <- between them, and *not* an Apriori entry, so it leaves no character either way
+    49  SimpleFbDxe        <- lowest rank among the 24 unhit that has a file
+
+`DALTLMM` is `ap32` and occupies slot 29 of the 46; `SimpleFbDxe` is `ap61` and is unhit. So the
+observed string is consistent with `seen ∈ {48, 49}` and with nothing else, and within the batch the
+letter is **not** predicted by rank: `SecurityStubDxe` is rank 3 and fails while `DALSys` is rank 37
+and succeeds. That is 4.126's "no physical cutoff" result restated numerically (`apriori-prefix.py`
+prints the same thing as *lowest failed file 5, highest loaded file 43 -> a physical cutoff is
+IMPOSSIBLE*), and it is the reason the letters cannot be read off the volume order.
+
+### The slot table, and the nine-name set against it
+
+Slots are 0-based positions in *this* 46-entry batch, in Apriori order — the map the promotion loop
+implies, which the arch-protocol census calls "the loop's map":
+
+    0 ap1 PcdDxe(r0)            16 ap18 NpaDxe(r28)          32 ap36 WatchdogTimer(r6) L
+    1 ap2 EnvDxe(r22)           17 ap19 RpmhDxe(r31)         33 ap37 SecurityStubDxe(r3) L
+    2 ap3 ReportStatusCodeRouterRuntimeDxe(r8)  18 ap20 PdcDxe(r32)  L  34 ap38 EmbeddedMonotonicCounter(r11) L
+    3 ap4 StatusCodeHandlerRuntimeDxe(r9)       19 ap21 ClockDxe(r38) L  35 ap39 RealTimeClock(r14) L
+    4 ap5 RuntimeDxe(r2)        20 ap23 ScmDxe(r4)   L       36 ap40 PrintDxe(r16) L
+    5 ap6 ArmCpuDxe(r1)         21 ap24 DiskIoDxe(r33) s     37 ap41 DevicePathDxe(r17) L
+    6 ap7 ArmGicDxe(r23)        22 ap25 PartitionDxe(r34) L  38 ap42 CapsuleRuntimeDxe(r7) L
+    7 ap8 MetronomeDxe(r15)     23 ap26 EnglishDxe(r36) L    39 ap43 HiiDatabase(r21) L
+    8 ap9 ArmTimerDxe(r24)      24 ap27 SdccDxe(r45) L       40 ap45 GpiDxe(r42) L
+    9 ap10 SmemDxe(r26)         25 ap28 UFSDxe(r46) L        41 ap46 I2C(r43) L
+    10 ap11 DALSys(r37)         26 ap29 Fat(r35) L           42 ap66 SimpleTextInOutSerial(r12) L
+    11 ap12 HWIODxeDriver(r41)  27 ap30 TzDxe(r5) L          43 ap67 ConPlatformDxe(r20) L
+    12 ap13 ChipInfo(r25)       28 ap31 VariableRuntimeDxe(r10) L  44 ap68 ConSplitterDxe(r19) L
+    13 ap15 HALIOMMU(r40)       29 ap32 DALTLMM(r47) L       45 ap69 GraphicsConsoleDxe(r20) L
+    14 ap16 ULogDxe(r27)        30 ap33 SPMI(r44) L
+    15 ap17 CmdDbDxe(r29)       31 ap34 ResetSystemRuntimeDxe(r13) L
+
+so the first `L` is **slot 18 = `ap20 PdcDxe`**, the lone `s` after it is **slot 21 = `ap24 DiskIoDxe`**,
+and the 24 closing `L`s run to the last slot. `docs/00`'s reading — *"the failure begins at slot 18,
+which is Apriori 20 = `PdcDxe`…the one exception being slot 21, which is Apriori 24 = `DiskIoDxe`"* —
+is therefore **correct as written** under the array-ordered 0-based convention, and needs no
+correction; what it needs is the rank column above, which says the two are ranks 32 and 33 and are
+adjacent in the walk's own order, so nothing about their positions in the volume separates them.
+
+Against the nine-name set of missing architectural protocols (`Security, Bds, Watchdog, Variable,
+Variable Write, Capsule, Monotonic, Reset, Real Time Clock` — nine names, **eight** producers, because
+`Variable` and `Variable Write` are both `VariableRuntimeDxe`):
+
+- **seven** of the eight producers are inside the batch, and every one is `L`: `SecurityStubDxe`
+  (slot 33), `WatchdogTimer` (32), `VariableRuntimeDxe` (28), `CapsuleRuntimeDxe` (38),
+  `EmbeddedMonotonicCounter` (34), `ResetSystemRuntimeDxe` (31), `RealTimeClock` (35).
+- the eighth is **`BdsDxe`, `ap44` — which the walk never promoted at all**, so it is not in the
+  string and has no letter. `Bds` is nevertheless reported missing, because `CoreAllEfiServicesAvailable`
+  asks whether the protocol is installed, not whether anyone tried.
+
+That is the wall's shape in one sentence: eight of its nine names are a *load* failure and the ninth is
+a *walk* failure, and the two are separable. It is also why `P2 SEQ`'s length is the only evidence the
+never-promoted entries leave — an entry that never matched produces neither `s` nor `L` nor `?`.
+
+### The file-type census, and five applications the Apriori walk can never promote
+
+`tools/fv-apriori.py`'s walk over the phone's volume, by FFS type (PI table, so 0x02 is FREEFORM and
+0x05 is DXE_CORE — the earlier habit of reading 0x02 as PEI_CORE was a table error and nothing else):
+
+| type | name | count |
+|---|---|---|
+| 0x02 | FREEFORM | 36 |
+| 0x05 | DXE_CORE | 1 (`DxeCore`) |
+| 0x07 | DRIVER | 80 |
+| 0x09 | APPLICATION | 5 |
+
+The five applications are **`MassStorage`** (297,528 B), **`BootManagerMenuApp`** (98,404),
+**`MsBootPolicy`** (357,436), **`UFPLoader`** (22,580) and **`ufpdevicefw`** (443,974) — the same five,
+with the same sizes, in both volumes. None of them is in the Apriori array, and none could be: the
+promotion loop matches only what the walk discovered, and the walk is type-filtered to `DRIVER` and
+`DXE_CORE`. So these five are reachable only by the DXE core's loader at BDS's request, and
+`MsBootPolicy` — Microsoft's boot-policy application — is **already in the image**, as is the boot
+menu. That is worth stating plainly against P3's item 4: the boot-entry machinery this plan has been
+treating as work to add is content the build already carries; what is missing is a BDS that runs, and
+that is the nine-name wall.
+
+Two smaller observations from the same census, recorded without conclusion. The FREEFORM blobs include
+the Apriori file itself (at `0x78`, 1,148 B), twenty `Panel_*.xml` panel tables, `BDS_Menu.cfg`,
+`QcomChargerCfg.cfg`, `uefipil.cfg`, `SecParti.cfg`, `BATTERY.PROVISION` and a dozen `.bmp` symbols
+and boot logos — so the platform data the display and charger work will need is in the volume and not
+in the source tree. And one FREEFORM file, `6A69BA33-B140-5742-ABC9-0C5D03920B42` at `0x4f8f40`, has a
+UI section whose text is the Apriori GUID string `fc510ee7-ffdc-11d4-bd41-0080c73c8881` while its 1,188-byte
+RAW section is **not** a second copy of the array (no 16-byte-aligned match against the array's first
+32 bytes, in either byte order). What names what there is not established here.
+
+### PCI, corrected: four carriers of the constant, and still no host bridge
+
+This window's earlier working note said the only PCI GUID in either volume is `ConPlatformDxe`'s. It
+is right in substance and wrong in the letter. A 16-byte scan for `EFI_PCI_IO_PROTOCOL_GUID`
+(`4cf5b200-68b8-4ca5-9eec-b23e3f50029a`), little-endian, over both volumes:
+
+    phone   0x0c1a5c  ConPlatformDxe       (51CCF399-4FDF-4E55-A45B-E123F84D456A, 31,294 B)
+            0x4422e4  BdsDxe               (6D33944A-EC75-4855-A54D-809C75241F6C, 385,166 B)
+            0x5cc314  BootManagerMenuApp   (EEC25BDC-67F2-4D95-B1D5-F81B2039D11D,  98,404 B)
+            0x623ad4  MsBootPolicy         (50670071-478F-4BE7-AD13-8754F379C62F, 357,436 B)
+    usb-host  the same four, plus
+            0x3531c4  XhciPciEmulation     (BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1,  45,362 B)
+            0x36a22c  XhciDxe              (B7F50E91-A759-412C-ADE4-DCD03E7F7C28,  94,270 B)
+
+Four carriers in the phone's volume, six in `usb-host`'s, and **no occurrence at all, in either byte
+order, in either volume** of `PciRootBridgeIo` (`2f707ebb-…`), `PciHostBridgeResourceAllocation`
+(`cf8034be-…`), `PciBusDxe`'s FILE_GUID (`93b80004-…`) or `PciHostBridgeDxe`'s FILE_GUID
+(`de375b25-…`). The four phone-side carriers are all *consumers* — `ConPlatformDxe`'s
+`LocateDevicePath (&gEfiPciIoProtocolGuid, …)` at `ConPlatform.c:1297` declared `## SOMETIMES_CONSUMES`
+at `.inf:90`, and the BDS and application uses are boot-option and boot-policy path expansion. So the
+substantive reading stands and is now sharper: **the firmware has no PCI host bridge, no PCI bus
+enumeration, and no producer of `PciIo`** — and the two files that change that in `usb-host` are
+exactly the two this plan added, `XhciPciEmulation` (which installs `PciIo` + `DevicePath` on a child
+handle of its own) and `XhciDxe` (which consumes it).
+
+Re-run on the `usb-host` payload, the architectural-protocol census prints
+
+    13 protocols, 13 with a promoted producer, 0 whose producer is in the volume but not in
+    the a-priori array, 0 with none in the volume at all
+
+which is the clean statement of the constraint on any further driver addition: every one of the
+thirteen has a producer in the array, so nothing needs adding to the array — and the twelve of them
+that are `s` show that a *promoted* producer is what the wall is waiting for, not an absent one.
+
+### Rows:
+
+- **instrument**: the two inflated volumes (7,348,224 B `c8f57e46…` and 7,536,640 B `ca60789d…`), the
+  tree's `FVMAIN.Fv` (byte-identical to the second by `cmp`); `tools/fv-apriori.py` and
+  `tools/apriori-prefix.py` on `/tmp/phone-payload.raw`; `tools/arch-protocol-census.py` on
+  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`; a 16-byte GUID scan over both volumes; an
+  FFS-type census with UI-section names read out of the files themselves. Device-side: nothing.
+- **shows**: that the phone's payload contains four of the twelve recorder literals and `usb-host`'s
+  contains eleven, so the owed rows are a property of the image; that the tree's current build output
+  *is* the `usb-host` volume, so obtaining them needs no rebuild; that the 46-batch is `seen` 48 or 49
+  with the cut between DRIVER ranks 47 (`DALTLMM`) and 49 (`SimpleFbDxe`) and 48
+  (`FeatureEnablerDxe`) not an Apriori entry; that the first `L` is `ap20 PdcDxe` and the lone `s` is
+  `ap24 DiskIoDxe`, at ranks 32 and 33; that seven of the nine missing architectural protocols fail at
+  a promoted-and-loaded producer while the ninth (`Bds`) has a producer the walk never promoted; that
+  the volume carries five applications including `MsBootPolicy`, none promotable; and that no PCI host
+  bridge, bus driver or `PciIo` producer exists in either volume.
+- **adds**: the per-literal path to the owed rows (which payload can print which row, measured);
+  the file-type census with the PI type table and the five application names; the corrected PCI carrier
+  list; the rank boundary of the walk's window; and the one-line form of the wall, eight names from
+  load failures and one from a walk failure.
+- **corrects**: this window's own working note that `ConPlatformDxe` holds the only PCI GUID in either
+  volume — there are four carriers in the phone's volume and six in `usb-host`'s, and what is absent is
+  the host-bridge and bus-enumeration set, which is the claim that matters. Also the habit, in this
+  window's scratch work, of reading FFS type 0x02 as PEI_CORE: 0x02 is FREEFORM, 0x05 is DXE_CORE, and
+  the volume has one of the latter — `DxeCore`, which is why `ap1` is the single unmatchable entry.
+- **does not close**: which payload is flashed in `boot` (now decidable from the panel by whether
+  `P2 WALK` or `Loading driver at` appears, but not yet decided); whether `P2 SEQ`'s two occurrences in
+  each volume are one print site or two; the `entries=70` versus `entries=47` fork, which only
+  `P2 APRI` on a payload that can print it will settle; what names the file whose UI text is the
+  Apriori GUID string; the identity/cut join disagreement between `tools/apriori-index.py` and
+  `tools/pe-facts.py`; and every item 4.163, 4.164 and 4.165 left open.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and nothing was rebuilt — the identity of
+  the tree's `FVMAIN.Fv` with the existing image is a comparison, not a build. `userdata` (107 GB,
+  unbacked), the partition table and the firmware LUN remain untouched. The porting goal is unchanged
+  and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install
+  and P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and
+  cameras cannot be driven.

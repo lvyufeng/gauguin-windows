@@ -3077,6 +3077,37 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > (the `p2-variants` class, which *does* carry `P2 WHY` and `P2 ERR`) "the payload in `boot`" against
 > an on-device readback of `ecc10a22…`. See `docs/08` step 4.165.
 
+> **Extended 2026-09-27 by step 4.166 — the instrument split above is now a table over both volumes,
+> the tree's own volume is `usb-host`'s by `cmp`, and the volume's type census turns up five
+> applications the Apriori walk can never promote.** The blockquote above states the split for the
+> phone's payload and for "every build from `p2-4.14` on"; measured literal by literal over the two
+> inflated volumes it is: phone (`c8f57e46…`, 7,348,224 B) `P2 SEQ` 2, `P2 STATS` 1, `P2 DIAG` 1,
+> `Loading driver at` 1, and `P2 WHY`/`P2 ERR`/`P2 FREE`/`P2 WALK`/`P2 APRI`/`P2 RETRY`/`P2 FWHY`/
+> `P2 BIN` all 0; `usb-host` (`ca60789d…`, 7,536,640 B) `P2 SEQ` 2, `P2 STATS` 1, `P2 DIAG` 1,
+> `Loading driver at` 0, `P2 WHY` 1, `P2 ERR` 2, `P2 FREE` 1, `P2 WALK` 1, `P2 APRI` 6, `P2 RETRY` 1,
+> `P2 FWHY` 1, `P2 BIN` 4. Two consequences. The tree's own
+> `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` is 7,536,640 B at `ca60789d47e263d4…` and `cmp`s clean
+> against the second row — this file's identity sentence reached through the uncompressed `FVMAIN.Fv`
+> rather than through the `.fd` — so the image that can answer with `P2 WALK seen=` and `P2 APRI
+> bytes=/entries=` is the one already built, and obtaining those rows needs `fastboot boot` and not a
+> build. And the presence of `P2 WALK` versus `Loading driver at` is itself a build fingerprint, which
+> is a cheaper way to settle the `90b21643…` / `ecc10a22…` fork than a hash readback.
+> The type census, read with the PI table (0x02 is `FREEFORM` and 0x05 is `DXE_CORE`; the earlier habit
+> of reading 0x02 as `PEI_CORE` was a table error), is 36 `FREEFORM`, 1 `DXE_CORE` (`DxeCore`, 170,032 B,
+> which is `ap1`'s file and the reason `ap1` is the one array entry with no `DRIVER` to match), 80
+> `DRIVER` and **5 `APPLICATION`**: `MassStorage` (297,528 B), `BootManagerMenuApp` (98,404),
+> `MsBootPolicy` (357,436), `UFPLoader` (22,580) and `ufpdevicefw` (443,974) — the same five and the
+> same sizes in both volumes. None is in the array and none could be, since the promotion loop matches
+> only what the walk discovered and the walk is type-filtered to `DRIVER`/`DXE_CORE`; so
+> `MsBootPolicy` is a Microsoft boot-policy application that is *already in the image*, reachable only
+> by the DXE core's loader at BDS's request. The same census names the platform data the display and
+> charger work will need, none of which is in the source tree: twenty `Panel_*.xml`, `QcomChargerCfg.cfg`,
+> `BDS_Menu.cfg`, `uefipil.cfg`, `SecParti.cfg`, `BATTERY.PROVISION` and a dozen `.bmp` symbols and
+> boot logos. Finally, the walk's window has a numeric boundary now: the 46-entry batch is `seen` 48 or
+> 49, `DALTLMM` at DRIVER rank 47 is the last entry inside it, `FeatureEnablerDxe` at rank 48 is the
+> file between the two and is not an Apriori entry, and `SimpleFbDxe` at rank 49 is the lowest unhit
+> one that has a file. See `docs/08` step 4.166.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform
