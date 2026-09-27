@@ -43,7 +43,12 @@ last clause does not: a 46-character line **is** the stopping. Every build on th
 disk carries the same 70-entry array with nothing missing and the core file at
 index 0, so a completed walk promotes 69 entries and prints 69 characters
 (`docs/08` step 4.130); the only stops this volume allows that give exactly 46 are
-physical 49 and 50, both `miss=14 PlatformInfoDxeDriver` and `unhit=24`. Zero `?`
+physical 49 and 50, both `miss=14 PlatformInfoDxeDriver` and `unhit=24`. (**Amended 2026-09-27 by
+step 4.165:** the walk-stop reading is now measured against the same payload on the host, and the
+same volume gives the whole walk there — `P2 STATS discovered=80 apriori=69/70 started=73 diag=7
+noload=0` with a 69-character `SEQ` — while the phone's line is 46. So the 46 is not a property of
+this volume; it is either a property of the machine or a reading of a payload that is not this one,
+which is the `90b21643…` / `ecc10a22…` fork below. See `docs/08` step 4.165.) Zero `?`
 says the 46 promoted drivers were all *attempted* — a statement about the drain,
 not about the walk. The names move too, because `P2 SEQ`'s slot *k* belongs to the
 *k*-th entry that **matched** and a stopped walk's batch is not `ap1..apN`: at
@@ -440,7 +445,12 @@ the phone's payload carries `P2 SEQ` twice and **no `P2 WHY`, `P2 ERR`, `P2 FREE
 `P2 APRI`, `P2 RETRY` or `K` literal at all**, while the current build carries every one of them,
 so "SEQ read three times and WHY never read once" is a build history and not three lost
 photographs. `tools/probe-fingerprint.py` reads the two the same way — **4/14** rungs on the
-phone's payload against **14/14** on the current one. And the two digest lines are not separate readings: `P2Record`/`P2MarkSeq` write the
+phone's payload against **14/14** on the current one. (**Amended 2026-09-27 by step 4.165:** the two
+numbers are one volume each in two conventions — `lzma`'s output is 8 bytes longer than
+`tools/fv-inventory.py`'s `inner` on every image and `lz[8:] == inner` is `True`, so 7,536,648 and
+7,536,640, and 7,348,232 and 7,348,224, each name one volume; and "the current build" here is now
+identified — its `.fd` inflates to that 7,536,648 B volume and that volume is byte-identical to the
+unflashed `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`. See `docs/08` step 4.165.) And the two digest lines are not separate readings: `P2Record`/`P2MarkSeq` write the
 phase character and `P2WhyLetter (Status)` into the slot's array and `P2Tick` prints that same
 pair as the `%c%c` of one live row per dispatch attempt with the slot's GUID beside it, so
 `P2 SEQ`+`P2 WHY` are the `K` rows compressed by slot and `P2 ERR` is those statuses named.
@@ -603,6 +613,34 @@ the handshake the caller chain is three `ClockDxe` frames (`+0x3a48`, `+0x3e0c`,
 image), with no `VcsDxe` address in the window — so the waiting driver is the SD-card controller and
 the `VCS: Unable to set rail` row above it on the console is a neighbour, not the caller. The panel
 gives order; only the stack gives nesting. See `docs/08` step 4.164.
+
+**Step 4.165 is a correction of bookkeeping, and it is the one that decides how the phone's own
+reading is to be used.** Step 4.163 closed by splitting the phone's 46-character `P2 SEQ` and the
+panels' 69-character one into two builds — "the phone's is `work/out/boot-before-p2walk.img`, whose
+inflated build is 7,348,232 B, against 7,536,648 B here, so this is a statement about two builds and
+not about two machines" — and the second clause is wrong: the runs labelled "here" were handed
+`/tmp/phone-payload.raw`, which is the gunzipped kernel of `work/out/boot-before-p2walk.img`
+(`fb697f47…` → `d0919c00…`) and therefore the phone's own payload. The panels say so themselves: all
+five carry `# payload /tmp/phone-payload.raw` and `# sha256 d0919c00…` on their header lines, and
+`tools/qemu-panel-read.py` writes those from the file it is given. The 7,536,648 belongs to a build two
+rungs later — the tree's current `Build/…/SILICIUM_UEFI.fd` inflates to it, and that volume is
+byte-identical to the unflashed `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`. Three consequences
+follow. **The 46 and the 69 are one payload read on two machines**, so the 27 `L`s are made by
+something the machine supplies or fails to supply, and the emulator's reading is the control the
+phone's is measured against rather than a sibling case. **The record's two inflated-size conventions
+are one volume each**: `lzma`'s output is 8 bytes longer than `tools/fv-inventory.py`'s `inner` on
+every image (`lz[8:] == inner` is `True`), the 8 being a prefix carrying the volume's own size field,
+so 7,348,232 and 7,348,224 — and 7,536,648 and 7,536,640 — name one volume apiece. And **the deciding
+field is on the payload**: `P2 STATS discovered=80 apriori=69/70 started=73 diag=7 noload=0` with a
+69-character `SEQ` is 4.121's "walk and list both whole" row, read on the host for the build the record
+says is installed on the phone. What is now first in the device window is the `P2 STATS` row beside
+the phone's own 46-character `SEQ` — one row, on a screen already photographed — and the fork it also
+settles is which build is in `boot`, since the record calls `90b21643…` (the `p2-variants` class,
+which does carry `P2 WHY` and `P2 ERR`) "the payload in `boot`" against an on-device readback of
+`ecc10a22…`. The one thing the correction does *not* disturb is the disassembly: `ClockDxe`'s FFS file
+is byte-identical in the phone's volume and in `usb-host`'s (`4320c1d319b99897…`, 192,562 B, the vendor
+blob `c200d38e…` verbatim at `+0x1c`), so the addresses steps 4.159-4.164 are written in hold on the
+phone's payload too. See `docs/08` step 4.165.
 
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI

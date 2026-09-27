@@ -2816,6 +2816,15 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > three times, never read once" is a build history rather than three lost photographs. What is
 > still read nowhere is `P2 APRI`'s `matched`/`miss`/`entries`, which describes the promotion walk
 > over the volume and has no per-dispatch analogue. See `docs/08` step 4.158.
+>
+> **Noted 2026-09-27 by step 4.165 — the two numbers are one volume each in two conventions, and the
+> current build's is still the same volume today.** `lzma`'s output is 8 bytes longer than
+> `tools/fv-inventory.py`'s `inner` on every one of these images and `lz[8:] == inner` is `True`, the
+> 8 bytes being a prefix carrying the volume's own size field, so 7,536,648 and 7,536,640 name one
+> volume, as 7,348,232 and 7,348,224 name the phone's. That 7,536,648 is still the current `Build/`
+> tree's volume, and it is byte-identical to the unflashed `usb-host/Mu-gauguin-xhci-host-gzip.img`'s
+> — which is also why `/tmp/phone-payload.raw`, whose body inflates to 7,348,232, is *not* "a 112-byte
+> header over this build's own `SILICIUM_UEFI.fd`". See `docs/08` step 4.165.
 
 > **Extended 2026-09-27 by step 4.159 — the Apriori walk is seeded, one blob per slot, and slot 21
 > fails in the driver rather than in `DebugLib`.** Adding step 4.139's `pdc-cap.bin` (`00 00 10 00`
@@ -2982,6 +2991,23 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > own `SILICIUM_UEFI.fd` verbatim, and that volume's ClockDxe FFS
 > (`34F25731-EB1C-5681-B482-EE776F5AF58B.ffs`) carries the disassembled image byte-for-byte at its
 > offset `0x1c`. See `docs/08` step 4.163.
+>
+> **Corrected 2026-09-27 by step 4.165 — the payload's body is not this build's, so the contrast above
+> is one payload on two machines and not two builds.** `/tmp/phone-payload.raw` is still a 112-byte
+> `BootShim` header over a body — `3,145,840 − 3,145,728 = 112`, `ph[112:]` is 3,145,728 B, the same
+> length as `SILICIUM_UEFI.fd`, and both bodies begin `0e2a0014000000000000000000000000` — but
+> `ph[112:] == fd` is **False**: the payload's body inflates to 7,348,232 B at `a6f52e5a70f2f30e…`,
+> the current `.fd`'s to 7,536,648 B at `76039d00e8d2e146…`. The sentence was written when "this
+> build" *was* the build the phone carries; it is now the USB-host build — the current `.fd`'s inner
+> volume is byte-identical to the unflashed `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, and
+> `usb kernel[112:] == fd` is `True`. The ClockDxe clause survives and is strengthened: that FFS file
+> is byte-identical in the phone's volume and in `usb-host`'s (`4320c1d319b99897…`, 192,562 B, the
+> vendor blob `c200d38e…` verbatim at `+0x1c`), so the addresses steps 4.159-4.164 are written in are
+> the same addresses on the phone's payload. What does not survive is "a different build": every panel
+> in this series names `/tmp/phone-payload.raw` (its `# payload` and `# sha256 d0919c00…` header
+> lines), and that file's kernel is the gunzipped `work/out/boot-before-p2walk.img` (`fb697f47…` →
+> `d0919c00…`, 122 files, 7,348,232 B) — the number this paragraph calls the phone's. See `docs/08`
+> step 4.165.
 
 > **Extended 2026-09-27 by step 4.164 — the handshake can be released by one write, and what stands
 > behind it is named.** The poll at `ClockDxe + 0x11cbc` waits on bit 0 of the dword at `0x12000c`.
@@ -3013,6 +3039,43 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > what more instrumentation buys: the run has already drawn the `P2` digest and walked BDS's connect
 > phase into the USB stack, and every wall behind it is another clock vote only a controller could
 > satisfy. See `docs/08` step 4.164.
+
+> **Extended 2026-09-27 by step 4.165 — the phone and every run of 4.163-4.165 are one payload on two
+> machines, not two builds.** Step 4.163 closed its reading of the two `SEQ` lines by splitting them
+> into two builds ("the phone's is `work/out/boot-before-p2walk.img` … against 7,536,648 B here, so
+> this is a statement about two builds and not about two machines"), and the second clause is wrong:
+> the run labelled "here" was handed `/tmp/phone-payload.raw`. The panels say so themselves — all five
+> (`-4.163-setup`, `-4.163-control`, `-4.164-clearbit`, `-4.165-spincaller`, `-phone-payload`) carry
+> `# payload /tmp/phone-payload.raw` and `# sha256 d0919c0004d12698…` on header lines 3-4, which
+> `tools/qemu-panel-read.py` writes from the file it is handed — and that file is the gunzipped kernel
+> of `work/out/boot-before-p2walk.img` (`fb697f47…`), i.e. the phone's own payload, 7,348,232 B in 122
+> files. The 7,536,648 the sentence assigns to "here" is a volume two rungs later: the tree's current
+> `Build/gauguinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` inflates to it and its inner volume is
+> byte-identical to the unflashed `usb-host/Mu-gauguin-xhci-host-gzip.img`'s (`usb kernel[112:] == fd`
+> is `True`), which is also what makes the "112-byte header over this build's own `SILICIUM_UEFI.fd`
+> verbatim" sentence above false in its second half while right in its first. Three further readings
+> come out of the same measurements. The record's two inflated-size conventions are one volume each:
+> `lzma`'s output is 8 bytes longer than `tools/fv-inventory.py`'s `inner` on every image
+> (`lz[8:] == inner` is `True`), the 8 being a prefix that carries the volume's own size field, so
+> 7,348,232 / 7,348,224 and 7,536,648 / 7,536,640 and 7,356,424 / 7,356,416 name three volumes and not
+> six. The deciding field this file has been calling owed is already on the payload: `P2 STATS
+> discovered=80 apriori=69/70 started=73 diag=7 noload=0` with a 69-character `SEQ` (panels rows
+> 1014/1015 and 1097/1098), i.e. the "walk and list both whole" row of 4.121's prediction table,
+> obtained on the host for the build the record says is on the phone. And the Apriori FFS file at
+> `0x78` (1,148 B, 70 entries, `ed26cca36b7e978f…`) is identical in the phone's build, in
+> `p2-variants` and in `usb-host`, so nothing about the array differs across the series. The
+> instrument literal is the build fingerprint and splits cleanly: the phone's payload carries
+> `Loading driver at` ×1 with `P2 WHY`/`P2 ERR`/`P2 FREE`/`P2 WALK`/`P2 APRI`/`P2 RETRY`/`P2 FWHY`/`K`
+> ×0, and every build from `p2-4.14` on carries the reverse — which is why the 310/395/268 `Loading
+> driver at` rows in the clear panels are themselves proof the runs predate the removal of that print
+> in `Image.c:855-905`. What this changes is the *reason* for a priority and one reading of 4.163's:
+> the 27 `L`s are made by something the machine supplies or fails to supply, so the emulator's
+> 69-character reading is the control the phone's 46 is measured against rather than a sibling case.
+> What it does not change: the wall, the ladder, P3's remaining items, and the fact that nothing was
+> flashed. One row is now first in the device window — the `P2 STATS` beside the phone's 46-character
+> `SEQ` — and the fork it also settles is which build is in `boot`, since the record calls `90b21643…`
+> (the `p2-variants` class, which *does* carry `P2 WHY` and `P2 ERR`) "the payload in `boot`" against
+> an on-device readback of `ecc10a22…`. See `docs/08` step 4.165.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
