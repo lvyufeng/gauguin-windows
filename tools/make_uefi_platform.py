@@ -768,7 +768,8 @@ def apply_apriori_moves(lines, moves):
     return report
 
 
-def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
+def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False,
+                 apriori_extras=False):
     """Produce (dxe_inc, apriori_inc) for `device` from the reference package.
 
     `have` is the set of `QcomPkg/Drivers/.../*.inf` paths present under
@@ -778,17 +779,34 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
     `apriori_moves` reorders APRIORI.inc only, and only when asked for; the
     default output is byte-for-byte the reference order.
 
+    `apriori_extras` promotes the EXTRA_DRIVERS of APRIORI.inc. Off by default
+    because it is a dispatch-order change rather than a packaging one - see the
+    note above the insertion loop, and docs/08 step 4.171.
+
     `xhci_host` adds the USB host stack (see XHCI_HOST_DRIVERS). Off by default,
     which is also what keeps a regeneration of an existing tree byte-identical.
+
+    `referenced` is per file, and that is a correction rather than a style. It
+    used to be one set shared by both passes, which made every
+    `EXTRA_DRIVERS["APRIORI.inc"]` row dead code for a driver its `DXE.inc` twin
+    had already inserted: the DXE.inc pass added the path to the shared set, and
+    the APRIORI.inc pass then skipped it on `path in referenced` - silently,
+    because that branch is a bare `continue` and not a `dropped` entry, so the
+    generated file said nothing about it either. All four rows - `PwrUtilsDxe`,
+    `VcsDxe`, `FeatureEnablerDxe` and `MacDxe` - were inserted into `DXE.inc`
+    and none into `APRIORI.inc`. `out["referenced"]`, which is the union the
+    orphan report at the end of the generator reads, is the one place the two
+    passes' sets still belong together. See docs/08 step 4.171.
     """
     out = {}
-    referenced = set()
+    all_referenced = set()
     for name, key in (("DXE.inc", "dxe_inc"), ("APRIORI.inc", "apriori_inc")):
+        referenced = set()
         src = os.path.join(ref_dir, "Include", name)
         text = open(src, encoding="utf-8", errors="replace").read()
         text = text.replace(f"Binaries/{REF_PLATFORM}/", f"Binaries/{device}/")
 
-        lines, dropped = [], []
+        lines, dropped, withheld = [], [], []
         for line in text.splitlines():
             m = re.match(r'^(\s*)INF Binaries/(\S+)', line)
             # `have` is keyed the way present_drivers() builds it - relative to
@@ -804,9 +822,21 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
             lines.append(line)
 
         # Insert the drivers surya's generation predates, at their alioth anchors.
+        #
+        # The APRIORI.inc half is behind `apriori_extras`, and deliberately so:
+        # this is the one place where the generator's table asks for a change of
+        # *dispatch order* rather than for a file to be present, and the stock
+        # firmware is the authority on it (its own 74-entry array promotes
+        # PwrUtilsDxe, VcsDxe and FeatureEnablerDxe and not MacDxe; see docs/08
+        # step 4.171). Off by default, so a plain regeneration is byte-identical
+        # to what the tree already holds and the running P2 experiment keeps the
+        # a-priori array shape its instrument reads.
         for anchor, extra in EXTRA_DRIVERS.get(name, []):
             path = EXTRA_PATHS[extra]
             if path not in have or path in referenced:
+                continue
+            if name == "APRIORI.inc" and not apriori_extras:
+                withheld.append((anchor, path))
                 continue
             idx = next((i for i, l in enumerate(lines) if anchor in l), None)
             if idx is None:
@@ -879,6 +909,16 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
         if dropped:
             header += "#\n#  Not available (commented out below):\n"
             header += "".join(f"#    {d}\n" for d in sorted(set(dropped)))
+        if withheld:
+            header += ("#\n"
+                       "#  Packaged and in DXE.inc, but NOT promoted here: the alioth\n"
+                       "#  reference puts each of these into the a-priori batch and the\n"
+                       "#  stock firmware's own array agrees (see docs/08 step 4.171 for\n"
+                       "#  which of them it agrees about). Promotion is a dispatch-order\n"
+                       "#  change, so it is a switch rather than a default: rerun the\n"
+                       "#  generator with --apriori-extras to get these lines here.\n")
+            header += "".join(f"#    {p}\n#      would go just after {a}\n"
+                              for a, p in withheld)
         if skipped and name == "DXE.inc":
             header += ("#\n"
                        "#  Packaged under Binaries/gauguin/ but NOT in this file, so not in\n"
@@ -888,7 +928,11 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
         header += "##\n"
         out[key] = header + "\n".join(lines) + "\n"
         out[key + "_dropped"] = dropped
+        if withheld:
+            out.setdefault("apriori_extras_withheld", []).extend(
+                (a, p) for a, p in withheld)
         out["orphans_seen"] = set(skipped)
+        all_referenced.update(referenced)
         if moved:
             out["apriori_moved"] = moved
         if uhci:
@@ -896,7 +940,7 @@ def rewrite_incs(ref_dir, have, device, apriori_moves=(), xhci_host=False):
         if xhci_dropped:
             out.setdefault("xhci_dropped", []).extend(xhci_dropped)
     out.pop("orphans_seen", None)
-    out["referenced"] = referenced
+    out["referenced"] = all_referenced
     return out
 
 
@@ -1289,6 +1333,15 @@ def main():
                          "Binaries/bitra/, the SM7225 sibling, because this "
                          "device's XBL has no host driver to extract. "
                          "Default: off")
+    ap.add_argument("--apriori-extras", action="store_true",
+                    help="promote the four EXTRA_DRIVERS of APRIORI.inc "
+                         "(PwrUtilsDxe, VcsDxe, FeatureEnablerDxe, MacDxe) into "
+                         "the a-priori batch at their alioth anchors. The stock "
+                         "firmware's own array promotes three of the four, so "
+                         "this is what the phone shipped; it is off by default "
+                         "because promotion disables the promoted driver's depex "
+                         "(`Dispatcher.c:2111` sets Dependent = FALSE) and that "
+                         "is a device-visible change nothing has measured yet")
     ap.add_argument("--apriori-move", action="append", default=[],
                     metavar="ANCHOR:NAME[,NAME...]",
                     help="move the named APRIORI.inc INF lines to just after "
@@ -1377,12 +1430,17 @@ def main():
         sys.exit(f"missing reference package {ref_dir}\n"
                  f"clone Mu-Silicium into {mu_root} first")
     model = rewrite_incs(ref_dir, have, "gauguin", apriori_moves,
-                         xhci_host=args.xhci_host)
+                         xhci_host=args.xhci_host,
+                         apriori_extras=args.apriori_extras)
     for anchor, path in model.pop("apriori_moved", []):
         print(f"  a-priori move: {path}")
         print(f"                 -> after {anchor}")
     for note in model.pop("xhci_dropped", []):
         print(f"  USB host stack, NOT inserted: {note}")
+    for anchor, path in model.pop("apriori_extras_withheld", []):
+        print(f"  a-priori promotion withheld: {path}")
+        print(f"                               would go after {anchor}")
+        print(f"                               (--apriori-extras to insert it)")
     xhci = model.pop("xhci_host", [])
     if xhci:
         print(f"USB host stack: {len(xhci)} INF line(s) in "

@@ -4,6 +4,21 @@
 #
 #  Rewritten to Binaries/gauguin/ and filtered to the drivers this
 #  project actually extracted from the device's own XBL.
+#
+#  Packaged and in DXE.inc, but NOT promoted here: the alioth
+#  reference puts each of these into the a-priori batch and the
+#  stock firmware's own array agrees (see docs/08 step 4.171 for
+#  which of them it agrees about). Promotion is a dispatch-order
+#  change, so it is a switch rather than a default: rerun the
+#  generator with --apriori-extras to get these lines here.
+#    QcomPkg/Drivers/PwrUtilsDxe/PwrUtilsDxe.inf
+#      would go just after Drivers/CmdDbDxe/CmdDbDxe.inf
+#    QcomPkg/Drivers/VcsDxe/VcsDxe.inf
+#      would go just after Drivers/PdcDxe/PdcDxe.inf
+#    QcomPkg/Drivers/FeatureEnablerDxe/FeatureEnablerDxe.inf
+#      would go just after Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+#    QcomPkg/Drivers/MacDxe/MacDxe.inf
+#      would go just after Drivers/CipherDxe/CipherDxe.inf
 ##
 APRIORI DXE {
   INF MdeModulePkg/Core/Dxe/DxeMain.inf

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # Build one variant payload and prove that what came out is what was asked for.
-# Two experiments are defined below: `arch-first` reorders the a-priori batch,
-# `xhci-host` adds the USB host stack.
+# Three experiments are defined below: `arch-first` reorders the a-priori batch,
+# `xhci-host` adds the USB host stack, and `apriori-extras` promotes four drivers
+# into the a-priori batch that this build packages but leaves out of it.
 #
 # Why arch-first exists. The nine architectural protocols DXE never installs
 # (Security, Bds, Watchdog, Variable, Variable Write, Capsule, Monotonic, Reset,
@@ -55,6 +56,18 @@
 #                uefi/Binaries/gauguin/, which is a directory this repository
 #                ignores, so the tracked tree only ever differs by the DSC
 #                switch - and restore() puts even that back.
+#
+#   apriori-extras
+#                PwrUtilsDxe, VcsDxe, FeatureEnablerDxe and MacDxe join the
+#                a-priori batch at their alioth anchors. No file is added or
+#                removed and no offset in the volume moves; the only difference
+#                from the default payload is the Apriori GUID array. Four rows
+#                of EXTRA_DRIVERS in the generator were meant to do this from the
+#                start and did nothing at all until step 4.171, which is why this
+#                is a switch and not the default: the stock firmware's own array
+#                promotes three of the four, and letting a bug fix change the
+#                dispatch order of every future build is how the payload in
+#                `boot` stops being comparable to the one being flashed.
 #
 # Environment:
 #   DISPLAY=simple|qcom   which display driver the platform is regenerated with.
@@ -135,7 +148,16 @@ from make_xbl_binaries import SIBLING_BLOBS
 print(' '.join(SIBLING_BLOBS.values()))")
         [ -n "$STAGED_BLOBS" ] || die "SIBLING_BLOBS is empty - nothing would be staged"
         ;;
-    *) die "unknown experiment '$EXP' (known: arch-first, xhci-host)" ;;
+    apriori-extras)
+        GEN_ARGS=(--apriori-extras)
+        # No driver is added, removed or rebuilt and the volume keeps every file
+        # at every offset: the four drivers are already in it, and the only
+        # difference is that they join the a-priori batch - which is exactly the
+        # `P2 SEQ` reading this file exists to take. ORDER_ARGS is left alone
+        # because the promotion adds no `!if`.
+        REORDERS=1
+        ;;
+    *) die "unknown experiment '$EXP' (known: arch-first, xhci-host, apriori-extras)" ;;
 esac
 
 # The tree has to be left the way it was found, including after a failure: this

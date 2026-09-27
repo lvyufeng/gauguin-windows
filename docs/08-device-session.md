@@ -34783,3 +34783,215 @@ reason to state the 35/2 split rather than the 37.
   untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
   unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state
   remains a Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.171 — four rows of the generator's `EXTRA_DRIVERS` table have never done anything in `APRIORI.inc`: `referenced` was one set shared by both files, so the `DXE.inc` pass inserted each driver and the `APRIORI.inc` pass then skipped it on the exact line its own twin had just added — the stock firmware's array promotes three of the four, and the repair is behind a switch because promotion is a dispatch-order change, not a packaging one
+
+4.170 ended on an open question and this one starts from it: *"`VcsDxe` remains un-promoted, so the
+batch still goes from `PdcDxe` into `ClockDxe` with nothing between; whether promoting it — the
+one-line `APRIORI.inc` change 4.169 described — is what the phone needs is the run-time question that
+step left open."* Asking the generator to make that change is where the previous step's own tooling
+turned out to be broken.
+
+### The measurement
+
+`tools/make_uefi_platform.py`'s `EXTRA_DRIVERS` carries four drivers surya's generation predates, each
+with an entry per file — a `DXE.inc` anchor and an `APRIORI.inc` anchor, the latter transcribed from
+`Platforms/Xiaomi/aliothPkg`'s own a-priori list, where all four appear. `rewrite_incs()` called
+in-process with `have = present_drivers("device/dxe")`:
+
+```
+have: 55 of which the four extras present: ['PwrUtilsDxe', 'VcsDxe', 'FeatureEnablerDxe', 'MacDxe']
+
+=== DXE.inc: the four extras ===
+  PwrUtilsDxe          present x1      (line 59)
+  VcsDxe               present x1      (line 73)
+  FeatureEnablerDxe    present x1      (line 82)
+  MacDxe               present x1      (line 112)
+
+=== APRIORI.inc: the four extras ===
+  PwrUtilsDxe          ABSENT
+  VcsDxe               ABSENT
+  FeatureEnablerDxe    ABSENT
+  MacDxe               ABSENT
+
+dropped (dxe): []      dropped (apriori): []
+```
+
+Four rows, eight insertions intended, four performed, and **nothing reported**. The header block that
+`rewrite_incs` writes into the generated file is built from `dropped` and from the `skipped` set, and
+`dropped` was empty for both files — so the generated `APRIORI.inc` and the generator's stdout both
+said the file was complete. This is the same shape as the defect 4.170 fixed, one level up: a
+mechanism whose failure mode is that it looks like it ran.
+
+### The cause, and the cause it is not
+
+The obvious hypothesis is a missing anchor — `EXTRA_DRIVERS["APRIORI.inc"]` anchors its four rows on
+`Drivers/CmdDbDxe/CmdDbDxe.inf`, `Drivers/PdcDxe/PdcDxe.inf`,
+`Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf` and `Drivers/CipherDxe/CipherDxe.inf`, and the
+anchor lookup is `next((i for i, l in enumerate(lines) if anchor in l), None)`. **That hypothesis is
+false and it was checked before being written down:** all four anchors resolve against
+`suryaPkg/Include/APRIORI.inc`, each on exactly one line — `CmdDbDxe` 1, `PdcDxe` 1, `CipherDxe` 1,
+`VariableRuntimeDxe` 1, the last at line 41 of that file.
+
+The cause is one line of scoping:
+
+```python
+out = {}
+referenced = set()                                      # <- one set, two files
+for name, key in (("DXE.inc", "dxe_inc"), ("APRIORI.inc", "apriori_inc")):
+```
+
+`referenced` records "this file already names this driver", so that an `EXTRA_DRIVERS` row does not
+duplicate a line the reference already had. The two passes need it to mean that *per file*. Sharing it
+means the second pass reads the first pass's answer: `DXE.inc` runs first (that tuple's order is the
+loop's order), inserts all four paths, adds each to `referenced` — and then `APRIORI.inc`'s own
+insertion loop hits
+
+```python
+if path not in have or path in referenced:
+    continue
+```
+
+on the first of the two conditions and `continue`s. The anchor lookup is never reached, so the anchors
+being correct, the four paths being present, and the table being right all make no difference. It is a
+bare `continue`, not a `dropped.append`, which is why the failure left no trace in either output.
+
+The consequence is exactly the four drivers: this generator puts `PwrUtilsDxe`, `VcsDxe`,
+`FeatureEnablerDxe` and `MacDxe` into the volume by `DXE.inc` and into the a-priori batch by nothing at
+all. It is also why the `DXE.inc` half has always worked and the other half never has, which is what
+made the bug survive: half of a two-file mechanism working is indistinguishable, from the build log,
+from both halves working.
+
+### What the stock firmware says the answer should be
+
+The a-priori array the stock firmware shipped is in the volume as the FREEFORM file
+`6A69BA33-B140-5742-ABC9-0C5D03920B42` — 74 entries, the finding of 4.169 — and it can now be resolved
+by name, 74 of 74, against `device/dxe/*.ffs`:
+
+```
+stock array: 74 entries, 74 named from device/dxe
+  PwrUtilsDxe          stock: True   (index 17)
+  VcsDxe               stock: True   (index 21)
+  FeatureEnablerDxe    stock: True   (index 34)
+  MacDxe               stock: False
+```
+
+**Three of the four rows describe what the phone's own firmware does; the fourth does not.** So the
+table is right in intent for `PwrUtilsDxe`, `VcsDxe` and `FeatureEnablerDxe` — a promotion the stock
+array independently performs — and `MacDxe`'s APRIORI entry is alioth's, not this device's, which is
+worth knowing before treating the four as one decision. Recovering the three moves the alignment
+between our array and the stock one from 54 shared positions to 57, and the three new ones land within
+one index of where the stock puts them (18 against 17, 22 against 21, 34 against 34).
+
+There is a second reason the three matter beyond fidelity to the stock order, and it is 4.170's: the
+two drivers 4.170 found to be the only ones whose depex is actually *read* are `VcsDxe`
+(`AE37B942 AND gEfiChipInfoProtocolGuid`) and `PwrUtilsDxe` (`TRUE`) — and promotion is exactly what
+stops a depex being read (`Dispatcher.c:2114` sets `Dependent = FALSE` before `CoreIsSchedulable` is
+consulted). `VcsDxe` promoted is `VcsDxe` starting without waiting for `ChipInfo`. That is a real,
+device-visible behaviour change, which is the next section.
+
+### The repair, and why it is a switch rather than a default
+
+Two changes, and they are deliberately not the same change:
+
+- **`referenced` becomes per file**, with the two passes' sets unioned into `all_referenced`, which is
+  what `out["referenced"]` returns and therefore what the generator's `N blobs are packaged but not
+  listed by the surya reference` line at the end reads. That count is **11 before and 11 after** — the
+  union is unchanged, because the four paths the `APRIORI.inc` pass now inserts were already in the
+  union by way of `DXE.inc`. Which is to say: the one place the bug *would* have shown up in the
+  generator's output is the one place it could not.
+- **The `APRIORI.inc` half of the table is behind `--apriori-extras`, off by default.** The generator's
+  own precedent for this is `XHCI_HOST_DRIVERS`, which the same file puts behind a DSC conditional
+  "so the default build cannot acquire it by regenerating". The reason here is sharper: this table row
+  is the only one in the generator that changes *dispatch order* rather than *what is packaged*, the
+  payload currently in `boot` has a 70-entry array, and a bug fix that silently moved every future
+  build to 74 entries would make the next device reading incomparable to the last one.
+
+Withheld rows are not silent — that is the part of the fix that matters. The default regeneration now
+writes this into the generated `APRIORI.inc`, and the four lines appear on stdout too:
+
+```
+#  Packaged and in DXE.inc, but NOT promoted here: the alioth
+#  reference puts each of these into the a-priori batch and the
+#  stock firmware's own array agrees (see docs/08 step 4.171 for
+#  which of them it agrees about). Promotion is a dispatch-order
+#  change, so it is a switch rather than a default: rerun the
+#  generator with --apriori-extras to get these lines here.
+#    QcomPkg/Drivers/PwrUtilsDxe/PwrUtilsDxe.inf
+#      would go just after Drivers/CmdDbDxe/CmdDbDxe.inf
+#    ...
+```
+
+The default output is otherwise unchanged, and that was checked rather than assumed: a default
+regeneration of the tracked tree differs from it in **the header comment block only** — 72 `INF` lines
+before, 72 after, byte-identical line for line, and `DXE.inc` byte-identical whole. `--apriori-extras`
+adds exactly four `INF` lines and touches no other file.
+
+### The artifact
+
+`tools/build-apriori-variant.sh` gains a third experiment, `apriori-extras`, which regenerates with the
+flag, builds, packages and runs the same gates as the other two; `REORDERS=1`, because this is an
+a-priori-order experiment and the `P2 SEQ` reading is the one that answers it. Run clean:
+
+```
+Mu-gauguin-apriori-extras-gzip.img
+  sha256          2a5b6326cda68457dcf3804c97b4480dde2efd95255dbe88fc481286af7c5cd9
+  size            1,144,832
+  the array is exactly the INF order of APRIORI.inc: 74 entries, zero mismatches
+  matches FVMAIN.Fv.txt: 123 offsets and GUIDs, zero mismatches
+  all images structurally check out
+  Every image passes the checks ABL makes before it hands control over.
+```
+
+read back out of the image rather than out of the file, the array is **74 entries** where the payload
+of record's is 70, and the four additions are `PwrUtilsDxe` (index 18), `VcsDxe` (22),
+`FeatureEnablerDxe` (34) and `MacDxe` (67) — the four and nothing else. The `usb-host` payload's array
+is still **70**, so the switch does not leak into the experiment already staged for the device, and
+`restore()` — which regenerates with no flag — puts the tracked package back, which
+`tools/build-apriori-variant.sh` did at the end of the run.
+
+### Rows:
+
+- **instrument**: `tools/make_uefi_platform.py`'s `rewrite_incs()` called in-process with
+  `have = present_drivers("device/dxe")`, before and after the change; `suryaPkg/Include/APRIORI.inc`
+  and `aliothPkg/Include/APRIORI.inc` for the anchors and for what the table was transcribed from; the
+  stock 74-entry array in the FREEFORM file `6A69BA33-B140-5742-ABC9-0C5D03920B42` of
+  `/tmp/phone-payload.raw`, resolved 74 of 74 against `device/dxe/*.ffs` NameGuids; and the built
+  payload `work/out/p2-variants/Mu-gauguin-apriori-extras-gzip.img` (`2a5b6326cda68457…`, archived to
+  `work/out/fd-archive/`), with `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (`34360470b8a7aafad…`)
+  as the control for "did the switch leak". Read by `tools/apriori-order.py`, `tools/fv-inventory.py`
+  and `tools/build-apriori-variant.sh`. No device was touched.
+- **shows**: that all four `EXTRA_DRIVERS` rows of `APRIORI.inc` have been dead code for their whole
+  life, and that the reason is one shared `referenced` set and not a missing anchor (all four anchors
+  resolve, one line each); that the failure was reported by nothing, in the generated file or on
+  stdout, because the skip is a bare `continue` rather than a `dropped` entry; that the stock
+  firmware's own array promotes three of the four — `PwrUtilsDxe`, `VcsDxe`, `FeatureEnablerDxe` — and
+  not `MacDxe`; and that turning them on moves the array from 70 entries to 74 on the artifact, with
+  the alignment against the stock array going 54 → 57.
+- **adds**: `--apriori-extras` in `tools/make_uefi_platform.py`, the per-file `referenced` /
+  unioned `all_referenced` split, the withheld-promotion block in the generated header, and the stdout
+  lines that name each withheld row with its anchor; the `apriori-extras` experiment in
+  `tools/build-apriori-variant.sh`; and the header block now present in the tracked
+  `uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc`, which is where a reader of the tree will
+  meet the four unpromoted drivers next.
+- **corrects**: nothing 4.169 or 4.170 measured — their numbers stand, and 4.170's closing sentence
+  ("`VcsDxe` remains un-promoted, so the batch still goes from `PdcDxe` into `ClockDxe` with nothing
+  between") remains true of the default payload; what this step adds is that the sentence had a
+  one-line `APRIORI.inc` change behind it that could not have been made by the tool as it stood. One
+  earlier reading of the same evidence is worth recording as wrong rather than leaving to be
+  re-derived: `EXTRA_DRIVERS["DXE.inc"]` does contain a `VcsDxe` row, anchored on `ClockDxe`, and the
+  source comment above the table saying so is accurate; the table was never the broken half.
+- **does not close**: anything about the device. Promotion is the one change in this series that
+  discards a dependency 4.170 had just restored, so it is the change most in need of a panel reading —
+  `P2 SEQ` — and there is no device in this window. The `apriori-extras` payload is *not* the payload
+  to flash in place of the one in `boot` until that reading has been taken on the latter
+  (`--xhci-host`'s own note in `tools/build-apriori-variant.sh` says the same thing about its image,
+  for the same reason). Also open: which payload `boot` currently holds, and every item 4.163–4.170
+  left open.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched. One firmware was built — the
+  `apriori-extras` variant — and it replaced nothing on the phone. `userdata` (107 GB, unbacked), the
+  partition table and the firmware LUN remain untouched. The porting goal is unchanged and unmet: no
+  Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and P5's
+  peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.

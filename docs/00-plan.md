@@ -882,6 +882,32 @@ Work:
 > they cannot stall anything. This does **not** claim to explain 4.164's `HAL_clk_FabiaPLLEnableVote`
 > park, and `VcsDxe` remains un-promoted, so the batch still goes from `PdcDxe` into `ClockDxe`. See
 > `docs/08` step 4.170.
+>
+> **Step 4.171 (2026-09-27) found that the one-line change 4.170 pointed at could not have been made
+> by the tool as it stood: four rows of `tools/make_uefi_platform.py`'s `EXTRA_DRIVERS` table have
+> never done anything.** The table lists `PwrUtilsDxe`, `VcsDxe`, `FeatureEnablerDxe` and `MacDxe`
+> twice — once for `DXE.inc`, once for `APRIORI.inc` — and just after any generation all four are in
+> `DXE.inc` and **none** is in `APRIORI.inc`, with the generator reporting nothing. The cause is one
+> `referenced = set()` shared by both files where it has to be per file: the `DXE.inc` pass inserts
+> each path and records it, and the `APRIORI.inc` pass then skips the row on `path in referenced`,
+> which is a bare `continue` rather than a `dropped` entry — so the miss left no trace in the
+> generated file or on stdout. It is not a missing anchor; all four anchors resolve against
+> `suryaPkg/Include/APRIORI.inc` (checked first, and the guess was wrong). What settles the intent is
+> the stock firmware's own 74-entry a-priori array, which can now be resolved by name 74 of 74:
+> it promotes `PwrUtilsDxe`, `VcsDxe` and `FeatureEnablerDxe`, and **not** `MacDxe` — three of the
+> four rows describe what this phone's firmware does. The repair is `referenced` per file (with the
+> two sets still unioned for the orphan report, whose count is 11 either way — the one place the bug
+> would have surfaced is the one place it could not) plus `--apriori-extras`, **off by default**,
+> because promotion is a dispatch-order change and the only one in this series that *discards* a
+> depex 4.170 had just restored: `Dispatcher.c:2114` sets `Dependent = FALSE`, so promoting `VcsDxe`
+> means `VcsDxe` no longer waits for `ChipInfo`. The default regeneration of the tree is otherwise
+> unchanged (72 `INF` lines before and after, `DXE.inc` byte-identical) and now writes the four
+> withheld rows into its header instead of staying quiet about them; `--apriori-extras` adds exactly
+> four `INF` lines. Built and gated as `tools/build-apriori-variant.sh apriori-extras`:
+> `work/out/p2-variants/Mu-gauguin-apriori-extras-gzip.img` (`2a5b6326cda68457…`, 1,144,832 B), whose
+> array the build's own gate reads back at **74 entries** against the payload of record's 70, with the
+> alignment to the stock array moving 54 → 57, while the `usb-host` payload stays at 70. See `docs/08`
+> step 4.171.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

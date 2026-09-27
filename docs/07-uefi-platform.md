@@ -3268,6 +3268,25 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `Dispatcher.c:2114-2125` sets `Dependent = FALSE` for a driver the a-priori array names, and 35 of
 > the 37 are in that array, so only `VcsDxe` (`AE37B942 AND gEfiChipInfoProtocolGuid`) and
 > `PwrUtilsDxe` (`TRUE`) get a depex that is actually read. See `docs/08` step 4.170.
+>
+> **Named and fixed 2026-09-27 by step 4.171 — `EXTRA_DRIVERS` has never had a working `APRIORI.inc`
+> half.** The table in `tools/make_uefi_platform.py` carries four drivers surya's generation predates,
+> each with one row per file; measured in-process, a generation leaves all four in `DXE.inc` (lines
+> 59, 73, 82 and 112) and **none** in `APRIORI.inc`, with `dropped` empty for both files. The cause is
+> a `referenced` set shared by the two passes when it has to be per file: `DXE.inc` runs first and
+> records each inserted path, and `APRIORI.inc`'s loop then skips the row on `path in referenced` —
+> a bare `continue`, not a `dropped` entry, which is why the generated file and the generator's stdout
+> both read as complete. Not a missing anchor: all four anchors (`CmdDbDxe`, `PdcDxe`,
+> `VariableRuntimeDxe`, `CipherDxe`) resolve, one line each. What decides the intent is the stock
+> firmware's own 74-entry a-priori array, resolved 74 of 74 by name against `device/dxe/*.ffs` — it
+> promotes `PwrUtilsDxe`, `VcsDxe` and `FeatureEnablerDxe` and not `MacDxe`. Repaired as `referenced`
+> per file plus `--apriori-extras`, off by default because promotion sets `Dependent = FALSE` and so
+> *removes* the depex 4.170 restored — promoting `VcsDxe` is `VcsDxe` starting without `ChipInfo`. The
+> default regeneration is unchanged in its `INF` lines and now names the four withheld rows in its
+> header; with the flag the array goes 70 → 74 on the artifact
+> (`work/out/p2-variants/Mu-gauguin-apriori-extras-gzip.img`, `2a5b6326cda68457…`), the alignment to
+> the stock array moves 54 → 57, and the `usb-host` payload's array stays at 70. See `docs/08` step
+> 4.171.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
