@@ -45,6 +45,22 @@
 # `_CID` this port writes on URS0 is claimed there and appears claimed nowhere
 # in boot.wim, whose only URS file is the function-side child driver.
 #
+# Read out of an *x64* image, and that is measured rather than taken from the
+# ISO's name: a DriverStore folder is `<inf>_<arch>_<hash>`, so the suffix
+# counts what the image is. install.wim index 1 gives 710 `_amd64_` and 2
+# `_x86_` and no `_arm64_` at all; boot.wim index 1 gives 339 `_amd64_` and no
+# `_arm64_`. All five infs behind the two verdicts above - `QCOM24A5` and
+# `PNP0CA1` - are UTF-16 with every `[Manufacturer]` entry ending `,NTamd64` and
+# every models section `.NTamd64`, and no `NTarm64` section in any of them - so
+# `storufs.inf` binding `ACPI\QCOM24A5` is a statement about the file in an x64
+# image, whose ARM64 twin is a different file carrying a different section, and
+# that file is not on this host. The vendor set is the other way round:
+# `~/work/woa-ref/inf-7280` is 112 `.inf`, all UTF-16, 241 `NTARM64` decorations
+# and not one line mentioning `NTamd64`, `NTx86` or `NTia64`. Its 155 claims are
+# ARM64 claims already, so what is missing costs the OS-side verdicts alone - and
+# those two are not equal in weight: `QCOM0A8B` is USB, `QCOM24A5` is the storage
+# Windows boots from.
+#
 # An earlier draft of this header said "both images: 339 .inf files, 85 distinct
 # `ACPI\` ids". That was boot.wim's count written twice: the install.wim run had
 # not been made, and a number copied forward from the run that had reads exactly
@@ -67,7 +83,11 @@ log() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'
+    # The header, not a line range. Line ranges here have been wrong twice -
+    # Step 4.151 moved 2,50p to 2,58p when the header grew, and this step's
+    # paragraphs ran past 58 again - and a --help that stops mid-sentence reads
+    # like the header ended there. Stop at the first line of code instead.
+    awk 'NR > 1 && /^set -u/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in

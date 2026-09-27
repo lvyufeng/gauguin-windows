@@ -232,6 +232,31 @@ INF_ACPI = re.compile(r"ACPI\\\s*([A-Za-z0-9_]{3,16})", re.I)
 # `URS\PNP0CA1&FUNCTION` and `ufxchipidea.inf` binds `URS\PNP0C90&FUNCTION`, and
 # `PNP0CA1` is the `_CID` this port writes on URS0. A net that only sees four
 # hex digits after `QCOM` reads the OS's answer for that node as silence.
+#
+# It runs over the whole file text and so returns everything of that shape, not
+# only device ids. Measured against `~/work/woa-ref/inf-7280`, 2026-09-27: 631
+# ids under 210 prefixes, of which twelve prefixes are device buses (`ADSP` 70,
+# `CDSP` 52, `USBFN` 10, `AUCD` 8, `ADCM` 6, and `URS`, `UEFI`, `VIDEO`, `IPAB`,
+# `WPSS`, `QCA_SHB`, `SWC`) and the rest are registry roots, keys and value
+# names, 20-hex-char `Mappings\TFTP\Default\<hash>` fragments, and hex literals
+# (`DEFAULT` 468, `X04` 47, `MCFG` 28, `AUTOLOGGER` 20, plus `PARAMETERS`,
+# `MAPPINGS`, `PROFILES`, `SOFTWARE`, `CONTROL`, `CURRENTCONTROLSET`,
+# `DRIVERSTORE`, country and carrier names, `0X00`-`0X37`). Two side effects of
+# the shape, both visible in that tally: the `&`-split below folds the five
+# `VEN_QCOM&DEV_*` forms (`&DEV_0A22`, `&DEV_0A28`, `&DEV_0A29`, `&DEV_0AC1`,
+# `&DEV_QCListenSoundModel`) into the single id `VEN_QCOM`, and
+# `UEFI\RES_{guid}` is filed as the id `RES_`.
+#
+# None of that reaches a verdict this tree depends on: of the 42 ids in
+# `tools/acpi/gauguin.asl`, exactly one carries a bus note - `QCOM0A8B`, as
+# `URS\QCOM0A8B&FUNCTION` and `URS\QCOM0A8B&HOST`, both real. But an id whose
+# spelling collides with a registry key would print under `NOT CLAIMED` as
+# "named by this set on another bus" when the set had named nothing, which is
+# the same failure direction Step 4.151 removed from the claim column. Working
+# out what separates "names a device id" from "contains a path of that shape"
+# is left open rather than guessed at: every candidate rule (a bus whitelist, a
+# per-section scan, a path-shape test) can go stale without saying so, which is
+# what Step 4.149 was about.
 INF_BUS = re.compile(r"([A-Za-z][A-Za-z0-9_]{1,11})\\\s*"
                      r"([A-Za-z0-9_]{3,20}(?:&[A-Za-z0-9_]+)?)")
 
@@ -635,6 +660,12 @@ def mention_lines(hid, notes):
         are the shapes; both are text an extension writes into the registry, so
         they say the set knows the name and not that anything answers to it).
       * named nowhere          - no bus prefix, no value, no token at all.
+
+    The first line's strength is the form it prints, not the fact that it
+    printed. `URS\\QCOM0A8B&HOST` is the parent token of an id a models line in
+    that same file binds, so the set is building on the name; a match inside a
+    registry path says only that the spelling occurs. `INF_BUS` returns both and
+    the line shows which, so read the form - the column is not a rank.
     """
     bus = notes["bus"].get(hid)
     if bus:
@@ -744,12 +775,14 @@ def bind_asl(args, hids, notes):
         print("  Windows built from it those nodes are absent from Device Manager.")
         print("  Fine while the block is not needed; a silent failure the moment")
         print("  it is.")
-        print("  Where a line under the id says the set names it on another bus, the")
-        print("  id is the set's and only the attach is missing; where that line says")
-        print("  it is only the name of a `[Strings]` key, nothing binds it and the")
-        print("  name is free to take; where it says nowhere, the set does not carry")
-        print("  a driver for the block at all. The three are worth reading")
-        print("  separately before acting on any of them.")
+        print("  Where a line under the id says the set names it on another bus, read")
+        print("  the form before the line. Where it is the parent token of an id a")
+        print("  models line in the same file binds, the set is building on the name")
+        print("  and only the attach is missing. Where that line is the name of a")
+        print("  `[Strings]` key, nothing binds it and the name is free to take.")
+        print("  Where it says nowhere, the set does not carry a driver for the block")
+        print("  at all. The three are worth reading separately before acting on any")
+        print("  of them.")
         print("  (This used to name UFS and the UART as the pair. Step 4.70 wrote a")
         print("  UART node and the set claims its id, so the examples are the list")
         print("  above and are no longer repeated here - a hardcoded example goes")

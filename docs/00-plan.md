@@ -462,7 +462,7 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150 and 4.151): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151 and 4.152): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the
@@ -495,6 +495,27 @@ occurrences and `install.wim` 111 of 116 — the difference in each OS image bei
 coverage moved: every verdict for this table's 34 ids is unchanged, and `--bind` now prints *where*
 each answer came from — the position that matters here is `compatible`, the one `URS0`'s `_CID` is
 matched through and the one a hardware-id-only column would have reported as silence.
+Step 4.152 then asked the artifacts which *architecture* those two oracles are, rather than taking it
+from the ISO's name, and the answer splits the item in half. A DriverStore folder is
+`<inf>_<arch>_<hash>`, so the suffix counts what the image is: `install.wim` index 1 holds 710
+`_amd64_` packages, 2 `_x86_` and **no `_arm64_`**, `boot.wim` index 1 holds 339 `_amd64_` and no
+`_arm64_`, and all five infs behind the two QCOM verdicts (`storufs`, `urssynopsys`, `ufxsynopsys`,
+`urschipidea`, `ufxchipidea`) are `NTamd64`-only — every `[Manufacturer]` entry ends `,NTamd64`,
+every models section is `.NTamd64`, no `NTarm64` section in any of them. So the OS half of the
+reading is missing the file that would carry it, and `storufs.inf` binding `ACPI\QCOM24A5` is a
+statement about an x64 image whose ARM64 twin is a different file. The vendor half is already an
+ARM64 reading: `~/work/woa-ref/inf-7280` is 112 `.inf`, all UTF-16, 241 `NTARM64` decorations and not
+one line mentioning `NTamd64`, `NTx86` or `NTia64`, so its 155 claims are ARM64 claims and the 32 of
+this table's 34 ids it answers are answered on the right architecture. What is left costs exactly the
+two ids the OS oracle exists for, and they are not equal in weight: `QCOM0A8B` is USB, `QCOM24A5` is
+the storage Windows would boot from. The same pass wrote down the two things the vendor USB filters
+say that this table had not recorded — `QcXhciFilter7280.inf` also binds the *standalone* host-mode
+ids `ACPI\QCOM0A24` and `ACPI\QCOM0AA1`, so the `URS0` route this table took is a choice between two
+and not the only one, and its sibling `QcUsbFnSsFilter7280.inf` extends the Synopsys UFX
+(`Include=ufxsynopsys.inf`, `StartType=0`, `Group=filter`), which is vendor-side corroboration that
+`PNP0CA1` and not the ChipIdea `PNP0C90` is this platform's role-switch — while `storufs.inf`'s own
+`ACPI\CC_010901` entry is a third route that is written down and left alone, since whether `acpi.sys`
+ever produces a class-code id is not readable from an `.inf`.
 Buttons are written as of Step 4.89 (`BTNS`, `ACPI0011`), the node that needed
 no shipped driver at all because the operating system supplies it, and the USB port is written
 as of Step 4.90 — the `RHUB`/`PRT1` pair under each of `URS0`'s two children, the node that

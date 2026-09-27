@@ -2609,7 +2609,7 @@ sources that do not share a method:
 |---|---|
 | the name join above | `GIO0` = `QCOM0C` and `SPMI` = `QCOM0B` on lisa, a52sxq, renoir, Cedros, Kailua, Waipio, venus, vili, lemonade and Lahaina — twelve tables — and gauguin's `pinctrl@f100000` is `0x0F100000 + 0x300000`, which is lisa's window exactly |
 | the 21 PMIC-GPIO nodes in the 66-table corpus | nine distinct `_HID`s whose middle byte is a family and nothing else — `QCOM0269`/02, `QCOM0530`/05, `QCOM0830`/08, `QCOM092D`/09, `QCOM0A2D`/**0A**, `QCOM0C2D`/0C, `QCOM1430`/14, `QCOM1A2D`/1A, `QCOM252D`/25. gauguin is `QCOM0A2D` |
-| the SC7280/Kodiak Windows driver set | 112 `.inf`, 155 claimed ids (158 `ACPI\` occurrences before Step 4.151 stopped counting commented-out models lines and `[Strings]` key names as claims). Under `0A` it claims 4 of the 5 distinct index ids — `0B` qcspmi7280, `0C` qcgpio7280, `10` qci2c7280, `16` qcuart7280 — covering **8 of gauguin's 10 indexable blocks**. Under each of the other eight candidate bytes it claims **0 of 5**, covering 0 of 10 |
+| the SC7280/Kodiak Windows driver set | 112 `.inf`, 155 claimed ids (158 `ACPI\` occurrences before Step 4.151 stopped counting commented-out models lines and `[Strings]` key names as claims), all 112 UTF-16 and every section decorated `NTARM64` — 241 of them and not one line in the set mentioning `NTamd64`, `NTx86` or `NTia64`, so its 155 claims are ARM64 claims and this table's ids are matched on the architecture the phone runs (Step 4.152). Under `0A` it claims 4 of the 5 distinct index ids — `0B` qcspmi7280, `0C` qcgpio7280, `10` qci2c7280, `16` qcuart7280 — covering **8 of gauguin's 10 indexable blocks**. Under each of the other eight candidate bytes it claims **0 of 5**, covering 0 of 10 |
 
 The two blocks `0A` does not cover are `SE0` and `SE6` (both index `0E`), which no
 `.inf` in the set names — a real gap in that set, not a doubt about the byte. Step 4.70
@@ -2618,7 +2618,15 @@ all five driver trees on this host (`inf-7280`, `qrd`, `qrd/7280_CLS`,
 `windows_silicon_qcom_kodiak`, `windows_silicon_qcom_rennell`) finds `QCOM0A0E` in none of
 them, and those four carry no `.inf` at all. So no SPI engine on this SoC can be driven by
 anything on this machine, which is why the two live SPI engines are measured and not
-declared. And the
+declared. **Step 4.152 corrects the clause and keeps the conclusion.** Those four do carry
+`.inf` files: `qrd/7280_CLS/200.0.4.0/` is 112 `.cab`, each holding exactly one `.inf` and
+nothing else of that kind, with no two cabs sharing a basename, and extracting all 112 gives
+112 files byte-identical to `inf-7280`'s and set-identical to them — the same package in its
+packed form, which is why a `*.inf` glob over `qrd` returned nothing. So the five names are
+**one driver package counted twice and two documentation repositories with no `.inf` at
+all**, and the search was over one package either way. The conclusion survives because the
+one thing that ever could have answered was searched in its unpacked form; what does not
+survive is reading "four trees carry no `.inf`" as four independent confirmations. And the
 set states `QCOM0A2D` and `QCOM0A0C` itself in `qcpmicgpio7280.inf` and
 `qcgpio7280.inf`, independently of anything the census computed.
 

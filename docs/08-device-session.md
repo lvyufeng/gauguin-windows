@@ -30924,3 +30924,143 @@ device-side item from Step 4.149.
 | corrects | the header's "distinct `ACPI\` ids", which counted one of five positions and reported it as coverage — the vendor set 158 → 155 (the 3 comment-only ids), `boot.wim` 85 → 80, `install.wim` 116 → 111 (the 5 key names and, in the vendor set, the 3 comments); the uncalled `strip_inf_comments()` written at Step 4.150, now called; `tools/os-driver-store.sh`'s per-image counts and this record's Step 4.150 summary line; and the claim bucket itself, which now holds claims |
 | does not close | the ARM64 reading, without which none of the OS-side claims is a statement about the phone; whether `ExcludeFromSelect` should count as a claim, now visible as a judgement rather than buried in the count; which id names `URS0`'s children; the `0A0E` SPI question; the P2 gate, the P3 gate and every device-side reading, all unchanged; P4's `userdata`-destroying install and P5's peripherals, not begun |
 | not an action | nothing was built for the device, nothing was flashed and no partition was written; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN remain untouched; the porting goal is unchanged and unmet, and the end state is still a Windows tablet whose modem and cameras are undrivable |
+
+## Step 4.152 — the ARM64 question was being answered from the ISO's filename and the driver-tree inventory from a `*.inf` glob: the images are x64 by their own DriverStore suffixes, the vendor package is `NTARM64` in all 112 files, and `qrd`'s 112 `.inf` are inside its cabs rather than absent
+
+Step 4.151 left the ARM64 image open as "without which none of the OS-side
+claims is a statement about the phone". That is still true and this step does not
+close it. What it does is replace two readings that had been taken from a name
+with measurements taken from the files, and both of them move something.
+
+**The vendor half of the ARM64 reading is already done, and had never been
+stated.** `~/work/woa-ref/inf-7280` is 112 `.inf`, every one UTF-16 with a BOM,
+and every section in it is decorated `NTARM64` — 241 decorations, and a scan for
+`NTamd64`, `NTx86` or `NTia64` across every non-comment line of all 112 files
+returns **zero**. So all 155 claimed ids are ARM64 claims, and the 32 of this
+table's 34 ids the set answers are answered on the architecture the phone runs.
+That is not an inference from the package being called Kodiak; it is in the
+files. Until now the only place in the tree that said anything about which
+architecture had been read was one parenthetical in the shell header,
+`Measured 2026-09-27 on Win11 25H2 x64 (10.0.26100)` — true, but taken from the
+ISO's name rather than from the image.
+
+**The OS half is missing the file that would carry it, and that is now a
+property of what was read rather than an absence on a disk.** The two images on
+this host are x64 by measurement: a DriverStore folder is
+`<inf>_<arch>_<hash>`, so the suffix counts what the image is.
+
+  * `install.wim` index 1 — 712 packages: **710 `_amd64_`,
+    2 `_x86_`, 0 `_arm64_`**
+  * `boot.wim` index 1 — 339 packages: **339 `_amd64_`, 0 `_arm64_`**
+
+And the five infs behind the two ids the OS oracle exists for — `storufs.inf`
+(`QCOM24A5`), `urssynopsys.inf` (`QCOM24B6`, `PNP0CA1`), `ufxsynopsys.inf`,
+`urschipidea.inf` and `ufxchipidea.inf` — carry exactly one architecture
+decoration each, `NTamd64`: every `[Manufacturer]` entry ends `,NTamd64` and
+every models section is `.NTamd64`, with no `NTarm64` section in any of them.
+`storufs.inf` binding `ACPI\QCOM24A5` is therefore a statement about the file in
+an x64 image, whose ARM64 twin is a different file carrying a different section.
+That file is not on this host, and no amount of reading the x64 one produces it.
+
+What the split costs is exactly the OS-side verdicts, and they are not equal in
+weight: `QCOM0A8B` is USB, `QCOM24A5` is the ACPI-enumerated UFS controller, and
+that is where Windows boots from in P4. So the open item is not a peripheral
+nicety, and it is worth stating as the boot-blocking unknown it is rather than
+as a missing download.
+
+**Two things the vendor USB filters say that this tree had not written down.**
+`QcXhciFilter7280.inf` binds three ids, not the one the record had:
+
+    %Standard.DeviceDesc%=QcXhciFilter.NT, URS\QCOM0A8B&HOST   ; URS0 mode MSFT XHCI stack
+    %Standard.DeviceDesc%=QcXhciFilter.NT, ACPI\QCOM0A24       ; Standalone Host Mode: Prim USB controller
+    %Standard.DeviceDesc%=QcXhciFilter.NT, ACPI\QCOM0AA1       ; Standalone Host Mode: Sec USB controller
+
+`QCOM0A24` and `QCOM0AA1` are the *standalone* host-mode ids — the controller
+enumerated directly, with no role-switch stack above it — and this table writes
+neither of them, nor `QCOM0A8C`, the second URS node that its sibling
+`QcUsbFnSsFilter7280.inf` binds as `URS\QCOM0A8C&FUNCTION`. So the tree has
+chosen **URS mode with one controller**, and that is now visible as a choice
+between two routes rather than as the only route.
+
+The same sibling settles which URS this platform has, from the vendor side: its
+install sections are `Include=ufxsynopsys.inf` and `Needs=ufxsynopsys.Install.NT`,
+and its service is `StartType=0`, `Group=filter`. A vendor package extending the
+**Synopsys** UFX is independent corroboration of the `_CID PNP0CA1` this table
+writes on `URS0`: the pair `urschipidea.inf` covers is `ACPI\QCOM24B7` and
+`ACPI\PNP0C90`, and the vendor set never names `PNP0C90`, `QCOM24B7` or
+`ufxchipidea` anywhere in its 112 files.
+
+A third route, written down and left alone: `storufs.inf` binds
+`ACPI\CC_010901` and `PCI\CC_010901` alongside `ACPI\QCOM24A5`, the class-code
+form for mass storage / UFS. It is the only one of the 712 x64 infs that uses an
+`ACPI\CC_` id, and the vendor set uses `CC_` nowhere. Whether `acpi.sys` ever
+produces such an id is that driver's behaviour and is not readable from an
+`.inf`, so it is recorded as an alternative the OS accepts, not as a route to
+take.
+
+**And the driver-tree count was a glob being read as an inventory.** `docs/07`
+said the search for `QCOM0A0E` ran "over all five driver trees on this host
+(`inf-7280`, `qrd`, `qrd/7280_CLS`, `windows_silicon_qcom_kodiak`,
+`windows_silicon_qcom_rennell`) … and those four carry no `.inf` at all". The
+second clause is false, and the shape of the error is the one this file's last
+six steps are all about — a tool whose reading was narrower than the sentence it
+was written into. `qrd/7280_CLS/200.0.4.0/` is 112 `.cab`; listing all of them
+gives 112 `.inf` members, exactly one per cab, with no two cabs sharing a
+basename; extracting all 112 gives 112 files **byte-identical** to `inf-7280`'s
+and set-identical to them, 2022 mtimes intact. So `qrd` is the same package in
+its packed form — which is why a `*.inf` glob over it returned nothing — and the
+five names are **one package counted twice plus two documentation repositories
+with no `.inf` at all**. The conclusion survives, because the one thing that
+could have answered was searched in its unpacked form; what does not survive is
+reading "four trees carry no `.inf`" as four independent confirmations. The
+honest count of Windows driver packages on this host is **one**.
+
+**One more reading narrowed, in the tool this time, and left open rather than
+guessed at.** `--bind`'s third line, "but named by this set on another bus",
+comes from `INF_BUS`, which runs over the whole uppercased file text. Measured
+against `inf-7280`: it returns **631 ids under 210 prefixes**, of which twelve
+prefixes are device buses (`ADSP` 70, `CDSP` 52, `USBFN` 10, `AUCD` 8, `ADCM` 6,
+and `URS`, `UEFI`, `VIDEO`, `IPAB`, `WPSS`, `QCA_SHB`, `SWC`) and the rest are
+registry roots, keys and value names, `Mappings\TFTP\Default\<20-hex-hash>`
+fragments and hex literals — `DEFAULT` alone accounts for 468. Two side effects
+of the match's shape: the `&`-split that exists so `QCOM0A8B&HOST` and
+`&FUNCTION` collapse to one id also folds the five `VEN_QCOM&DEV_*` forms into
+the single id `VEN_QCOM`, and `UEFI\RES_{guid}` is filed as the id `RES_`. It is
+inert for this tree — of the 42 ids in `tools/acpi/gauguin.asl` exactly one
+carries a bus note, `QCOM0A8B`, and both its forms are real — so nothing in the
+plan rests on the noise. But an id whose spelling collided with a registry key
+would print under `NOT CLAIMED` as corroboration, which is the failure direction
+Step 4.151 removed from the claim column. So the tool now says what the net
+contains and how wide it is, and `--bind`'s footer says to read the *form* rather
+than the line, because `URS\QCOM0A8B&HOST` (the parent token of an id a models
+line in the same file binds) and a registry-path hit are printed identically.
+Deciding what separates "names a device id" from "contains a path of that shape"
+is left open: every candidate rule — a bus whitelist, a per-section scan, a
+path-shape test — can go stale without saying so, and that is what Step 4.149 was
+about.
+
+**Also corrected while in the file.** `tools/os-driver-store.sh`'s `usage()` read
+its own header with `sed -n '2,58p'`. Step 4.151 had already moved that range
+once when the header grew, and this step's paragraphs ran past 58 again, so
+`--help` stopped mid-sentence — which reads like the header ended there, the same
+way a truncated list reads like a complete one. It now stops at the first line of
+code: `awk 'NR > 1 && /^set -u/ { exit } NR > 1' "$0"`. Checked: `--help` prints
+all 72 header lines and exits 0, no argument exits 0, one argument exits 2, and
+the next paragraph cannot break it.
+
+Left open, unchanged and now measured: the ARM64 image, which this step shows is
+missing a *file* rather than merely absent media, and whose cost is the UFS
+verdict P4 depends on; whether `ExcludeFromSelect` deserves to count as a claim;
+which id names `URS0`'s children, `UrsSynopsys.sys`'s behaviour and in no `.inf`;
+the `0A0E` question, which Step 4.149 settled as unservable and this step's
+correction to its reasoning does not reopen; and the discriminator `INF_BUS`
+needs.
+
+Not an action: nothing was built for the device, nothing was flashed, no
+partition was written, no stub or firmware source was changed and no patch was
+written into any image. No QEMU run, no probe and no panel reading — `adb devices
+-l` and `fastboot devices` are both empty and no Qualcomm USB device is present.
+`userdata`, the partition table and the firmware LUN remain untouched; the
+porting goal is unchanged and unmet, with P3 unfinished, P4's
+`userdata`-destroying install and P5's peripherals not begun, and the end state
+still a Windows tablet whose modem and cameras are undrivable.
