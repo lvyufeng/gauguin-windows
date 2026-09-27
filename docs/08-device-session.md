@@ -33057,3 +33057,260 @@ Rows:
   untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
   unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
   state remains a Windows tablet whose modem and cameras cannot be driven.
+
+---
+
+## Step 4.163 — the counter-experiment answers its own question: the `/pmic/target` record **is** the wall, and behind it the same run draws this tree's first `P2` digest and stops on a hardware handshake of `ClockDxe`'s own — with the record never published, `DALSys + 0x346c` is still *executed* but `x21` is `AdcDxe`'s live record, so the panel loses its `Synchronous Exception`, its `FAR 0xAFAFAFAFAFAFAFAF` and its `ASSERT [ArmCpuDxe]` and the run goes to 310 `Loading driver at` rows against the control's 137, through `BdsDxe` to `SetupBrowser` and `AcpiPlatform` (`Error: Image at 0009BE61000 start failed: Aborted`), where `P2 STATS discovered=80 apriori=69/70 started=73 diag=7 noload=0` and the 69-character `P2 SEQ` puts its six uppercase `S` on exactly six of the seven `P2 DIAG` GUIDs (`UFSDxe` slot 27, `PmicDxe` 34, `AdcDxe` 46, `UsbPwrCtrlDxe` 47, `ButtonsDxe` 57, `LimitsDxe` 60) while the seventh, `AcpiPlatform`, has no Apriori slot at all — and the run's last state is not a fault but a poll at `ClockDxe + 0x11cbc`, `ldr w9,[x19]; tbnz w9,#0x0,0x11cbc` on bit 0 of the dword at `0x12000c`, the first qword of ClockDxe's own `.data` object at RVA `0x27a98`, in a range QEMU's `virt.flash0` serves as **writable zero memory**, so the driver's own `str` is the only write that ever sets the bit it then waits on and nothing is left to clear it
+
+4.162 left this designed and unrun. Its own docstring states the question and both answers:
+"If the run then gets past `DALSys + 0x346c`, the stale record is that wall and the run has a wall of
+its own further on; if it dies at the same PC anyway, the wall is not this record." The first branch
+is what happened, and the "wall of its own further on" turned out to be two things — a run that
+reaches parts of BDS no run in this tree has reached, and a spin in a driver whose hardware QEMU does
+not have.
+
+### The counter-experiment, and the two runs that decide it
+
+`work/out/qemu-probe-4.163/gdbprobe25.py` runs the 4.161/4.162 guest — the panels' own EL3 stub
+(`a082b796…`), `/tmp/phone-payload.raw` (`d0919c00…`) and the four seeds `rsc-word`, `rsc-enable`,
+`pdc-cap`, `apcs-clk` — with two `Z0` breakpoints, at `DALSys + 0x335c` (the registry's register
+body, whose first free slot receives `x0`) and at `DALSys + 0x346c` (the load that faulted in 4.161).
+It changes exactly one thing: at the register body it reads the record about to be published, and if
+that record's entry-0 device name is `/pmic/target` — the name only `PmicDxe` registers — it writes
+`P0=0` so the body stores a NULL into what was a NULL slot. No code is patched, no slot is edited by
+hand, no other registration is suppressed. `qemu-panel-4.163-control.txt` is the same probe with
+`--suppress-name=/never/matches`, i.e. the suppression path taken with a name that matches nothing,
+so the control touches nothing at all. `gdbA-run.log`, verbatim:
+
+```
+@10.0s REG   x0=0x9c206278  [+16]=0x0 [+24]=0x9c205278  entry0.name='/pmic/target'  lr=0x9c1e8580
+        -> x0 zeroed: this record is not published (1 so far)
+@12.0s REG   x0=0x9c0bc838  [+16]=0x0 [+24]=0x9c0bc0c8  entry0.name='/core/hwengines/adc/pmic_0/vadc'  lr=0x9c0b53fc
+@12.0s FAULT #1 at 0x9c49c46c  x21=0x9c0bc838 [+16]=0x0 [+24]=0x9c0bc0c8  x8=0x9c0bc0c8 x9=0x0 x25=0x9c4ddf90 x26=0x0
+stopping the run for 3 hit(s): 2 registration(s), 1 suppressed, 1 fault-site execution(s)
+```
+
+and `gdbB-run.log`, the control, which reproduces 4.161 exactly —
+`x21=0x9c206278 [+16]=0xafafafaf [+24]=0xafafafafafafafaf` at the same PC and the same second, with
+`0 suppressed`. So the fault site is executed in **both** runs and only the record's contents differ:
+with the record published, `x21` is the freed `PmicDxe` extent and the dereference reads the fill;
+with it suppressed, `x21` is `AdcDxe`'s own live record and `[+24]` is its own live table
+(`0x9c0bc0c8`), so the same load succeeds. The two panels differ accordingly, and not subtly: the
+control is 657 rows and ends at row 656 with
+`ASSERT [ArmCpuDxe] DefaultExceptionHandler.c(339): ((BOOLEAN)(0==1))`, carrying
+`Synchronous Exception at 0x000000009C49C46C` and `ESR 0x96000004  FAR 0xAFAFAFAFAFAFAFAF`; the
+treatment is 1032 rows, has no exception row, no ELR/FAR dump and no assert, and its last substantive
+rows are the `P2` digest below. **4.162's caveat is closed for this comparison**: both runs were
+launched by `tools/qemu-panel-read.py` with the same `--extra=-gdb unix:/tmp/g4426.gdb,server=on,wait=off`
+argument and print identical argv — same machine line, same `-gdb`, same stub hash, same payload
+hash, same `-device loader` lines in the same order — the only difference being the timestamped
+temp directory the stub was copied into.
+
+### What the runs forced, mechanically
+
+Three things about the instrument, all found by the runs failing first. QEMU with
+`-gdb …server=on,wait=off` starts the guest **stopped**, so a probe that attaches after the harness
+has launched arrives at a CPU that never ran and never will: the first attempt produced a 175 s panel
+ending at `AdcDxe.efi` (`qemu-panel-4.163-nopmicrec.txt`, 582 rows) and a `BrokenPipeError` from the
+probe — the probe has to be started first and the harness second, or the guest has to be resumed
+explicitly. `tools/qemu-panel-read.py`'s `--extra` is `action="append"` with `metavar="ARG"`, so a
+value beginning with `-` has to use the equals form (`--extra=-gdb`), or argparse reports
+`expected one argument` and QEMU is never started at all. And a `Z0` software breakpoint is
+re-triggered by any site the guest re-executes, so a PC sample of a live guest is worthless until the
+breakpoints are removed: the first sampling run reported `PC=0x9c49c46c DALSys+0x346c x0=0xd` on all
+five samples, which is the breakpoint and not the run. With `z0` for both sites first, the samples
+show a genuinely live guest.
+
+### Beyond the wall: what the same run prints next
+
+The treatment panel loads **310** `Loading driver at` rows to the control's 137, and its own last load
+is row 1004, `AcpiPlatform.efi` at `0x0009BE61000`, immediately followed by
+`Error: Image at 0009BE61000 start failed: Aborted` — `CoreExit`'s message from 4.162, i.e. an image
+whose entry point returned an error and is being unloaded. Between the two runs sit `BdsDxe` (row
+769), `SetupBrowser.efi` (1003), `AcpiTableDxe.efi` (1001), `BootGraphicsResourceTableDxe.efi` (1002),
+`SmbiosDxe.efi`/`SmBiosTableDxe.efi`, and `RamManagerDxe.efi` with its six
+`Successfully Mapped RAM Range:` rows — and then, for the first time in any run under `work/out/`,
+the digest rows:
+
+```
+1006 |P2 NOLOAD total=0 shown=0|
+1007 |P2 DIAG S D3C16B1F-3F48-54CA-84CD-B58F228DE601 Device Error|
+1008 |P2 DIAG S 04357C9D-9C01-5805-B18E-913EB32BE798 Device Error|
+1009 |P2 DIAG S 9143B2B7-D5E7-5190-B22A-605E5C78E7CC Unsupported|
+1010 |P2 DIAG S 1C9DA1EF-6C33-5EEE-B11C-B0B7F60A5AE2 Access Denied|
+1011 |P2 DIAG S CB70DC37-C100-5B12-9FFF-48F843EEA22E Not Found|
+1012 |P2 DIAG S F0A5F597-125F-5734-9DEB-A0C88DE30DD1 Unsupported|
+1013 |P2 DIAG S CB933912-DF8F-4305-B1F9-7B44FA11395C Aborted|
+1014 |P2 SEQ [sssssssssssssssssssssssssssSssssssSsssssssssssSSsssssssssSssSssssssss]|
+1015 |P2 STATS discovered=80 apriori=69/70 started=73 diag=7 noload=0|
+1016 |SetupKeypad: Failed to Locate STI Device Path! Status = Not Found|
+1017 |DALLOG Device [0x0]: DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v|
+```
+
+Every one of the seven `P2 DIAG` GUIDs resolves to a file the volume names, in the FV's own `Ffs/`
+directory: `D3C16B1F-…` `UFSDxe`, `04357C9D-…` `PmicDxe`, `9143B2B7-…` `AdcDxe`, `1C9DA1EF-…`
+`UsbPwrCtrlDxe`, `CB70DC37-…` `ButtonsDxe`, `F0A5F597-…` `LimitsDxe` and `CB933912-…`
+`AcpiPlatform` — so **the `Aborted` row and the `Error: Image at 0009BE61000 start failed: Aborted`
+row are one event**, reported once by `CoreExit` and once by the digest, and the seven failures are
+the ones the panel already showed individually: `UFSDxe`'s IOMMU attach, `PmicDxe`'s absent PMIC,
+`AdcDxe`'s own attach, `UsbPwrCtrlDxe`, `ButtonsDxe`, `LimitsDxe` and `AcpiPlatform`. The arithmetic
+closes: 73 started + 7 diagnosed = 80 discovered, and `noload=0` agrees with `P2 NOLOAD total=0`.
+This also meets 4.158's prediction in the way it was phrased — those digest rows are written from
+`P2Digest`, whose only caller `CoreDisplayDispatchedNotDispatched` runs after `CoreDispatcher`
+returns, so they are unreachable "on any run that dies inside the Apriori phase". This run does not
+die there, so they print; the prediction stands and the condition is simply no longer met.
+
+### The `SEQ`, read through the array rather than around it
+
+The line is 69 characters: 63 lowercase `s`, six uppercase `S`, **zero `L`**. `tools/fv-apriori.py`
+on this build prints `entries=70 missing=0 files=126`, and the array's entry 0 is
+`D6A2CB7F-6A18-4E2F-B43B-9920A733700A` = `DxeCore`, a `DXE_CORE` file that cannot be promoted —
+which is exactly the 70th: `apriori=69/70` and a 69-character string are the same number, and the
+string is one character per Apriori *match*, in array order. So the slots are determined, not
+hypothesised: entry *k* of the array is SEQ slot *k − 1*, and the seven diagnosed GUIDs can be placed
+in it. Six of them land on an `S` and nowhere else — `UFSDxe` at array 28 → slot 27, `PmicDxe` 35 →
+34, `AdcDxe` 47 → 46, `UsbPwrCtrlDxe` 48 → 47, `ButtonsDxe` 58 → 57, `LimitsDxe` 61 → 60, which are
+precisely the six positions where the string is uppercase — and the seventh, `AcpiPlatform`, is **not
+in the array at all**, which is why there are seven `P2 DIAG` rows and only six `S`: it is dispatched
+in the ordinary pass, so it never gets a slot. That is a prediction the array and the string make
+independently and they agree on all seven, which is the strongest form this check can take. Read
+against the phone's own reading — the 46-character string
+`ssssssssssssssssssssLLLsLLLLLLLLLLLLLLLLLLLLLLLL`, 19 `s`, 27 `L`, zero `S` — the contrast is the
+substance: **on the phone, 27 of 46 Apriori entries failed at `CoreLoadImage`; here, none do**, and
+the six failures are all at `CoreStartImage`. The two are not the same payload (the phone's is
+`work/out/boot-before-p2walk.img`, whose inflated build is 7,348,232 B, against 7,536,648 B here), so
+this is a statement about two builds and not about two machines, and it is the first digest the
+current payload has ever drawn.
+
+### The spin, identified byte for byte
+
+With both breakpoints removed and the guest resumed, the run is alive and parked. Ten samples over
+90 s, one at `0x9fc09304` and nine identical:
+
+```
+  watch  2  PC=0x9c40bcbc  PartitionDxe+0x1ecbc  sp=0x9ffce8c0  lr=0x9c40bcb0  x0=0x9c421a98  x21=0x0  x19=0x12000c  [x19]=0x1
+```
+
+`PartitionDxe+0x1ecbc` is this probe's map and it is wrong: `PartitionDxe.efi` is 37,888 = `0x9400`
+bytes, so that offset cannot exist, and the map simply has no entry for the image above it. The
+panel's own load rows do: `ClockDxe.efi` loads at `0x0009C3FA000` (row 678). `0x9c40bcbc −
+0x9C3FA000 = 0x11cbc`, `lr` is `ClockDxe + 0x11cb0`, and `x0` is `ClockDxe + 0x27a98`. At RVA
+`0x11cbc` of the ClockDxe the payload carries, the instruction pair is
+
+```
+   11cac: 940000ba      bl   0x11f94
+   11cb0: b9400268      ldr  w8, [x19]
+   11cb4: 32000108      orr  w8, w8, #0x1
+   11cb8: b9000268      str  w8, [x19]
+   11cbc: b9400269      ldr  w9, [x19]
+   11cc0: 3707ffe9      tbnz w9, #0x0, 0x11cbc        <-- spin until the device clears bit 0
+```
+
+Three independent facts agree, so the identification is not a nearest-symbol guess: `0x11cb0` is the
+return address of the `bl` at `0x11cac` and that is what `lr` holds, `0x11cbc` is the address the
+guest is executing, and both are inside `.text` (`VA 0x1000 VSZ 0x1c000`). The address being polled
+comes from ClockDxe's own data: `x19` is loaded at `0x11c94` from `*x0`, and the qword at file RVA
+`0x27a98` is `0c 00 12 00 00 00 00 00` = `0x12000c`. That field is *not* relocated — the PE has
+`ImageBase 0` and no `IMAGE_REL_BASED_DIR64` entry falls in that page — so it is stored literally and
+used as a pointer, and `x19` is `0x12000c`, not an address derived from the image base.
+
+Why it never clears is QEMU's memory map and not the driver. `-M virt` gives `virt.flash0` at
+`0000000000000000-0000000003ffffff` (prio 0, `romd`) and `virt.flash1` at `0x4000000-0x7ffffff`, so
+`0x12000c` is inside the first of them; a gdb `M12000c,4:01000000` followed by `m12000c,4` reads
+`01000000` back, and the same at `0x120000` with `deadbeef` reads back `deadbeef`. The range is
+**ordinary writable zero memory** — the monitor's own `xp/1xw 0x12000c` reports `Cannot access
+memory` because it asks the physical address space directly, but the guest's path retains writes. So
+the sequence is: `ldr w8,[x19]` reads 0, `orr` makes it 1, `str w8,[x19]` stores 1, `ldr w9,[x19]`
+reads back 1, `tbnz #0x0` is taken, and the loop repeats forever. The probe's `[x19]=0x1` is the
+driver's own write. On the phone this is a clock-controller register that drops the bit when the
+handshake completes; in QEMU the only writer is the driver and nothing clears it. Which handshake it
+is, the panel suggests and does not prove: the last row before the banner is redrawn is
+`DALLOG Device VCS: Unable to set rail[…`, and a rail enable that kicks a bit and waits for the
+hardware to acknowledge it is exactly this shape. Labelled as the suggestion it is.
+
+The image is the one on this disk, not an inference from the load address alone:
+`/tmp/phone-payload.raw` is a 112-byte header followed by the build's own `SILICIUM_UEFI.fd` verbatim
+(the fd appears at offset `0x70` and matches to the last byte), and that volume's ClockDxe FFS,
+`34F25731-EB1C-5681-B482-EE776F5AF58B.ffs`, carries `Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi`
+byte-for-byte at its own offset `0x1c`.
+
+### What this buys, and what is still wall
+
+It closes 4.162's question with the experiment 4.162 designed: the stale `/pmic/target` record is the
+wall, and everything 4.161 and 4.162 said about the mechanism survives the counter-test — the record's
+identity, the unload, the `0xAF` clear and the unsigned-count test all predict what the treatment run
+does. It buys two new things for the port. First, the run reaches the end of DXE and BDS's connect
+phase on this payload, and the digest it draws there is the instrument the P2 work was built for: a
+complete, self-consistent accounting of every driver the volume discovered, with the failures named
+and the promotion phase — the phase the phone fails — clean. Second, it puts the run's next stop on a
+*specific* instruction with a *specific* address, which makes the next experiment cheap and decisive:
+clear bit 0 at `0x12000c` whenever the PC is `ClockDxe + 0x11cbc` and see whether the rail set
+returns and BDS proceeds to a boot manager. That is an instrument result and not bring-up — on
+hardware the register is the clock controller's real state — but it decides whether anything else in
+this firmware stands between the QEMU run and the Windows loader. It buys nothing for the goal yet: no
+Windows 11 image runs on gauguin, and the phone's own blocker remains the missing architectural
+protocols at `DxeMain.c:593`.
+
+Left open: whether the spin is the rail set the `DALLOG … Unable to set rail` row names, and whether
+the two are even ordered that way rather than merely adjacent on the panel; what the four remaining
+`P2 DIAG` statuses mean to their drivers (`UFSDxe`'s and `PmicDxe`'s `Device Error`, `AdcDxe`'s and
+`LimitsDxe`'s `Unsupported`, `UsbPwrCtrlDxe`'s `Access Denied`, `ButtonsDxe`'s `Not Found`);
+`P2 APRI`'s eight fields and `P2 WHY`/`P2 ERR`, none of which this run printed; whether `0x11c88`
+has any static caller (none appears in the disassembly, so it is reached through a table); why the
+same `ClockDxe` extent is loaded twice (rows 584 and 678); the derivation of `/tmp/apcs-clk.bin`;
+the R1-versus-R2 question for the phone's 46-character `P2 SEQ`; `ClockDriver.c` line 260 as source;
+whether `AdcDxe`'s table holds a DALSys-owned name pointer (`DALSys + 0x87E0`) rather than its own
+copy at `AdcDxe + 0x5F7D`; which DALSys-side entry the registrar wrapper's `br x3` reaches and which
+of `x0`/`x1`/`x2` it stores; whether the record's `+16` count is written by the driver after
+registration or by that entry; the P3 items 2-4 (`DisplayDxe`, `UsbBusDxe`, `ButtonsDxe`); and the
+4.153-4.156 items unchanged.
+
+Rows:
+
+- **instrument**: `work/out/qemu-probe-4.163/gdbprobe25.py` (two `Z0` breakpoints, `DALSys + 0x335c`
+  and `+0x346c`, the first zeroing `x0` for exactly one device name before the body runs) with
+  `gdbA-run.log`/`gdbB-run.log`, and `gdbprobe26.py` (`--watch`, with both sites `z0`-removed before
+  sampling, `gdb27-run.log`) — all attached to QEMU launched by `tools/qemu-panel-read.py` with
+  `--extra=-gdb unix:/tmp/g4426.gdb,server=on,wait=off`; panels `qemu-panel-4.163-control.txt` (657
+  rows), `-setup.txt` (1032), `-frames.txt` (896) and `-nopmicrec.txt` (582, the frozen-guest
+  artefact); `tools/fv-apriori.py` for the 70-entry Apriori array and the FV's own `Ffs/` directory
+  names for the GUID-to-image map; a `qemu-system-aarch64 -M virt…` run under `-qmp stdio` for
+  `info mtree -f` and under `-gdb` for the `M`/`m` write-retention test; and PE parsing of
+  `Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi` and of the FV's
+  `34F25731-EB1C-5681-B482-EE776F5AF58B.ffs`.
+- **shows**: the fault site `DALSys + 0x346c` executes in both runs and only the record differs —
+  `x21=0x9c206278` with `[+16]=0xafafafaf [+24]=0xafafafafafafafaf` in the control against
+  `x21=0x9c0bc838` with `[+24]=0x9c0bc0c8` in the treatment, whose panel has no exception, no
+  `FAR 0xAFAFAFAFAFAFAFAF` and no assert; the treatment reaches 310 load rows against 137, ends at
+  `AcpiPlatform.efi`, and draws `P2 NOLOAD`, seven `P2 DIAG`, `P2 SEQ` and
+  `P2 STATS discovered=80 apriori=69/70 started=73 diag=7 noload=0`; all seven `P2 DIAG` GUIDs are
+  files the volume names, and `CB933912-…` is the `AcpiPlatform.efi` whose `start failed: Aborted` row
+  precedes the digest, so those are one event; the six `S` in the 69-character `P2 SEQ` are the six
+  Apriori-array positions of the six diagnosed GUIDs that are in the array, and the seventh has no
+  array entry; and the run is parked at `ClockDxe + 0x11cbc`, whose bytes on disk are the
+  `ldr w9,[x19]; tbnz w9,#0x0,` spin pair, polling `0x12000c` — the literal first qword of ClockDxe's
+  `.data` at RVA `0x27a98` — which QEMU serves as writable zero memory, so the driver's own write is
+  the only thing that sets the bit.
+- **adds**: the first `P2` digest rows any run under `work/out/` has drawn, with the seven diagnosed
+  devices named; the `SEQ`-slot map derived from the array (entry *k* → slot *k − 1*, entry 0 being
+  `DxeCore`) and the seven-way agreement between it and the string; the contrast with the phone's
+  46-character string (19 `s`, 27 `L`, 0 `S` against 63 `s`, 6 `S`, 0 `L`); the memory-map explanation
+  of the spin (`virt.flash0` at `0x0-0x3ffffff`, write-retaining) and the driver's own `str` as the
+  only write to the polled word; the payload's provenance as a 112-byte header over the build's own
+  `SILICIUM_UEFI.fd`, with the ClockDxe FFS carrying the disassembled image byte-for-byte; and the
+  three instrument facts `-gdb …wait=off` costs (the guest starts stopped, `--extra` needs the equals
+  form, and a `Z0` site must be removed before a PC sample means anything).
+- **corrects**: this probe's own symbol map, which labelled `0x9c40bcbc` as `PartitionDxe+0x1ecbc` —
+  an offset `PartitionDxe`'s 37,888 bytes cannot hold, and the image is `ClockDxe`; and the reading of
+  `[x19]` as a device status bit, which is the driver's own stored value in a range nothing else
+  writes.
+- **does not close**: the driver of the poll and the `DALLOG … Unable to set rail` row are tied by
+  shape and not by evidence; the four unread `P2 DIAG` statuses, `P2 APRI`, `P2 WHY` and `P2 ERR`; how
+  `0x11c88` is reached with no static caller; the `ClockDxe` double load; and every pre-existing item
+  listed above.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, and no
+  stub, firmware source or Microsoft image was changed or patched. The only writes outside `work/out`
+  are to `docs/`. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
+  untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state
+  remains a Windows tablet whose modem and cameras cannot be driven.

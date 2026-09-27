@@ -562,6 +562,27 @@ record is hit. It is a real defect and a QEMU-only *instance* of it: on the phon
 this particular collision would not happen, and what remains in that run is the shared-IMEM rows,
 `UFSDxe`'s IOMMU attach failure and `AdcDxe`'s own attach. See `docs/08` step 4.162.
 
+The counter-experiment 4.162 designed was run, and it answers yes. Suppressing exactly that one
+registration — reading the record at the registry body and zeroing `x0` when its first device name is
+`/pmic/target`, with no code patched and no slot edited — leaves the fault site *executed* but makes
+it harmless: `x21` is `AdcDxe`'s own live record (`0x9c0bc838`, `[+24]` its live table) instead of the
+freed `PmicDxe` extent, and the panel loses its `Synchronous Exception`, its
+`FAR 0xAFAFAFAFAFAFAFAF` and its `ASSERT [ArmCpuDxe]` entirely. The same run then goes to **310**
+`Loading driver at` rows against the control's 137 — through `BdsDxe`, `RamManagerDxe`,
+`SetupBrowser` and `AcpiPlatform` — and draws this tree's first `P2` digest: `P2 STATS discovered=80
+apriori=69/70 started=73 diag=7 noload=0`, seven named failures (`UFSDxe` and `PmicDxe` Device Error,
+`AdcDxe` and `LimitsDxe` Unsupported, `UsbPwrCtrlDxe` Access Denied, `ButtonsDxe` Not Found,
+`AcpiPlatform` Aborted) and a 69-character `P2 SEQ` whose six uppercase `S` sit on exactly the six
+Apriori-array positions those first six GUIDs occupy, with `AcpiPlatform` in no array slot at all —
+six for six, and the phone's own 46-character string is 19 `s` and 27 `L` with no `S`, i.e. the phone
+fails at *load* and this build fails only at *start*. Its last state is not a fault but a poll: the
+guest is parked on `ClockDxe + 0x11cbc`, `ldr w9,[x19]; tbnz w9,#0x0,` on bit 0 of the dword at
+`0x12000c` — the literal first qword of ClockDxe's own `.data` object at RVA `0x27a98`, unrelocated —
+in the range QEMU's `virt.flash0` serves as **writable zero memory**, so the driver's own `str` is the
+only write that ever sets the bit it then waits on. A rail handshake against a clock controller QEMU
+does not have, one layer below 4.160's `Clock_InitTarget`; the `DALLOG … Unable to set rail` row just
+above it in the panel is the shape it would have and not proof. See `docs/08` step 4.163.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first

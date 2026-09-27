@@ -2931,6 +2931,58 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > QEMU consequence of the absent PMIC, and on hardware the same class needs some other driver to fail.
 > See `docs/08` step 4.162.
 
+> **Extended 2026-09-27 by step 4.163 — the postcard from the far side: with the stale record
+> suppressed the run leaves the Apriori phase, draws the first `P2` digest this tree has ever seen,
+> and parks on a hardware handshake of `ClockDxe`'s own.** The counter-experiment 4.162 specified was
+> run as specified: at the registry body (`DALSys+0x335c`) the probe reads the record about to be
+> published and, if its first device name is `/pmic/target`, writes `x0 = 0` — nothing patched, no
+> slot touched by hand, and the control run passes a name that matches nothing. The fault site
+> `DALSys+0x346c` is still executed in both runs; only the record's contents differ. Control:
+> `x21=0x9c206278`, `[+16]=0xafafafafaf`, `[+24]=0xafafafafafafafaf`, panel ends at 656 with
+> `ASSERT [ArmCpuDxe] DefaultExceptionHandler.c(339)`. Treatment: `x21=0x9c0bc838` — `AdcDxe`'s own
+> live record, `[+24]=0x9c0bc0c8` its live table — no exception row, no ELR/FAR dump, no assert. So
+> the mechanism of 4.162 is confirmed end to end: the stale record *is* that wall. Treatment is 1032
+> rows against the control's 657, with 310 `Loading driver at` rows against 137, and it is the first
+> run under `work/out/` to load `BdsDxe`, `RamManagerDxe`, `SmbiosTableDxe`, `AcpiTableDxe`,
+> `BootGraphicsResourceTableDxe`, `SetupBrowser` and `AcpiPlatform`. Three instrument facts were
+> forced by the runs failing first and belong in the record: `-gdb …,server=on,wait=off` starts the
+> guest **stopped** (attach after launching the harness and the CPU never runs at all —
+> `qemu-panel-4.163-nopmicrec.txt`, 582 rows, is that artefact), `tools/qemu-panel-read.py`'s
+> `--extra` needs the equals form for values beginning with `-`, and a `Z0` site must be removed
+> (`z0`) before a PC sample means anything, since the guest re-executes a site it returns to. With
+> both sites cleared, the run is alive and parked: nine of ten samples at `0x9c40bcbc`,
+> `lr=0x9c40bcb0`, `x19=0x12000c`, `[x19]=0x1`. `0x9c40bcbc − 0x9C3FA000 = 0x11cbc` against the
+> panel's own `Loading driver at 0x0009C3FA000 … ClockDxe.efi` row, and the bytes there are
+> `b9400269 3707ffe9` = `ldr w9,[x19]; tbnz w9,#0x0,0x11cbc` — the loop `0x11c94` enters after a
+> `bl 0x11f94` (a bitfield-insert helper, all its offsets multiples of 4), setting bit 0 with
+> `orr w8,w8,#1; str w8,[x19]` and then waiting for the device to drop it. `x19` is loaded from the
+> image's own `.data`: file RVA `0x27a98` holds `0c 00 12 00 00 00 00 00` = `0x12000c`, with
+> `ImageBase 0` and **no relocation** in that page, so the value is literal. That address is inside
+> QEMU `virt`'s `virt.flash0` (`0x00000000-0x03ffffff`, per the monitor's `info mtree -f`), and a gdb
+> `M12000c,4:01000000` reads back `01000000` exactly as `M120000,4:deadbeef` reads back `deadbeef`:
+> it is ordinary writable memory, and the only writer to the polled word is the driver itself. On the
+> phone that register is the clock controller's and drops the bit when the handshake completes; here
+> the loop cannot terminate, which is a **guaranteed** stall rather than a timeout, and it is a QEMU
+> consequence of the same absent clock controller as 4.160's `Clock_InitTarget`, one layer deeper.
+> The `DALLOG Device VCS: Unable to set rail[…` row immediately above in the panel matches the shape
+> and is offered as a suggestion, not a finding. On the same run the `P2` digest is self-consistent —
+> `73 started + 7 diag = 80 discovered`, `noload=0` agreeing with `P2 NOLOAD total=0 shown=0` — and
+> all seven `P2 DIAG` GUIDs resolve to files in the volume's own `Ffs/` directory: `D3C16B1F`
+> `UFSDxe`, `04357C9D` `PmicDxe`, `9143B2B7` `AdcDxe`, `1C9DA1EF` `UsbPwrCtrlDxe`, `CB70DC37`
+> `ButtonsDxe`, `F0A5F597` `LimitsDxe`, `CB933912` `AcpiPlatform` — the last of which is the
+> `Error: Image at 0009BE61000 start failed: Aborted` row one line above, i.e. one event reported
+> twice. `tools/fv-apriori.py` gives 70 Apriori entries with entry 0 `DxeCore` (unpromotable, hence
+> `apriori=69/70` and a 69-character string, one character per match), and under entry *k* → slot
+> *k−1* the six diagnosed GUIDs that are array members land at slots 27, 34, 46, 47, 57 and 60 —
+> precisely the six `S` positions — while `AcpiPlatform`, the seventh, is in no array entry and gets
+> no slot. That is the array and the string agreeing on all seven independently. Against the phone's
+> payload (`work/out/boot-before-p2walk.img`, a different build) the contrast is the point: its
+> `P2 SEQ` is 19 `s`, 27 `L`, 0 `S` — 27 Apriori images failing at `CoreLoadImage` there, none here.
+> The payload itself is now pinned: `/tmp/phone-payload.raw` is a 112-byte header over this build's
+> own `SILICIUM_UEFI.fd` verbatim, and that volume's ClockDxe FFS
+> (`34F25731-EB1C-5681-B482-EE776F5AF58B.ffs`) carries the disassembled image byte-for-byte at its
+> offset `0x1c`. See `docs/08` step 4.163.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform
