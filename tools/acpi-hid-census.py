@@ -737,6 +737,29 @@ def bind_asl(args, hids, notes):
             # first, then the bus note, and the "nothing to check it against"
             # sentence only where neither holds - which is what it always said
             # it meant.
+            #
+            # Step 4.153 measured the same block against an *ARM64* DriverStore
+            # (Windows 11 25H2 arm64, 386 infs) and it holds there too:
+            # `urssynopsys.inf` binds `ACPI\QCOM24B6, ACPI\PNP0CA1` under
+            # `[UrsSynopsys.NTarm64]`, and the two URS families split cleanly -
+            # `QCOM24B6`/`PNP0CA1` for the Synopsys pair, `QCOM24B7`/`PNP0C90`
+            # for the ChipIdea pair, with no file naming both. So `PNP0CA1`
+            # prints as claimed on both architectures and this branch is not
+            # describing an x64 accident.
+            #
+            # What that step also found is the limit of this branch's reach. The
+            # note below says "the `_HID` beside it is what binds", and for
+            # `PNP0D80` that is right in effect but for the wrong reason: an
+            # ARM64 `machine.inf` does name it, on line 73, as
+            # `%*PNP0D80_Desc% = NO_DRV_GEN, *PNP0D80 ; Standard Power
+            # Management Controller`. The id is *root-enumerated* - `*PNP0D80`,
+            # not `ACPI\PNP0D80` - so the `ACPI\` scan that feeds `hids` cannot
+            # see the models line, and an id the OS does name prints as one it
+            # never looked up. `NO_DRV_GEN` is an install-no-driver placeholder,
+            # so calling it a claim would be wrong too; it is a fourth position
+            # and this tool has three. Left as measured rather than folded in,
+            # because a `*`-form scan reaches every root-enumerated PNP id in
+            # `machine.inf` and would change the tallies this record quotes.
             named = notes["bus"].get(hid)
             standard.append(hid)
             if who:

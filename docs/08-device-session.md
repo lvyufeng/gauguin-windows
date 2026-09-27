@@ -31064,3 +31064,145 @@ written into any image. No QEMU run, no probe and no panel reading — `adb devi
 porting goal is unchanged and unmet, with P3 unfinished, P4's
 `userdata`-destroying install and P5's peripherals not begun, and the end state
 still a Windows tablet whose modem and cameras are undrivable.
+
+## Step 4.153 — the ARM64 image was never unobtainable, it was on the wrong host: `tlu.dl.delivery.mp.microsoft.com` answers a UUP-signed per-file URL in 0.28 s where the ISO's own delivery host answers 000, and the arm64 infs that close Step 4.152's open item both say what the x64 ones said
+
+Step 4.152 ended with one sentence about the OS half of the reading: "whose ARM64 twin is
+a different file carrying a different section, and that file is not on this host." The
+second clause is what this step was about, and it was wrong — not about the file, which
+genuinely was not here, but about the reason. `tools/os-driver-store.sh` had also said the
+parenthetical paragraph was "read out of an *x64* image", and several windows of work
+before this one had recorded the arm64 media as blocked: `ErrorSettings.SentinelReject`
+from the Microsoft download connector, an nginx 404 from `api.uupdump.net/listfiles.php`, a
+40 s timeout from the Update Catalog, and `dl.delivery.mp.microsoft.com` answering 000.
+Every one of those is a real measurement. None of them is a measurement of the host that
+matters.
+
+Measured 2026-09-27, in this order:
+
+- `https://www.microsoft.com/en-us/software-download/windows11arm64` returns 200, 139,026
+  bytes, in 3.0 s. The connector endpoints behind it did not get further than before —
+  `getproducteditionsbyproductid` 404s, `getskuinformationbyproductedition` returns
+  `ErrorSettings.GenericError`, `GetProductDownloadLinksBySku` returns the CMS's 400 page —
+  so this route stays where it was.
+- `api.uupdump.net/listid.php?search=25H2&sortByDate=1` returns 200 and 23,120 bytes: 140
+  builds, and the ones under `arch: arm64` carry real UUIDs, e.g.
+  `8c5f8bc1-bb0a-4f87-b444-0942d610a4dd` = "Windows 11, version 25H2 (26200.9550)".
+- `api.uupdump.net/get.php?id=8c5f8bc1-…&lang=en-us&edition=professional` returns **200** and
+  59,034 bytes. That is the change. The earlier `get.php` 400 and `listfiles.php` 404 were a
+  bad id and a wrong parameter — `listfiles.php` still 404s with a real id, so the working
+  call is `get.php` — and the payload is the download set: 68 files, **8.07 GiB**, each with
+  `sha1`, `sha256`, `size` and a **direct signed `url`**.
+- Those URLs are on `tlu.dl.delivery.mp.microsoft.com`, not `dl.delivery.mp.microsoft.com`.
+  A 24,432-byte package comes back 200 in 0.26 s with a matching sha1
+  (`b85848cc46ecf00459d43b6d9dd802387560f6f1`, `Microsoft-Windows-Foundation-Package.ESD`),
+  and a 1 MiB range of the 4.4 GB `Windows11.0-KB5124010-arm64.msu` comes back 206 in 0.29 s.
+
+So the whole set was fetched with `aria2c -x16 -s16 -k4M -c` into
+`~/work/woa-ref/arm64-25h2-uup/files/`, and **all 68 files verify against the index's sha1**
+— 68 checked, 0 mismatched. 8.1 GiB on disk, 747 GiB free before it started.
+
+**The edition ESD is a delta WIM, and that is the finding that costs time if it is not
+known.** `professional_en-us.esd` (470 MB) holds three images: 1 `Windows Setup Media`
+(274 MB), 2 `Microsoft Windows Recovery Environment (arm64)` (2.77 GB), 3 `Windows 11 Pro`
+(16.0 GB, `Architecture: ARM64`). Image 3 is the install image. 7z lists all 389 of its
+`DriverStore/FileRepository` packages and extracts **159 of them as zero-byte files** with
+`Data Error` — including every file of a failed package, not just the `.inf`, so it is the
+package's data that is absent and not the file. Reproducing one of them alone, and with
+`-mmt=1`, changes nothing. `wimlib-imagex extract <esd> 3 <path>` without a reference fails
+the whole run with error 55, "a file resource needed to complete the operation was missing
+from the WIM", and names the reason in its hint: a delta WIM needs `--ref`. With
+`--ref=<each of the other 18 ESD/WIM files in the download set>` the same single-file
+extract works — `bth.inf`, 0 bytes under 7z, is 100,346 bytes under wimlib. Extracting the
+389 paths **one at a time, tolerating failures** then gives 386, none of them empty, because
+a glob over all of them aborts on the first blob that is still missing. The three that
+cannot be read are `helloface.inf`, `ntprint.inf` and `prnms003.inf` — a face-recognition
+package and two print packages, none of which names a device gauguin has.
+
+`wimlib-imagex` is not packaged for this host. Deepin's index knows `wimtools` with
+`Candidate: (none)`, `apt-get update` does not finish inside 30 s, and building from source
+wants autotools and four `-dev` packages. It was unpacked instead from the Debian trixie
+debs — `wimtools`, `libwim15t64`, `libntfs-3g90`, `libfuse3-4` — into `~/opt/wimlib` with
+`dpkg-deb -x`, and run as
+`LD_LIBRARY_PATH=$HOME/opt/wimlib/usr/lib/x86_64-linux-gnu ~/opt/wimlib/usr/bin/wimlib-imagex`.
+v1.14.5. The same unpack carries `mkwinpeimg`, which is what a P3 boot medium will be built
+with when there is one.
+
+**What the arm64 set says, which is what Step 4.152 left open.** The arm64 DriverStore of
+image 3 is **389 packages, 387 `_arm64_` and 2 `_x86_`** — the same shape as the x64
+image's 710 `_amd64_` and 2 `_x86_`, which is itself worth having, since an architecture
+difference that showed up as a package-count difference would have been a different
+problem. `tools/acpi-hid-census.py --drivers ~/work/woa-ref/infs-arm64/pro --bind --asl
+tools/acpi/gauguin.asl` reads 386 `.inf`, all UTF-16, **73 claimed ids — 64 hardware, 6
+compatible-only, 3 `ExcludeFromSelect`-only**, and the same five `[Strings]` names that are
+not claims (`ARMH_PL180`, `DOCKDEVICE_DESC`, `FIXEDBUTTON_DESC`, `INT33BA`,
+`THERMALZONE_DESC`). For this table's 42 ids it moves nothing:
+
+- `storufs.inf` binds `ACPI\QCOM24A5` under `[Qualcomm.NTarm64]`, as
+  `%ACPI\QCOM24A5.DeviceDesc%=UfsQualcomm8996Install, ACPI\QCOM24A5`.
+- `urssynopsys.inf` binds `ACPI\QCOM24B6, ACPI\PNP0CA1` under
+  `[UrsSynopsys.NTarm64]`, one models line, the second id in the compatible position.
+- `storufs.inf` also binds `ACPI\CC_010901` and `PCI\CC_010901` under `[Generic.NTarm64]`,
+  so the third route Step 4.152 wrote down and left alone exists in the arm64 build too.
+- `ufxsynopsys.inf` binds `PCI\VEN_8086&…` (23 Intel ids), `ACPI\INT3445`,
+  `URS\PNP0CA1&FUNCTION` and `URS\QCOM24B6&FUNCTION`.
+- `urschipidea.inf` binds `ACPI\QCOM24B7`, `ACPI\PNP0C90`, `*PNP0C90`; `ufxchipidea.inf`
+  binds `URS\PNP0C90&FUNCTION`, `ACPI\QCOM2488`, `URS\QCOM24B7&FUNCTION`.
+
+So the two OS-side verdicts are the **same claim in both builds** and the x64 reading was
+not a weaker one. That is the sentence Step 4.152 could not write, and it is now measured
+rather than argued: the ARM64 twin of `storufs.inf` carries the `Qualcomm` models section
+with `QCOM24A5` in it, and `QCOM24A5` is the UFS controller P4 boots from.
+
+**Four id-level facts the arm64 set adds.** The two URS families split cleanly and **no file
+names both**: `QCOM24B6` and `PNP0CA1` appear only in `ufxsynopsys.inf`/`urssynopsys.inf`,
+`QCOM24B7` and `PNP0C90` only in `ufxchipidea.inf`/`urschipidea.inf`. `QCOM2484` and
+`QCOM2488` — the ChipIdea/Synopsys function ids — sit the same way. The vendor's own
+spellings are named **nowhere** in the arm64 OS set: `QCOM0A8B` 0 files, `QCOM0A8C` 0 files,
+and the two standalone host-mode ids `QCOM0A24`/`QCOM0AA1` that `QcXhciFilter7280.inf`
+binds (Step 4.152) are 0 files each. Microsoft's URS children are named `<parent>&FUNCTION`
+— `URS\PNP0CA1&FUNCTION`, `URS\QCOM24B6&FUNCTION` — where the vendor XHCI filter's child is
+`URS\QCOM0A8B&HOST`: the same parent enumerated into two differently-named children by two
+different stacks, and which of them this table's `_HID QCOM0A8B` plus `_CID PNP0CA1`
+produces is `UrsSynopsys.sys`'s behaviour. That was on Step 4.151's left-open list and it is
+now sharper without being closed.
+
+**And one false reading the same extraction exposes.** `PNP0D80` has been printing as
+"PNP id - a vendor CIM, not looked up in this set; the `_HID` beside it is what binds". An
+ARM64 `machine.inf` names it, on line 73:
+`%*PNP0D80_Desc% = NO_DRV_GEN, *PNP0D80 ; Standard Power Management Controller`. Two
+reasons the tool could not see it, and both are worth stating separately. The id is
+**root-enumerated** — `*PNP0D80`, not `ACPI\PNP0D80` — and `hids` is built from an `ACPI\`
+scan, so a models line naming it is invisible. And the install section is `NO_DRV_GEN`, a
+placeholder that deliberately installs no driver, so folding it into the `hardware` bucket
+would be wrong in the other direction: it is a **fourth position**, and this tool has three.
+`PNP0CA2` and `PNP0CA3` return zero files in the arm64 set, so the tool's sentence is right
+about those two and wrong about the third id it is printed for. It is recorded in
+`tools/acpi-hid-census.py` as measured rather than folded in, because a `*`-form scan reaches
+every root-enumerated PNP id in `machine.inf` and would move the tallies this record quotes —
+which is a change to make deliberately, with all four dependent tools re-run, and not as a
+side effect of reading an image.
+
+`tools/os-driver-store.sh`'s header carried the false clause ("that file is not on this
+host") and now carries the correction plus the method: the host that works, the delta-WIM
+`--ref` requirement, the 389/387/2 package shape, and the wimlib unpack. Its `--help` still
+prints its whole header — 111 lines printed against 111 expected, exit 0, no-arg exit 0,
+one-arg exit 2, `bash -n` clean — which is the Step 4.152 `awk` doing its job on a header
+that grew by 49 lines.
+
+Left open: `UrsSynopsys.sys`'s child naming, now a question about which of two measured
+child forms this table's ids produce rather than about whether any file records it;
+`ExcludeFromSelect` as a claim, which is a judgement the arm64 tally shows is worth 3 ids in
+each OS image; the `INF_BUS` discriminator; the `*<PNP-id>` position above, which needs a
+fourth bucket and a re-run of all four dependent tools; and the P2 gate, which is where the
+next device window starts.
+
+Not an action: nothing was built for the device, nothing was flashed, no partition was
+written, no stub or firmware source was changed and no patch was written into any image. No
+QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both
+empty and no Qualcomm USB device is present. `userdata`, the partition table and the
+firmware LUN remain untouched. 8.1 GiB of Microsoft-signed ARM64 media and a locally
+unpacked `wimlib-imagex` were added under `~/work` and `~/opt`, which are build inputs and
+not device state. The porting goal is unchanged and unmet, with P3 unfinished, P4's
+`userdata`-destroying install and P5's peripherals not begun, and the end state still a
+Windows tablet whose modem and cameras are undrivable.

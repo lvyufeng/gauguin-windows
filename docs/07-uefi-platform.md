@@ -2633,6 +2633,40 @@ set states `QCOM0A2D` and `QCOM0A0C` itself in `qcpmicgpio7280.inf` and
 **The outstanding TLMM node is `QCOM0A0C`.** That is the one decision this settles
 that was still open in this file's P3 list, and it was previously held to be a choice.
 
+**Step 4.153 read the OS side on ARM64, which is the reading the x64 one could not be.**
+The blocker was the host, not the media: `dl.delivery.mp.microsoft.com`, which is what the
+ISO's own download path uses, answers 000 from here, but a UUP `get.php` id returns
+per-file signed URLs on `tlu.dl.delivery.mp.microsoft.com`, and that host answers 206 to a
+range request in 0.28 s. `api.uupdump.net/get.php?id=<arm64 25H2 build>&lang=en-us&edition=…`
+gives 68 files and 8.07 GiB, each with its own URL and sha1; all 68 were downloaded and all
+68 verified. The edition ESD is a *delta* WIM, and that is the part worth carrying forward:
+7z lists all 389 of its DriverStore packages and writes 159 of them as zero-byte files with
+`Data Error`, and `wimlib-imagex` fails the whole pattern without
+`--ref=<each of the other 18 ESD/WIM files in the set>`. With the refs, 386 of the 389
+extract and none is empty; the three that cannot be read — `helloface`, `ntprint`,
+`prnms003` — name nothing gauguin has. The arm64 DriverStore is **389 packages, 387
+`_arm64_` and 2 `_x86_`**, the same shape as the x64 image's 710/2. `--bind` against it
+moves no verdict for this table: `storufs.inf` binds `ACPI\QCOM24A5` under
+`[Qualcomm.NTarm64]` and `urssynopsys.inf` binds `ACPI\QCOM24B6, ACPI\PNP0CA1` under
+`[UrsSynopsys.NTarm64]`, so the two OS-side claims above are the same claim in both builds
+rather than an x64 accident. The generic UFS route is on arm64 as well — `storufs.inf`,
+`[Generic.NTarm64]`, `ACPI\CC_010901`. The two URS families split cleanly and no file names
+both: `QCOM24B6`/`PNP0CA1` for Synopsys, `QCOM24B7`/`PNP0C90` for ChipIdea. The vendor's own
+spellings are named nowhere in the OS set — `QCOM0A8B`, `QCOM0A8C` and the two standalone
+host-mode ids `QCOM0A24`/`QCOM0AA1` each return zero files. Microsoft's URS children are
+`<parent>&FUNCTION` (`URS\PNP0CA1&FUNCTION`, `URS\QCOM24B6&FUNCTION`) and the vendor XHCI
+filter's is `<parent>&HOST` (`URS\QCOM0A8B&HOST`), so the two stacks name different children
+of the same parent, and which one this table's `_HID QCOM0A8B` plus `_CID PNP0CA1` yields is
+`UrsSynopsys.sys`'s behaviour and in no `.inf`.
+
+One correction falls out of the same extraction. `PNP0D80` is not unclaimed: an ARM64
+`machine.inf` names it on line 73 as
+`%*PNP0D80_Desc% = NO_DRV_GEN, *PNP0D80 ; Standard Power Management Controller` — the
+root-enumerated `*PNP0D80` form, which the census's `ACPI\` scan cannot see, bound to an
+install-no-driver placeholder rather than a driver, so "claimed" would be the wrong word as
+well. `PNP0CA2` and `PNP0CA3` return zero files in the arm64 set, so the tool's note that
+groups the three as vendor CIMs is right about those two.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

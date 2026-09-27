@@ -53,13 +53,51 @@
 # `PNP0CA1` - are UTF-16 with every `[Manufacturer]` entry ending `,NTamd64` and
 # every models section `.NTamd64`, and no `NTarm64` section in any of them - so
 # `storufs.inf` binding `ACPI\QCOM24A5` is a statement about the file in an x64
-# image, whose ARM64 twin is a different file carrying a different section, and
-# that file is not on this host. The vendor set is the other way round:
+# image, whose ARM64 twin is a different file carrying a different section - and
+# that file was not on this host when that paragraph was written. The vendor set
+# is the other way round:
 # `~/work/woa-ref/inf-7280` is 112 `.inf`, all UTF-16, 241 `NTARM64` decorations
 # and not one line mentioning `NTamd64`, `NTx86` or `NTia64`. Its 155 claims are
 # ARM64 claims already, so what is missing costs the OS-side verdicts alone - and
 # those two are not equal in weight: `QCOM0A8B` is USB, `QCOM24A5` is the storage
 # Windows boots from.
+#
+# Step 4.153 read the ARM64 twin. The blocker was never the media; it was the
+# host. `dl.delivery.mp.microsoft.com` answers 000 from here, which is what the
+# ISO's own download path uses, but a UUP `get.php` id returns per-file URLs on
+# `tlu.dl.delivery.mp.microsoft.com` and that host answers 206 on a range
+# request in 0.28 s. `api.uupdump.net/get.php?id=<build>&lang=en-us&edition=…`
+# with an arm64 25H2 build id gives 68 files, 8.07 GiB, each with its own signed
+# URL and sha1; all 68 downloaded and all 68 verified. `listid.php` is what
+# finds the id - the earlier 400/404s were a bad id and a wrong parameter, not a
+# dead route.
+#
+# Two things about reading it are worth knowing before the next attempt. The
+# edition ESD (`professional_en-us.esd`, image 3 = Windows 11 Pro, ARM64, 16.0
+# GB) is a *delta* WIM: 7z lists all 389 of its DriverStore packages and
+# extracts 159 of them as zero-byte files with `Data Error`, and wimlib without
+# `--ref` fails the whole pattern with "a file resource needed to complete the
+# operation was missing". `wimlib-imagex extract <esd> 3 <path> --ref=<each of
+# the other 18 ESD/WIM files>` resolves them - the base image is split across the
+# download set. Extracting the 389 paths one at a time, tolerating failures,
+# gives 386, none of them empty; the three that cannot be read are `helloface`,
+# `ntprint` and `prnms003`, none of which names a device gauguin has.
+#
+# The arm64 DriverStore is 389 packages, 387 `_arm64_` and 2 `_x86_` - the same
+# shape as the x64 one (710/2) - and `--bind` against it moves no verdict for
+# gauguin. `storufs.inf` binds `ACPI\QCOM24A5` under `[Qualcomm.NTarm64]`;
+# `urssynopsys.inf` binds `ACPI\QCOM24B6, ACPI\PNP0CA1` under `[UrsSynopsys.NTarm64]`.
+# So the two OS-side claims were the same claim in both builds and the x64
+# reading was not a weaker one - which is what this header said it might be, now
+# checked rather than assumed. What the arm64 set adds is that the generic route
+# is there too: `storufs.inf` binds `ACPI\CC_010901` in `[Generic.NTarm64]`.
+#
+# `wimlib-imagex` is not packaged for this host - Deepin's index has no
+# `wimtools` candidate and `apt-get update` does not finish - so it was unpacked
+# from the Debian trixie debs into `~/opt/wimlib` with `dpkg-deb -x`, together
+# with `libwim15t64`, `libntfs-3g90` and `libfuse3-4`, and run with
+# `LD_LIBRARY_PATH=$HOME/opt/wimlib/usr/lib/x86_64-linux-gnu`. The same unpack
+# provides `mkwinpeimg`, which is what a P3 boot medium will be built with.
 #
 # An earlier draft of this header said "both images: 339 .inf files, 85 distinct
 # `ACPI\` ids". That was boot.wim's count written twice: the install.wim run had

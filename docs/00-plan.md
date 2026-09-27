@@ -462,7 +462,7 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151 and 4.152): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152 and 4.153): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the
@@ -516,6 +516,25 @@ and not the only one, and its sibling `QcUsbFnSsFilter7280.inf` extends the Syno
 `PNP0CA1` and not the ChipIdea `PNP0C90` is this platform's role-switch — while `storufs.inf`'s own
 `ACPI\CC_010901` entry is a third route that is written down and left alone, since whether `acpi.sys`
 ever produces a class-code id is not readable from an `.inf`.
+Step 4.153 closed the half Step 4.152 left, by reading the ARM64 twin rather than waiting for one. The
+blocker had never been the media, it was the host: `dl.delivery.mp.microsoft.com`, which is what the
+ISO's own download path uses, answers 000 here, but a UUP `get.php` id returns per-file signed URLs on
+`tlu.dl.delivery.mp.microsoft.com` and that host answers 206 on a range request in 0.28 s. 68 files,
+8.07 GiB, every one verified against the index. The edition ESD is a *delta* WIM — 7z writes 159 of its
+389 DriverStore packages as zero-byte files and `wimlib-imagex` needs `--ref` to each of the other 18
+ESD/WIM files in the set to resolve the base — and with that, 386 of the 389 extract, none empty. The
+arm64 DriverStore is 389 packages, 387 `_arm64_` and 2 `_x86_`, the same shape as the x64 image's
+710/2, and `--bind` against it moves no verdict: `storufs.inf` binds `ACPI\QCOM24A5` under
+`[Qualcomm.NTarm64]`, `urssynopsys.inf` binds `ACPI\QCOM24B6, ACPI\PNP0CA1` under
+`[UrsSynopsys.NTarm64]`, and the generic `ACPI\CC_010901` route is there too. So the two OS-side
+claims were the same claim in both builds, the x64 reading was not a weaker one, and what is still
+open is the other thing this file has been carrying: which id names `URS0`'s children, which is
+`UrsSynopsys.sys`'s behaviour. The same extraction shows the two URS families split cleanly
+(`QCOM24B6`/`PNP0CA1` Synopsys, `QCOM24B7`/`PNP0C90` ChipIdea), that the vendor's own spellings
+`QCOM0A8B`, `QCOM0A8C`, `QCOM0A24` and `QCOM0AA1` are named in no file of the OS set, that Microsoft's
+URS children are `<parent>&FUNCTION` where the vendor filter's is `<parent>&HOST`, and that `PNP0D80`
+*is* named — by `machine.inf`, root-enumerated as `*PNP0D80` with a `NO_DRV` placeholder, a fourth
+position the census's `ACPI\` scan cannot see.
 Buttons are written as of Step 4.89 (`BTNS`, `ACPI0011`), the node that needed
 no shipped driver at all because the operating system supplies it, and the USB port is written
 as of Step 4.90 — the `RHUB`/`PRT1` pair under each of `URS0`'s two children, the node that
