@@ -2800,6 +2800,23 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > thirteen under *both* maps (only CPU, Metronome, Timer and Runtime run), because all eight of
 > the others carry the same letter either way. See `docs/08` step 4.157.
 
+> **Corrected 2026-09-27 by step 4.158 — "that is `P2 WHY`/`P2 ERR` … where the next device
+> window starts" is withdrawn, and neither row is something the phone owes.** Both are
+> re-encodings of characters the payload already prints live: `P2Record` calls `P2MarkSeq` with
+> the attempt's phase character and `P2WhyLetter (Status)`, `P2MarkSeq` writes them into the
+> slot's arrays, and `P2Tick` prints the same pair as the `%c%c` of one `K` row per dispatch
+> attempt with the slot's GUID on the row — so the sequence and status lines are the `K` rows
+> compressed by Apriori slot, and `P2 ERR` is those statuses named once each. All three are
+> printed by `P2Digest`, whose only caller is `CoreDisplayDispatchedNotDispatched` — called after
+> `CoreDispatcher` returns — so no run that dies inside the Apriori phase carries any of them, and
+> every run on record dies there. Measured over the LZMA-inflated volumes (the `LZMA_CUSTOM` GUID
+> at `0xf008`/`0x1101c`, the stream at `0x11030`; the current build's volume is 7,536,648 B
+> against 7,348,232 for the phone's), the payload installed on the phone carries `P2 SEQ` twice
+> and no `P2 WHY`, `P2 ERR`, `P2 FREE`, `P2 FWHY`, `P2 APRI` or `K` literal at all, so "read
+> three times, never read once" is a build history rather than three lost photographs. What is
+> still read nowhere is `P2 APRI`'s `matched`/`miss`/`entries`, which describes the promotion walk
+> over the volume and has no per-dispatch analogue. See `docs/08` step 4.158.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

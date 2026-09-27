@@ -31863,3 +31863,212 @@ the 1,648-byte `Mu-gauguin.img` stub, and the DTB rides inside the kernel region
 beside it. The porting goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying
 install and P5's peripherals not begun, and the end state still a Windows tablet whose modem and
 cameras are undrivable.
+
+## Step 4.158 — the owed readings are a camera-shaped re-encoding of a row the payload already prints live: `P2 SEQ` and `P2 WHY` are the two characters `P2Tick` writes per dispatch as `K n %c%c`, `P2Digest` has one caller and it runs after `CoreDispatcher` returns, so the three digest rows the record has been calling owed are unreachable on any run that dies inside the Apriori phase — and the one row family with *no* live counterpart, `P2 APRI`'s `matched`/`miss`/`entries`, is what a run that finishes that phase is still needed for
+
+**The instrument strings are not greppable, and that is what this step had to fix first.** Both
+`SILICIUM_UEFI.fd` and the payload's kernel carry their volume compressed: the `LZMA_CUSTOM` GUID
+`EE4E5898-3914-4259-9D6E-DC7BD79403CF` sits at `0xf008` and `0x1101c` of the FD, an LZMA-alone
+stream starts at `0x11030`, and a `grep` for any string the firmware prints returns 0
+occurrences in either file. Inflating that stream with
+`lzma.LZMADecompressor (format=lzma.FORMAT_ALONE)` gives **7,536,648** bytes for the current
+build's volume and **7,348,232** for the older one's; every count below is a count over that
+inflated volume, and the same reader reproduces all of them from either the payload image or the
+build artifact beside it.
+
+**Measured that way the two payloads on disk do not carry the same instrument, and the phone's
+own payload is the poorer one.** `work/out/boot-before-p2walk.img`'s kernel is byte-identical to
+`/tmp/phone-payload.raw` — 3,145,840 B, sha256
+`d0919c0004d126982c8630a9ef8f23a03ab8e4f80c1898854b81f44b6fcfffad` — so it is the payload pulled
+off the device and not a variant of it, while the current build is the 1,171,456 B
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` whose kernel is
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd-bootshim` (sha256 `a9efe721…`, the same
+3,145,840 B):
+
+| literal | `boot-before-p2walk.img` = the phone's payload | current build |
+|---|---|---|
+| `P2 SEQ` | 2 | 2 |
+| `P2 STATS` | 1 | 1 |
+| `P2 NOLOAD` | 2 | 2 |
+| `P2 WHY` | **0** | **1** |
+| `P2 ERR` | **0** | **2** |
+| `P2 FREE` | **0** | **1** |
+| `P2 FWHY` | **0** | **1** |
+| `P2 APRI` | **0** | **6** |
+| `P2 RETRY` | **0** | **1** |
+| `%d/%d free=` | **0** | **1** |
+| `free=%d` | **0** | **3** |
+| `K %d %c%c` | **0** | **1** |
+| `Loading driver at` | **1** | **0** |
+
+`P2 SEQ` twice is the two spellings of one row — `"P2 SEQ [%a]\n"` and `"P2 SEQ (no Apriori
+entries were promoted)\n"` — so the phone's payload prints the sequence line and **nothing beside
+it that can name a status or a free-run size**: the literal for the aligned status letter and the
+literal for the grouped status names were both added in a later build than the payload installed
+on the phone. The record has had this shape for three other builds since step 4.19 and draws the
+same conclusion there; what this table adds is the two members that matter, that build's own
+payload and the build that is current, and it is measured here on the phone's own bytes rather
+than read off a fingerprint. The `Loading driver at` inversion is deliberate on the other side:
+`Image.c:875-892` has the three `DEBUG_INFO|DEBUG_LOAD` calls commented out, with the block's own
+note that putting the three calls back is the way to restore them, so a payload that prints that
+row is not this build.
+
+**The committed reader gives the same answer, and it is the one to cite.** `tools/probe-fingerprint.py`
+walks the volume instead of grepping the image, and it reports **4/14** on
+`work/out/boot-before-p2walk.img` (1,142,784 B, sha256 `fb697f47…`) — `P2NoLoad`, `P2Seq`,
+`P2Diag` and `P2Stats` present, `P2FreeWhy`, `P2Digest`, `P2Apri`, `P2Why`, `P2ErrRow`, `P2Walk`,
+`P2Bins`, `P2Retry`, `P2Key` and `P2Tick` absent — and **14/14** on
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (1,171,456 B, sha256 `f1a7106b…`), where it
+prints "the full ladder: every instrument is in this image". The same command on
+`SILICIUM_UEFI.fd-bootshim` (3,145,840 B, sha256 `a9efe721…`) declines it as "not an Android boot
+image", which is the one place the two readers differ — the tool takes payloads, the counts above
+take volumes — and they agree on every literal both can see. Note that the image hash and the
+kernel hash are different numbers for the same file: `boot-before-p2walk.img`'s kernel is the
+`d0919c00…` above and the payload around it hashes `fb697f47…`.
+
+**`P2 SEQ` and `P2 WHY` are not two readings. They are the two characters `P2Tick` already writes
+per dispatch, indexed by Apriori slot instead of by GUID.** `P2Record` (`Dispatcher.c:617-637`)
+sets `mP2Diag[]` and then calls `P2MarkSeq (Guid, (Phase == 'L') ? 'L' : 'S', Status)`, and
+`P2MarkSeq` (`:597-616`) writes that character into `mP2AprioriRes[Index]` and
+`P2WhyLetter (Status)` into `mP2ApriWhy[Index]` at the index whose GUID matches — while the start
+path's success branch writes a lowercase `'s'` and `EFI_SUCCESS` through the same call. So the
+sequence line is `s` where a dispatch started and `L`/`S` where it stopped at load/start, the
+status line is the same positions spelled by `P2WhyLetter`'s ten letters (`:556-593`), and
+`P2Tick` (`:659-686`) prints exactly that pair as the `%c%c` of one row per attempt, with the
+GUID on the same line. The digest's third spelling, `P2 ERR`, groups `mP2ApriSt[]` by status and
+names each once at its first occurrence — the same statuses again, in words, for a reader who
+cannot take two captures.
+
+**And the whole digest hangs off one function that runs after the dispatch loop, which the `K`
+row's own comment block says out loud.** `P2Digest` is defined at `Dispatcher.c:2242` and its only
+caller is `CoreDisplayDispatchedNotDispatched` (`:2500`), which calls it at `:2569` and again in
+the repetition loop at `:2573`. The comment above `P2Tick` (`:637-663`) gives the reason the tick
+exists at all: "a digest printed once at the end cannot report on a run that does not reach the
+end." Both statements are true of this build, and together they are why the three rows the record
+has been calling owed have never appeared on a screen — including on the two runs this step
+makes, which die inside the Apriori phase and so reach neither the digest nor its repetition.
+
+**The two runs are the same instrument on the current payload, and they differ by the RSC seed
+and by one slot.** `tools/qemu-panel-read.py` on `SILICIUM_UEFI.fd-bootshim` under
+`virt,secure=on,virtualization=on,gic-version=2 -cpu max -m 4096`, loaded at `0x48000000` behind
+the standing EL3 stub (`tools/qemu-el3-stub.S`, sha256 `a082b796…`) writes
+`work/out/qemu-panel-4.158-current.txt` — 598 screens over 150.1 s at 0.25 s — and its tail is
+
+    K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+    ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766
+    ASSERT DebugLib.c +78: Format != ((void *) 0)
+
+Adding step 4.135's run-D pair — `loader,file=/tmp/rsc-word.bin,addr=0x46c2000c,force-raw=on` and
+`loader,file=/tmp/rsc-enable2.bin,addr=0x46c20d18,force-raw=on` — writes
+`work/out/qemu-panel-4.158-current-rsc.txt`, whose tail is
+
+    K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3
+    Rpmh Sleep callback registration failed, Status = 0x8000000000000003
+    K 19 Ss 19/69 free=1024 60F4DF83-C758-52B5-9AA0-92EA560EDB8F
+    ERROR: C90000002:V03000007 I0 B43C22DB-6333-490C-872D-0A73439059FD
+    ASSERT DebugLib.c +78: Format != ((void *) 0)
+
+Every row in both is `Ss`, and every row reports `free=1024`. `ss` is the phase `S` — a dispatch
+that reached `CoreStartImage` — and `P2WhyLetter (EFI_SUCCESS)`, so the 18 and the 19 are
+dispatches that both loaded and started; the `%d/%d` field is `mP2Started` over `mP2Apriori`, and
+the denominator 69 is the promotion counter's own arithmetic, since `mP2Apriori++` fires inside
+the `CompareGuid` match at `:2109-2127` for every entry of the array and entry 0 (`DxeMain`,
+`EFI_FV_FILETYPE_DXE_CORE`) is never in `mDiscoveredList`, so a complete walk of 70 promotes 69.
+`free=1024` is a **band and not a maximum**: `P2LargestAlloc` (`:195-219`) walks
+`Ladder[] = { 4096, 1024, 256, 64, 16, 4, 1 }` with `CoreAllocatePages (AllocateAnyPages,
+EfiBootServicesData, Ladder[Index], &Memory)`, frees each success and **returns the first rung that
+succeeded**, so `free=1024` says the 4096-page rung failed and the largest free run is in
+`[1024, 4096)` pages = `[4 MiB, 16 MiB)`. Every tick in both runs says the same thing, in a heap
+whose runtime bin the record has already sized at 28.4 MiB, so nothing about the free-run supply
+changed across the 19 slots.
+
+**The 19 GUIDs are Apriori slots 1 through 19 in order, and the last of them answers a question
+this record asked twice.** Resolved against
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/Guid.xref`: `80CF7257` PcdDxe, `BA01F085` EnvDxe, …,
+`453C9622` ChipInfo, `09EE56ED` PlatformInfoDxeDriver, `8DAA4DF1` HALIOMMU, `ACDF8D8E` ULogDxe,
+`D461A719` CmdDbDxe, `40256211` NpaDxe, and `60F4DF83-C758-52B5-9AA0-92EA560EDB8F` **RpmhDxe** —
+which is `K 19` and is also `INF` line 20 of `work/out/usb-host/APRIORI.xhci-host.inc`, with
+`PdcDxe` on line 21 immediately behind it. So the row the record has been calling "the 19th tick"
+is RpmhDxe by its own FFS file GUID. Step 4.135 described the unseeded run as dying in the DRV
+walk's outer routine and the seeded run as reaching "the same assertion one driver later" without
+naming which driver either was; step 4.136 named the code and left the ordering to the Apriori
+list. This reads the ordering off one payload directly.
+
+**The caller id in the `ERROR` row is not the FFS GUID, and the two must not be read as the same
+name.** `Guid.xref` maps FFS file GUIDs, and neither `CB29F4D1-7F37-4692-A416-93E82E219766` nor
+`B43C22DB-6333-490C-872D-0A73439059FD` appears in it. Both are in the *binary*: the phone's stub
+`Binaries/gauguin/QcomPkg/Drivers/RpmhDxe/RpmhDxe.inf` declares
+`FILE_GUID = 60F4DF83-…` and ships `RpmhDxe.efi` (65,536 B, sha256 `616686e2…`) which contains
+`CB29F4D1-…` as raw little-endian bytes at `0xe018` and contains `60F4DF83-…` nowhere; the
+`PdcDxe` pair is the same shape, `FILE_GUID = C4D86DF4-D250-5062-8078-1DA30EA6D240` over a
+`PdcDxe.efi` (36,864 B, sha256 `6613c253…`) carrying `B43C22DB-…` at `0x7018` and `C4D86DF4-…`
+nowhere. Both embedded ids are the *shared* ids of these two drivers across the vendor drops —
+`CB29F4D1` is the `FILE_GUID` of 57 other boards' `RpmhDxe.inf` and `B43C22DB` of 22 other
+boards' `PdcDxe.inf` — while `60F4DF83` and `C4D86DF4` occur in exactly one INF each, gauguin's.
+So the FFS entry is named by the INF and the marker record by an identity compiled into the
+binary, and in these two drops the two disagree. That is what makes the seeded run's tail
+readable: the caller id does not change *within* a driver between the two runs, it moves to the
+next slot, and the last row of each run names the slot that died — RpmhDxe at 19 with the seed
+absent, PdcDxe at 20 with it. The seeded run's `K 19 Ss` is the same statement from the other
+side: the driver printed `Rpmh Sleep callback registration failed, Status =
+0x8000000000000003` (`EFI_DEVICE_ERROR` — the row is a literal of `RpmhDxe.efi` at `0xa65d`),
+returned, and the dispatcher carried on.
+
+**So the RSC seed buys exactly one slot, and it does so on both payloads.** `0x46c2000c` and
+`0x46c20d18` are step 4.135's two seeds, and the tail they produce here is the tail run D
+produced on the *phone's* payload — same `Rpmh Sleep callback registration failed, Status =
+0x8000000000000003`, same next row `PdcDxe`, same `B43C22DB-…` caller id. The two runs in this
+step are the first time both tails have been read from one payload under one instrument and as
+text rather than as photographs. What step 4.137 established about the binaries is unchanged and
+is what the tails are made of: `0x6108` in `RpmhDxe.efi` is one helper with 66 call sites whose
+failure path is `DebugVPrint (EFI_D_ERROR, NULL, 0, 0, 0)`, and `PdcDxe.efi` carries the same
+defect as five inline copies of the same five-register call — so both slots die the same way and
+only the order decides which one the panel names.
+
+**And that closes a question step 4.157 re-opened.** Step 4.157's last paragraph ends "Left open:
+which call passes the NULL format to `DebugPrintMarker`", and steps 4.136 through 4.138 had
+already answered it: the call is `0x6108`'s, its failing instruction is at `0x611c`-`0x6130`,
+`0x18dc` is `DebugVPrint` with its assert path at `0x19c0` calling
+`DebugAssert ("DebugLib.c", 78, "Format != ((void *) 0)")`, and `PdcDxe.efi`'s `DebugVPrint` is
+`0x1460` with five inline copies. The step did not need the reading it declared open, and what
+was genuinely missing from the record was not the call site but the *order*: which of the two
+drivers dies first, and what changes it. That is what the two panels above supply, and the answer
+is the Apriori list and the RSC seed, one slot.
+
+**What remains owed is therefore one row family and not three.** `P2 WHY` and `P2 ERR` are now
+measured to be re-encodings of the `K` rows' two characters, and the `K` rows have been read; the
+`P2 SEQ` line is the same characters again, so re-reading it adds nothing. What has no live
+counterpart is **`P2 APRI`** — `first=`, `last=`, `matched=a..b` or `matched=none`, `unhit=`,
+`miss=n`, and `bytes=`/`entries=`/`sum=` — because those fields describe the *promotion walk over
+the volume*, which has no per-dispatch analogue and no tick. They are the only rows that can
+separate "the array the device scanned was short" from "the scan was complete and the walk stopped
+matching", which is the distinction step 4.132 and step 4.130 left standing. Reading them is
+therefore not a photograph and not a flash: it is a build that prints `P2 APRI` from `P2Tick`, or
+a run that reaches `CoreDisplayDispatchedNotDispatched` — and neither run here does, because the
+Apriori phase does not finish.
+
+**Files this step writes are the two panel logs.** `work/out/qemu-panel-4.158-current.txt`
+(18 `K` rows, 598 screens) and `work/out/qemu-panel-4.158-current-rsc.txt` (19 rows, the `Rpmh
+Sleep` row, the moved caller id); both carry their instrument's provenance in the header, down to
+the EL3 stub's hash and the two seeds' addresses. They live under `work/`, which is not tracked,
+so the only committed files this step changes are the three documents — and the reader the table
+above is counted with is the already-committed `tools/probe-fingerprint.py`, run and not altered.
+
+Left open: `P2 APRI`'s eight fields, which is now the only unread row family on this path and
+needs either a build that prints it per tick or a run that finishes the Apriori phase — which is
+in turn gated on the two NULL-format call sites at Apriori slots 19 and 20; whether the sequence
+line's characters are indexed by Apriori ordinal or by promotion order, which the two readings
+cannot separate because the first 19 are `s` either way, and which a single `P2 SEQ` capture from
+a run past slot 20 would settle; the arch-protocol display's nine names; and the step 4.153-4.156
+items unchanged — whether the stock Setup-Media BCD boots a *substituted* `boot.wim`,
+`winpeshl.ini`, the 1 GB stick, `UrsSynopsys.sys`'s child naming, `ExcludeFromSelect` and the
+`*<PNP-id>` position.
+
+Not an action: no device was touched, nothing was flashed, no partition was written, no stub,
+firmware source or Microsoft image was changed or patched. `adb devices -l` and
+`fastboot devices` are both empty and no Qualcomm USB device is present — the two runs are QEMU
+on the host, reading the console out of the guest's own memory, and the payload they run is the
+same 1,171,456 B artifact step 4.155 leaves in `work/out/usb-host/`. `userdata`, the partition
+table and the firmware LUN remain untouched. The porting goal is unchanged and unmet, with P3
+unfinished, P4's `userdata`-destroying install and P5's peripherals not begun, and the end state
+still a Windows tablet whose modem and cameras are undrivable.

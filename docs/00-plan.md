@@ -430,6 +430,37 @@ called it), and the `ASSERT DebugLib.c +78: Format != ((void *) 0)` row is a sec
 NULL format reaching `DebugPrintMarker` — from the image that carries both that literal and that
 caller id, `RpmhDxe.efi`.
 
+**Step 4.158 read the two rows the record has been calling owed off the host instead of the
+phone, and found they were never owed.** The volume is LZMA-compressed, which is why a `grep` for
+any string the firmware prints returns nothing: the `LZMA_CUSTOM` GUID sits at `0xf008` and
+`0x1101c` and the stream at `0x11030`, and inflating it gives 7,536,648 B for the current build
+against 7,348,232 for the payload installed on the phone — `work/out/boot-before-p2walk.img`,
+whose kernel is byte-identical to `/tmp/phone-payload.raw` (sha256 `d0919c00…`). Counted there,
+the phone's payload carries `P2 SEQ` twice and **no `P2 WHY`, `P2 ERR`, `P2 FREE`, `P2 FWHY`,
+`P2 APRI`, `P2 RETRY` or `K` literal at all**, while the current build carries every one of them,
+so "SEQ read three times and WHY never read once" is a build history and not three lost
+photographs. `tools/probe-fingerprint.py` reads the two the same way — **4/14** rungs on the
+phone's payload against **14/14** on the current one. And the two digest lines are not separate readings: `P2Record`/`P2MarkSeq` write the
+phase character and `P2WhyLetter (Status)` into the slot's array and `P2Tick` prints that same
+pair as the `%c%c` of one live row per dispatch attempt with the slot's GUID beside it, so
+`P2 SEQ`+`P2 WHY` are the `K` rows compressed by slot and `P2 ERR` is those statuses named.
+`P2Digest`'s only caller is `CoreDisplayDispatchedNotDispatched`, which runs after
+`CoreDispatcher` returns, so no run that dies inside the Apriori phase can carry any of the three
+— which is what both new runs do. They run the current payload under the standing EL3 stub: the
+standing instrument ticks 18 rows and dies, and step 4.135's two RSC seeds buy exactly one more,
+`Rpmh Sleep callback registration failed, Status = 0x8000000000000003` then
+`K 19 Ss 19/69 free=1024 60F4DF83-C758-52B5-9AA0-92EA560EDB8F`, which `Guid.xref` resolves to
+`RpmhDxe` (Apriori line 20, with `PdcDxe` on line 21), before the same `ASSERT` returns with the
+caller id moved to `B43C22DB-…`, `PdcDxe`'s. All 19 rows are `Ss` with `free=1024`, which
+`P2LargestAlloc`'s ladder makes a band rather than a maximum — the 4096-page rung failed, so the
+largest free run is in `[1024, 4096)` pages. The caller id is not the FFS GUID: gauguin's
+`RpmhDxe.inf` declares `60F4DF83-…` over a binary carrying `CB29F4D1-…` at `0xe018`, and
+`PdcDxe.inf` declares `C4D86DF4-…` over one carrying `B43C22DB-…` at `0x7018` — the shared ids of
+57 and 22 other boards' stubs. That also closes the question step 4.157 re-opened, since steps
+4.136-4.138 had already named the call site. What is genuinely still owed is one row family,
+`P2 APRI`'s `matched`/`miss`/`entries`, which describes the promotion walk itself and has no
+per-dispatch analogue.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
