@@ -3236,7 +3236,23 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `DisplayDxe` at stock 41 against `SimpleFbDxe` at our 60, and `QcomBds` at stock 58 with `FontDxe`
 > beside it against `BdsDxe` at our 44. This does not say any of them installs; it says where the
 > stock firmware put the display and BDS drivers, which is in the early bands and not in the console
-> tail this build puts the substitutes in. See `docs/08` step 4.169.
+> tail this build puts the substitutes in. One further fact the alignment makes visible and the
+> word "stock-only" would hide: **`PwrUtilsDxe` (`AF25F4DC-CC8A-5CBB-8B15-67C072B6252D`, 32,824 B),
+> `VcsDxe` (`016DD1DA-BA27-528A-9A61-823A27D0F9F3`, 49,198 B) and `FeatureEnablerDxe`
+> (`E5E7BAF3-3D4F-5AD8-BA77-DE8DB3C8BA8E`, 32,836 B) are all present in both volumes as
+> `DRIVER` (0x07) files built from `Binaries/gauguin/QcomPkg/Drivers/`, listed in `Include/DXE.inc`
+> and absent from `APRIORI.inc`** — the build ships them and leaves them to the dependency walk,
+> where the stock firmware promoted them in the batch. The eleven stock-only entries that are in
+> neither volume split in a way worth keeping straight: only `FvDxe` and `FontDxe` are absent from
+> the tree, while `DisplayDxe`, `ADSPDxe`, `PILProxyDxe`, `PILDxe`, `CPRDxe`, `QcomWDogDxe`,
+> `SecRSADxe`, `VerifiedBootDxe` and `QcomBds` each have a packaged `.efi` and `.inf` under
+> `Binaries/gauguin/QcomPkg/Drivers/` and are held out by `DXE.inc` alone — two behind
+> `USE_CUSTOM_DISPLAY_DRIVER`, the rest listed in `DXE.inc`'s header comment as packaged but not
+> given an `INF` line. `VcsDxe` is stock entry 21, the entry
+> immediately before `ClockDxe` at 22, and this build promotes neither, so its batch goes from
+> `PdcDxe` into `ClockDxe` with nothing between. Whether that bears on 4.164's
+> `HAL_clk_FabiaPLLEnableVote` failure is a run-time question; that the three are promotable without
+> adding a file is not. See `docs/08` step 4.169.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

@@ -34466,7 +34466,56 @@ agreement is the two boards sharing a core. Where the boards differ the differen
 the whole Qualcomm power/secure-boot family on the stock side (`PwrUtilsDxe`, `VcsDxe`,
 `FeatureEnablerDxe`, `QcomWDogDxe`, `PILProxyDxe`, `PILDxe`, `CPRDxe`, `ASN1X509Dxe`, `SecRSADxe`,
 `VerifiedBootDxe`) against Mu's own (`VariableRuntimeDxe`, `ResetSystemRuntimeDxe`,
-`SecurityStubDxe`, the `HashDxe`/`CipherDxe`/`RngDxe` trio).
+`SecurityStubDxe`, the `HashDxe`/`CipherDxe`/`RngDxe` trio) — but "stock-only" is a statement about
+the *promotion order* and not about what our volume carries, and the two come apart in a way worth
+the next paragraph.
+
+### Three of the stock-only entries are in our volume already — and two of them sit immediately before `ClockDxe`
+
+A "stock-only" row in the alignment table above says the entry is promoted by the stock firmware and
+not by ours. It does not say whether our volume carries the driver, and for three of the
+stock-only-by-position entries it does:
+
+| stock-only entry | in our volume as a file | GUID in the volume | size |
+|---|---|---|---|
+| `PwrUtilsDxe` | **yes**, `DRIVER` (0x07), built from `Binaries/gauguin/QcomPkg/Drivers/PwrUtilsDxe/` | `AF25F4DC-CC8A-5CBB-8B15-67C072B6252D` | 32,824 B |
+| `VcsDxe` | **yes**, `DRIVER` (0x07), from `Binaries/gauguin/QcomPkg/Drivers/VcsDxe/` | `016DD1DA-BA27-528A-9A61-823A27D0F9F3` | 49,198 B |
+| `FeatureEnablerDxe` | **yes**, `DRIVER` (0x07), from `Binaries/gauguin/QcomPkg/Drivers/FeatureEnablerDxe/` | `E5E7BAF3-3D4F-5AD8-BA77-DE8DB3C8BA8E` | 32,836 B |
+
+All three are `DRIVER` files in both volumes and all three are in `Include/DXE.inc` — so the build
+puts them in the firmware and leaves them to the ordinary dependency walk, while the stock firmware
+ran them in the a-priori batch.
+
+The other eleven stock-only entries are in neither volume, and here the alignment's vocabulary needs
+one more caution, because "not in the volume" and "not in the tree" are different facts and only two
+of the eleven are the second. `FvDxe` and `FontDxe` are not in the tree at all — no `.efi`, no
+`.inf` under `Binaries/gauguin/QcomPkg/Drivers/`. The other nine are: `DisplayDxe`, `ADSPDxe`,
+`PILProxyDxe`, `PILDxe`, `CPRDxe`, `QcomWDogDxe`, `SecRSADxe`, `VerifiedBootDxe` and `QcomBds` each
+have a packaged `.efi` and `.inf` sitting in `Binaries/gauguin/QcomPkg/Drivers/`, so whether they
+are in the volume is a question about one line of `Include/DXE.inc` and not about extraction. Two of
+them (`CPRDxe`, `DisplayDxe`) are behind `!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1` — the same switch
+P3 item 2 turns — and the remaining seven are named in `DXE.inc`'s own header comment, which says in
+so many words that they are *"Packaged under Binaries/gauguin/ but NOT in this file, so not in the
+firmware volume. The reference has no line for them. Add an INF line if any turns out to be needed."*
+So "stock-only" here does not mean unavailable: it means the reference package this build inherited
+its list from did not carry the line. Whether any of them would *install* if promoted is the
+separate, run-time question the whole plan keeps open — `PILProxyDxe`, `PILDxe`, `ADSPDxe`,
+`SecRSADxe` and `VerifiedBootDxe` belong to a secure-boot and image-loader context this build does
+not reproduce, and their presence in the volume would not create it.
+
+The adjacency is the reason to state this separately. `VcsDxe` is stock entry **21**, the entry
+immediately before `ClockDxe` at 22, and `PwrUtilsDxe` is entry 17, in the power band the alignment
+shows as otherwise identical to ours. Our build promotes neither, so the batch that runs on the
+device goes from `PdcDxe` straight into `ClockDxe` — which is where the phone payload parks:
+`HAL_clk_FabiaPLLEnableVote` fails and `ClockDxe` asserts (4.164). This step does not claim the two
+are connected; a Fabia PLL vote failing is a vote about a clock resource, and whether `VcsDxe`'s and
+`PwrUtilsDxe`'s absence from the batch has anything to do with it is a run-time question that
+neither the stock order nor a disassembly answers. What it does say is that the stock firmware's
+batch was not ours minus nothing: it carried three drivers ours holds in the volume and never
+promotes, and the two that flank `ClockDxe` in it are among them. Promoting them is a one-line
+`APRIORI.inc` change and the machinery for it already exists (`tools/make_uefi_platform.py
+--apriori-move` and `tools/build-apriori-variant.sh`, whose `arch-first` experiment reorders the
+same array on the same principle).
 
 ### Two positions in the stock order are the two P3 items this plan is still holding
 

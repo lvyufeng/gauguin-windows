@@ -845,7 +845,23 @@ Work:
 > at 44 and carries no font driver at all. Item 2's driver is a build flag with a stock precedent
 > and a known position (`USE_CUSTOM_DISPLAY_DRIVER`'s `= 1` branch, which moves nine entries), and
 > item 4's boot-entry machinery is two adjacent stock entries rather than an unnamed wall — though
-> neither says either driver would install if promoted. See `docs/08` step 4.169.
+> neither says either driver would install if promoted. And "stock-only" is a statement about the
+> promotion order, not about what the volume carries: **`PwrUtilsDxe` (32,824 B), `VcsDxe` (49,198 B)
+> and `FeatureEnablerDxe` (32,836 B) are in both volumes as `DRIVER` files built from
+> `Binaries/gauguin/QcomPkg/Drivers/` and are not in `APRIORI.inc`**, while the other eleven
+> stock-only entries are in neither volume — and nine of those eleven (`DisplayDxe`, `ADSPDxe`,
+> `PILProxyDxe`, `PILDxe`, `CPRDxe`, `QcomWDogDxe`, `SecRSADxe`, `VerifiedBootDxe`, `QcomBds`) have
+> a packaged `.efi` and `.inf` under `Binaries/gauguin/QcomPkg/Drivers/` and are held out by a line
+> of `DXE.inc` (`CPRDxe` and `DisplayDxe` behind the display flag; the rest named in `DXE.inc`'s own
+> header comment as packaged-but-not-listed, with an invitation to add the line). Only `FvDxe` and
+> `FontDxe` are not in the tree at all. That matters because of where they sit: `VcsDxe` is stock entry 21, immediately
+> before `ClockDxe` at 22, and `PwrUtilsDxe` is 17 — so the batch this build runs goes from `PdcDxe`
+> straight into `ClockDxe`, which is exactly where the phone payload parks (4.164). This step does
+> not claim the two are connected, and a Fabia PLL vote failing is not obviously about either
+> driver; what it says is that the stock batch was not ours minus nothing, and that promoting the
+> three is a one-line `APRIORI.inc` change with the machinery already in place
+> (`tools/make_uefi_platform.py --apriori-move`, `tools/build-apriori-variant.sh`). See `docs/08`
+> step 4.169.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
