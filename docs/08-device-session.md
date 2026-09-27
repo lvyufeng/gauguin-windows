@@ -31577,6 +31577,19 @@ are that tool's arithmetic rather than a device reading; the true sum is 288 pag
 the comment draws from it — that the runtime bin is empty by slot 5, fourteen slots before the
 first failure — survives the correction, because 288 is still larger than the bin.
 
+> **Both halves of this paragraph's correction are themselves withdrawn in Step 4.157.** The
+> macro *is* defined, at `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14`, reached through a
+> chain of `.inc` files the search behind this step globbed past; the compiled
+> `CC_FLAGS` carries it and `BUILD_REPORT.TXT` repeats it 48 times. So
+> `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is **0x1000**, the rounded and unrounded requests are the
+> same number on every line, and `raw == big` is the ordinary case rather than `raw > big`. The ten
+> rows listed above therefore keep `pe-facts.py`'s numbers, and 288 is this step's own
+> (16-page-rounding) figure: the correct sum for the four early runtime successes is **335** —
+> 15 + 112 + 96 + 112 — which is what the firmware comment already said, so the comment's
+> arithmetic is right and the sentence above inverts it. The three rows this step calls wrong for
+> the other six runtime images (80, 96, 32) are wrong in the same direction and for the same
+> reason. The comment's conclusion still holds, on 335 rather than 288.
+
 **Where that leaves the next device window.** `P2 FREE largest=` and `P2 FWHY`'s `free`/`big`/`c`
 now have a sharper reading than they had: `P2FreeWhy` is called only where `PromoteMemoryResource`
 has already failed (`Page.c:1386` on the `CoreFindFreePagesI` rung, `:1598` on the `FindFreePages`
@@ -31610,3 +31623,243 @@ written is `tools/load-failure-census.py`, which is a reader; the payload it rea
 1,171,456 B artifact Step 4.155 leaves in `work/out/usb-host/`. The porting goal is unchanged and
 unmet, with P3 unfinished, P4's `userdata`-destroying install and P5's peripherals not begun, and
 the end state still a Windows tablet whose modem and cameras are undrivable.
+
+> **Both orders in this step's last paragraph are withdrawn in step 4.157, and so is its
+> granularity paragraph above.** The search behind it listed `.dsc`, `.fdf`, `.inf`, `.dec`,
+> `.h`, `.c` and `.py` and not `*.dsc.inc`, which is the one extension the definition is in:
+> `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is defined on
+> `*_CLANGPDB_AARCH64_CC_FLAGS` at `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14`, it
+> reaches this platform through `gauguin.dsc:71 -> BitraPkg.dsc.inc:20 -> QcomPkg.dsc.inc:10`,
+> and the compiled `CC_FLAGS` in
+> `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Core/Dxe/DxeMain/GNUmakefile:131` carries
+> it. `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is therefore 0x1000, `Alignment` is one page for all
+> four memory types, `tools/pe-facts.py`'s `req`/`pg` is the loader's own expression and is not to
+> be changed, and the 16-page rounding comes back *out* of `tools/load-failure-census.py`. What
+> survives from this step unchanged is its central result — the eight split groups, the
+> falsification of `P2 RETRY`'s premise under both maps, and `P2 WHY`/`P2 ERR` as what decides
+> the 27 — because every one of those keys on `SizeOfImage`, `SectionAlignment`, Characteristics
+> and subsystem, none of which the request model touches. See step 4.157.
+
+## Step 4.157 — the granularity correction Step 4.156 ordered is itself wrong: its search listed every extension except `*.dsc.inc`, and the file that defines `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is `SiliciumPkg.dsc.inc:14` — so `Alignment` is one page for all four memory types, `pe-facts.py`'s `req`/`pg` is the loader's own `Image.c:682-688` and stays, the 16-page column comes back out of `load-failure-census.py`, and the two terminal QEMU rows are decoded as two reports rather than one
+
+Two orders were left at the end of Step 4.156 — change `tools/pe-facts.py`'s `req`/`pg` to a
+per-type rounding, and change `tools/load-failure-census.py` the same way, because
+`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is "defined nowhere in this tree". Both are
+withdrawn, and the whole question turns on one missing glob.
+
+**The search that reported the macro absent listed every extension but the one it is in.** The
+step's own sentence names seven: `.dsc`, `.fdf`, `.inf`, `.dec`, `.h`, `.c`, `.py`. Searching the
+same tree with `*.dsc.inc`, `*.fdf.inc`, `*.toml` and `*.sh` added returns **exactly two hits
+outside `Build/`**:
+
+    Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14   the definition
+    Mu_Basecore/MdePkg/Include/AArch64/ProcessorBind.h:166  the #ifdef that tests it
+
+The line is `*_CLANGPDB_AARCH64_CC_FLAGS = -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`, under
+`[BuildOptions]` with no module-type qualifier, so it appends to **every** AARCH64/CLANGPDB module
+in the platform build and not to a set. It is reached the way the other three quarters of this
+build's flags are: `gauguin.dsc:71` includes `BitraPkg/BitraPkg.dsc.inc`, whose `:20` includes
+`QcomPkg/QcomPkg.dsc.inc`, whose `:10` includes `SiliciumPkg/SiliciumPkg.dsc.inc`. A plain
+`.dsc` glob cannot see any of that, because every file in the chain but the platform DSC is a
+`.inc`.
+
+**And the compiled artifact says so, which is better evidence than any source-chain reading.**
+`Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Core/Dxe/DxeMain/GNUmakefile:131` ends its
+`CC_FLAGS` with
+
+    ... -D CLANG -D ENABLE_SECUREBOOT=0 -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY
+    -D HAS_ACTLR_EL1_UNIMPLEMENTED_ERRATA=0 ... -march=armv8.2-a+crypto+rcpc
+
+— SiliciumPkg's define first and QcomPkg's errata defines after it, in include order, which is a
+second independent confirmation that the chain above is the one that ran. `BUILD_REPORT.TXT`
+repeats the macro 48 times. There is no `undef` of it anywhere in the tree.
+
+So `MdePkg/Include/AArch64/ProcessorBind.h:166-171` compiles its `#ifdef` arm:
+
+    161  /// Page allocation granularity for AARCH64
+    162  /// MU_CHANGE [BEGIN] - Enable Deprecated 4k Granularity Mode for Platforms
+    ...
+    165  #define DEFAULT_PAGE_ALLOCATION_GRANULARITY  (0x1000)
+    166  #ifdef __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY
+    167  #define RUNTIME_PAGE_ALLOCATION_GRANULARITY  (0x1000)     <- this one
+    169  #define RUNTIME_PAGE_ALLOCATION_GRANULARITY  (0x10000)    not compiled
+    170  #endif
+
+`CoreInternalAllocatePages` selects that macro for the runtime family
+(`Page.c:1455-1464`: `EfiReservedMemoryType`, `EfiACPIMemoryNVS`, `EfiRuntimeServicesCode`,
+`EfiRuntimeServicesData`) and rounds by it at `Page.c:1482-1483` and again at `:1749-1750`:
+
+    NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1;
+    NumberOfPages &= ~(EFI_SIZE_TO_PAGES (Alignment) - 1);
+
+With `Alignment = 0x1000` for all four memory types, `EFI_SIZE_TO_PAGES (Alignment) - 1` is 0, both
+lines are no-ops, and the request is exactly `BasePeCoff.c`'s `SizeOfImage` fed through
+`Image.c:682-688`:
+
+    if (Image->ImageContext.SectionAlignment > EFI_PAGE_SIZE) {
+      Size = (UINTN)Image->ImageContext.ImageSize + Image->ImageContext.SectionAlignment;
+    } else {
+      Size = (UINTN)Image->ImageContext.ImageSize;
+    }
+    Image->NumberOfPages = EFI_SIZE_TO_PAGES (Size);
+
+which is also what `:759-767` re-runs on the runtime path — and which is verbatim what
+`tools/pe-facts.py:554-555` computes. That tool was right, `Page.c`'s `P2BRINGUP` comment was
+right, and the change Step 4.156 ordered would have made both wrong.
+
+**What the correction actually moves, measured.** Exactly the ten runtime-typed members of the
+batch, and nothing else. The census prints all 46 under both maps; the request column changes on
+these ten:
+
+    slot  name                                sa      old   corrected
+       1  EnvDxe                              0x1000   16     15
+       2  ReportStatusCodeRouterRuntimeDxe    0x10000  96    112
+       3  StatusCodeHandlerRuntimeDxe         0x10000  80     96
+       4  RuntimeDxe                          0x10000  96    112
+      24  SdccDxe                             0x1000   32     26
+      28  VariableRuntimeDxe                  0x10000  96    112
+      31  ResetSystemRuntimeDxe               0x10000  96    112
+      34  EmbeddedMonotonicCounter            0x10000  80     96
+      35  RealTimeClock                       0x10000  80     96
+      38  CapsuleRuntimeDxe                   0x10000  80     96
+
+The ten sum to **873 pages** under the corrected model and 752 under the old one, and the batch's
+whole demand moves from 1,341 to **1,462 pages**. Two cross-checks make this a measurement rather
+than an assertion. `tools/pe-facts.py`'s own printed output already says "the 10 runtime drivers
+(subsystem 12) are 873 pages of that demand" and "`RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x1000
+on this build (`SiliciumPkg.dsc.inc:14` satisfies the `#ifdef`)" — so the tool's *output* was
+saying the opposite of the order its prose was given. And the four runtime successes before the
+first failure — `EnvDxe`, `ReportStatusCodeRouterRuntimeDxe`, `StatusCodeHandlerRuntimeDxe`,
+`RuntimeDxe` — sum to **335** pages (15 + 112 + 96 + 112), which is exactly the number `Page.c`'s
+`P2BRINGUP` comment records for them: "335 pages between them — 15, 112, 96 and 112". Step 4.156
+called that comment's arithmetic "that tool's arithmetic rather than a device reading" and gave
+the true sum as 288; 288 is the old model's number for the same four, and the comment is the one
+that reproduces from a source expression. The comment's own conclusion — that the 150-page
+runtime bin is empty long before the first failure — survives either way, on 873 rather than 288.
+
+**Nothing Step 4.156 found about the `L`s moves, and the reason is structural.** Its central
+result is that 27 of the 46 fall into eight groups whose members make a request the loader cannot
+distinguish, every group split by letter with each success earlier than each failure. The
+grouping key is `SizeOfImage`, `SectionAlignment`, Characteristics and subsystem — four
+*unrounded* fields, printed straight off the PE header. The request is derived from them, so a
+correction to the request model cannot re-sort the groups; re-running the census confirms the
+eight groups and the one unsplit control (`SecurityStubDxe`, `ConSplitterDxe`) print identically.
+The monotone-heap test is unchanged too — 2 violations under the cut map, 3 under the identity
+map, the same slots and the same pairs — because every image in every violating pair is
+subsystem 11, and the runtime members are the only ones the model touches. The instrument's
+*reasoning* was wrong and its *finding* was not, which is worth writing down because the next
+step that reads it will not have this paragraph in view.
+
+**The one thing the corrected requests do decide is a denominator, and it is worth stating exactly
+once.** The batch's total demand is 1,462 pages on the cut map and 1,603 on the identity map the
+census uses, against `pe-facts.py`'s 1,562 for its own `apriori[k+1]` join — three different
+numbers for the same sequence, all three of them the same arithmetic applied to a different
+choice of which Apriori entries matched. Step 4.156 closed by saying the identity/cut
+disagreement "does not decide this question", and that is true of the 27 and of the runtime
+subtotal (873 under both maps, exactly); it is not true of any *total*, which is why the line
+`P2 APRI matched=` is the one that settles which batch a future reading is talking about.
+
+**The arch-protocol count does not separate the maps either, and this one was carried as open.**
+The set of 13 is `DxeMain/DxeProtocolNotify.c`'s `mArchProtocols`; the producers are one module
+each and each producer's own directory is named for it (Security `SecurityStubDxe`, CPU
+`ArmCpuDxe`, Metronome `MetronomeDxe`, Timer `ArmTimerDxe`, Bds `BdsDxe`, Watchdog Timer
+`WatchdogTimer`, Runtime `RuntimeDxe`, Variable and Variable Write `VariableRuntimeDxe`, Capsule
+`CapsuleRuntimeDxe`, Monotonic Counter `EmbeddedMonotonicCounter`, Reset
+`ResetSystemRuntimeDxe`, Real Time Clock `RealTimeClock`). Of those, exactly four run
+successfully in the batch — CPU, Metronome, Timer and Runtime — and **nine do not, under either
+map**: Security, Bds, Watchdog Timer, Variable, Variable Write, Capsule, Monotonic Counter, Reset
+and Real Time Clock. The maps do not differ here, and the reason is visible in the two tables:
+every one of those eight producers carries the *same* letter under both. `BdsDxe` is the one that
+changes category — absent from the cut batch, present and `L` at identity slot 44 — and it is
+absent either way. So the earlier claim that this question moves between nine and eight is
+withdrawn: it is nine on both maps, and what it needs instead is the `P2 APRI` line that says
+which batch produced the SEQ.
+
+**The other half of the same read: the two rows that end every QEMU run are two reports, not
+one.** `work/out/qemu-panel-phone-payload.txt` ends
+
+    Loading driver at 0x0009C462000 EntryPoint=0x0009C463000 RpmhDxe.efi
+    ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766
+    ASSERT DebugLib.c +78: Format != ((void *) 0)
+
+and the same pair ends `qemu-panel-el3-seed{3,4,5}.txt:192` and the three `4.133-rung*` files. The
+first is `SerialStatusCodeHandler.c`'s third branch, and its shape settles which branch it is:
+
+    87   CharCount = AsciiSPrint (BufferPtr, sizeof (Buffer), "ERROR: C%08x:V%08x I%x", ...);
+    89   ASSERT (CharCount > 0);
+    91   if (CallerId != NULL) { ... " %g" ... }          <- the 36 characters after I0
+   100   if (Data != NULL)     { ... " %x" ... }          <- ABSENT from the row
+   109   ... "\n\r"
+
+`"ERROR: C90000002:V03000007 I0"` is 29 characters and the `" %g"` at `:92` adds a space plus the
+36-character GUID for 37 more, so the row is 66 and the `"\n\r"` at `:109` brings the buffer to 68
+— and the panel row ends *after the GUID*, with no hex. `:100` skips its `" %x"` when
+`Data == NULL`, and `:73`/`:78` both require `Data != NULL`
+before they can be taken, so a row that reaches `:83` and stops after the caller id is a report
+whose `Data` was **NULL**: the ERROR branch was reached because there was no payload to be an
+assert or a debug message. Earlier in this record the same row was read as a 131-byte buffer fill
+overflowing a `Buffer` of `EFI_STATUS_CODE_DATA_MAX_SIZE`, and that reading is wrong twice over:
+measured, `EFI_STATUS_CODE_DATA_MAX_SIZE` is **0x200 — 512 bytes**
+(`MdeModulePkg/Include/Guid/StatusCodeDataTypeDebug.h:26`), so 68 bytes against 512 is nowhere
+near an overflow, and it is also not the `8` that Step 4.135 derived for `cfg1 < 8` in the DRV
+walk, which closes that candidate. Nothing here can corrupt `RpmhDxe`'s stack: the buffer is the
+handler's own local and `WriteStatusCode` copies out of it.
+
+The second row cannot come from that handler at all. `BaseDebugLibSerialPort/DebugLib.c:78` is
+
+    ASSERT (Format != NULL);
+
+inside `DebugPrintMarker`, which `DebugVPrint` calls with no NULL check of its own — so the row is
+a `DEBUG()`-family call whose format pointer is NULL, and `SerialStatusCodeHandler` calls no
+`DebugPrint`. The *printer* that renders it as `ASSERT <file> +<line>: <description>` is not that
+library's `DebugAssert` either, which formats `"ASSERT [%a] %a(%d): %a\n"` using
+`gEfiCallerBaseName`; `"ASSERT %a +%d: %a"` occurs in **no** non-`Build/` source of this tree. It
+does occur, as a literal, inside `Binaries/gauguin/QcomPkg/Drivers/RpmhDxe/RpmhDxe.efi` at
+`0xa6b8` — and the `ERROR:` row's caller id belongs to that same image: `CB29F4D1-7F37-4692-A416-93E82E219766`
+is absent as ASCII from gauguin's 65,536-byte `RpmhDxe.efi` but present as raw little-endian bytes
+at file offset `0xe018`, while gauguin's own `RpmhDxe.inf` declares
+`FILE_GUID = 60F4DF83-C758-52B5-9AA0-92EA560EDB8F` and `60F4DF83` is absent from the binary. (The
+same `CB29F4D1-…` GUID is the `FILE_GUID` of 57 other boards' `RpmhDxe.inf` — enchilada,
+spacewar, caymanslm, renoir, pong and the rest — which is a plausible way for a stale literal to
+end up compiled into a vendor blob.) So the two rows are RpmhDxe's, in that order, and they are
+two reports: a status-code ERROR with no payload, then a NULL format reaching
+`DebugPrintMarker`. Which call carries the NULL format is not settled here and is left open;
+`0x90000002` is `EFI_SOFTWARE | EFI_SW_EC_ILLEGAL_SOFTWARE_STATE` and `0x03000007` is not the
+ACPI spec's `EFI_SW_EC_ILLEGAL_SOFTWARE_STATE` (`0x00000013`), so the value names a state only
+through this image's own table, whose indexing is not re-derived here.
+
+**The files this step writes are two readers and three documents.** `tools/load-failure-census.py`
+loses the 16-page rounding and gains a header explaining why; the corrected `req_pages` is three
+lines and is documented as `Image.c:682-688` rather than as a model of it. `tools/pe-facts.py`'s
+expression is unchanged — it was right — but its note on the granularity now records that Step
+4.156 ordered the `r16` column restored and that Step 4.157 withdrew the order, so a later reader
+does not re-apply it; and the "336" it printed for the four early runtime successes was one page
+above its own arithmetic and now reads 335, matching `Page.c`. Verified: both tools parse;
+`--help` exits 0; the census prints 107 lines on the cut map, 106 on identity and 135 with `--all`
+over all 126 files, deterministically across runs; and the corrected request column agrees with
+`pe-facts.py`'s 873 for the runtime ten exactly.
+
+Left open: which call passes the NULL format to `DebugPrintMarker`; `P2 WHY`, `P2 ERR` and
+`P2 FWHY`'s `big=`, still the owed readings (`P2 SEQ` has now been read three times and is the
+least informative of the three lines); whether the arch-protocol display in the firmware prints
+nine names or eight — the count is nine, and the abbreviation list is the plan's own; and the
+Step 4.153–4.156 items unchanged — whether the stock Setup-Media BCD boots a *substituted*
+`boot.wim`, `winpeshl.ini`, the 1 GB stick, `UrsSynopsys.sys`'s child naming, `ExcludeFromSelect`
+and the `*<PNP-id>` position.
+
+Not an action: no device was touched, nothing was flashed, no partition was written, no stub,
+firmware source or Microsoft image was changed or patched. No QEMU run, no probe and no panel
+reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is
+present. `userdata`, the partition table and the firmware LUN remain untouched. The files written
+are two host-side readers and the documents; the payload they read is the same 1,171,456 B
+artifact Step 4.155 leaves in `work/out/usb-host/`, whose header is `header_version` **1** with
+`kernel_size` **1,167,024** — and that blob decomposes exactly, which is worth recording because
+it is the one place the record ties the payload to a build artifact: a gzip member of 1,079,430
+bytes at file offset 2,048, then the DTB's 87,594 bytes at file offset 0x108086 = 2,048 +
+1,079,430, and the member inflates to **3,145,840** bytes, the size of
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd-bootshim` (whose own `.gz` beside it is that
+same stream recompressed 26 bytes longer). So the FD behind the payload is the BootShim form, not
+the 1,648-byte `Mu-gauguin.img` stub, and the DTB rides inside the kernel region rather than
+beside it. The porting goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying
+install and P5's peripherals not begun, and the end state still a Windows tablet whose modem and
+cameras are undrivable.

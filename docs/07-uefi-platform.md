@@ -2777,6 +2777,29 @@ rounded up to a multiple of 16 at a 64-KiB-aligned address, and `tools/pe-facts.
 pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not a factor, that
 `Page.c`'s `P2BRINGUP` comment makes.
 
+> **Superseded 2026-09-27 by step 4.157 — the paragraph immediately above is wrong and the
+> correction it orders is withdrawn.** The search that found the macro "nowhere in this tree"
+> listed `.dsc`, `.fdf`, `.inf`, `.dec`, `.h`, `.c` and `.py`, and every file in the include
+> chain that carries it is a `.inc`: the definition is
+> `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14`,
+> `*_CLANGPDB_AARCH64_CC_FLAGS = -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`, reached through
+> `gauguin.dsc:71 -> BitraPkg.dsc.inc:20 -> QcomPkg.dsc.inc:10`. Two hits outside `Build/` in the
+> whole tree, and the other is the `#ifdef` at `ProcessorBind.h:166` that tests it. The compiled
+> artifact agrees: `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Core/Dxe/DxeMain/GNUmakefile:131`
+> carries the define in `CC_FLAGS`, and `BUILD_REPORT.TXT` repeats it 48 times. So
+> `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is **0x1000**, `Alignment` is one page for all four memory
+> types, both rounding lines in `CoreInternalAllocatePages` (`Page.c:1482-1483`, `:1749-1750`) are
+> no-ops, and the request is exactly `Image.c:682-688` — which is what `tools/pe-facts.py`
+> computes and what `Page.c`'s comment asserts. Both tools keep their arithmetic; the 16-page
+> column comes back out of `tools/load-failure-census.py`, where Step 4.156 had just put it.
+> Nothing else in that step moves: the eight split groups, the falsified `P2 RETRY` premise under
+> both maps, and `P2 WHY`/`P2 ERR` as what decides the 27 all key on unrounded PE fields. The
+> batch's demand is 1,462 pages on the cut map against the 1,562 `pe-facts.py` prints for its
+> `apriori[k+1]` join, with the runtime ten at 873 under both — so the identity/cut disagreement
+> shows up in the denominator and not in the 27. The arch-protocol count is nine missing of
+> thirteen under *both* maps (only CPU, Metronome, Timer and Runtime run), because all eight of
+> the others carry the same letter either way. See `docs/08` step 4.157.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

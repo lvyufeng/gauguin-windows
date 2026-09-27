@@ -98,7 +98,16 @@ branches and this build takes the 0x1000 one:
 rounding is `+= 0` / `&= ~0`; `EFI_SIZE_TO_PAGES (Alignment)` is 1; `Page.c:1207`'s
 `NeedGuard = FALSE` guard never fires. This tool carried an `r16` column that
 applied a 16-page rounding to subsystem 12 until that was read back against the
-source - the column is gone, and with it the "+7 pages" it contributed. The
+source - the column is gone, and with it the "+7 pages" it contributed. **Step
+4.156 re-derived the granularity from a search that listed every extension but
+`*.dsc.inc`, concluded the macro was undefined, and ordered the 16-page column
+put back here and in `tools/load-failure-census.py`; step 4.157 withdrew that
+order** from `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14` (reached
+through `gauguin.dsc:71 -> BitraPkg.dsc.inc:20 -> QcomPkg.dsc.inc:10`) and from
+the compiled `CC_FLAGS` in
+`Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Core/Dxe/DxeMain/GNUmakefile:131`.
+The `req`/`pg` expression below is the loader's own `Image.c:682-688` and is to
+be left as it is. The
 `SectionAlignment` effect that *does* exist is separate, is on the image side
 (`Image.c:686-690`, `req = SizeOfImage + SectionAlignment`), and is inside the
 1562-page total below.
@@ -106,10 +115,14 @@ source - the column is gone, and with it the "+7 pages" it contributed. The
 The bin a runtime request prefers is 150 pages of `RuntimeServicesCode` against
 873 pages of runtime image demand, of which the four promoted before the failures
 begin (`EnvDxe`, `ReportStatusCodeRouterRuntimeDxe`,
-`StatusCodeHandlerRuntimeDxe`, `RuntimeDxe`) take 336 - so it is exhausted within
+`StatusCodeHandlerRuntimeDxe`, `RuntimeDxe`) take 335 - so it is exhausted within
 the first four promotions and the fallthrough to the default bin is load-bearing
 rather than hypothetical. The default bin spans the heap below the 450-page bin
-block, i.e. most of 35.4 MiB.
+block, i.e. most of 35.4 MiB. The 873 and the 335 are both exact against the
+expression above (15 + 112 + 96 + 112) and are independently `Page.c`'s own
+numbers in its `P2BRINGUP` comment, which reads "335 pages between them - 15, 112,
+96 and 112"; the prose here said 336 until step 4.157 checked it against its own
+arithmetic.
 
 That paragraph is about the *runtime* ten, and it is the whole reason this tool
 prints the subsystem column. The 36 boot-service images are not in any bin:

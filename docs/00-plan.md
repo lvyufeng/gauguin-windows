@@ -410,6 +410,26 @@ re-asks with: `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is defined nowhere i
 runtime image's request is 64-KiB-aligned and rounded up to a multiple of 16 pages, where
 `tools/pe-facts.py` and the firmware's own `P2BRINGUP` comment both model it as one page.
 
+**Step 4.157 withdrew that correction, and it was a glob away from being right.** The search that
+reported the macro absent listed `.dsc` and not `*.dsc.inc`; the definition is
+`Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14`, reached through
+`gauguin.dsc:71 → BitraPkg.dsc.inc:20 → QcomPkg.dsc.inc:10`, and
+`Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/…/DxeMain/GNUmakefile:131` carries
+`-D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` in the compiled `CC_FLAGS`. So
+`RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x1000, `Alignment` is one page for all four memory
+types, `tools/pe-facts.py`'s expression is the loader's own `Image.c:682-688` and keeps it, and
+the 16-page column comes back out of `tools/load-failure-census.py`. Only the ten runtime-typed
+images move — their requests sum to 873 pages either way under both slot maps, and the batch's
+whole demand is 1,462 pages on the cut map against 1,562 for the `apriori[k+1]` join — so the
+step's own findings stand untouched: the eight split groups, the falsified premise, and
+`P2 WHY`/`P2 ERR` as what decides the 27. The nine missing architectural protocols are nine under
+both maps as well. The same step decoded the two rows that end every QEMU run as two reports:
+the `ERROR: C90000002:V03000007 I0 CB29F4D1-…766` row is the serial status-code handler's third
+branch with `Data == NULL` (68 bytes into a 512-byte buffer, not the overflow an earlier reading
+called it), and the `ASSERT DebugLib.c +78: Format != ((void *) 0)` row is a second report — a
+NULL format reaching `DebugPrintMarker` — from the image that carries both that literal and that
+caller id, `RpmhDxe.efi`.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
@@ -482,7 +502,7 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154 and 4.155): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the

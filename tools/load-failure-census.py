@@ -118,19 +118,49 @@ same shape of violation, so the SEQ is inconsistent with "every `L` is the page
 call and nothing ever frees" whichever map is used, and the identity/cut
 conflict is not what decides the 27.
 
-TWO NUMBERS THIS TOOL CORRECTS, both of them other tools'.  The request is
-`ceil (SizeOfImage / 4096)` rounded up to a multiple of 16 pages for the runtime
-types (see `req_pages`), where `tools/pe-facts.py` computes `ceil ((SizeOfImage
-+ SectionAlignment) / 4096)` -- a 64-KiB alignment modelled as 16 extra pages,
-which is neither the same request nor a bound on it, and which over-states every
-one of the 8 runtime members here.  And `Page.c`'s own `P2BRINGUP` comment
-asserts that "RUNTIME_PAGE_ALLOCATION_GRANULARITY is 0x1000 here ... which is
-the #else arm of ProcessorBind.h:163-170 and is not compiled": the tree defines
-`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` nowhere, and 0x1000 is the `#ifdef`
-arm rather than the `#else` one, so the comment has the arms swapped and its
-conclusion is wrong for the 8 runtime members.  `raw > big` -- the case the
-comment says cannot happen and kept the `raw` field for -- is exactly the case
-that can happen.
+THE REQUEST IS THE LOADER'S OWN EXPRESSION, and an earlier revision of this
+header had it wrong in a way worth recording because the error is reproducible.
+`req_pages` computes `ceil ((SizeOfImage + (SectionAlignment if > 0x1000 else
+0)) / 4096)`.  That is not a model of `Image.c:682-688`, it is that code:
+`if (SectionAlignment > EFI_PAGE_SIZE) Size = ImageSize + SectionAlignment; else
+Size = ImageSize; NumberOfPages = EFI_SIZE_TO_PAGES (Size);` -- the loader's own
+bytes, which the runtime path re-runs at `:759-767` before aligning
+`ImageAddress` at `:774-775`.  `CoreInternalAllocatePages` then rounds by
+`Alignment` (`Page.c:1482-1483`, and again at `:1749-1750` for the address
+search): `NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1; NumberOfPages &=
+~(EFI_SIZE_TO_PAGES (Alignment) - 1);`.  `Alignment` is
+`RUNTIME_PAGE_ALLOCATION_GRANULARITY` for `EfiReservedMemoryType`,
+`EfiACPIMemoryNVS`, `EfiRuntimeServicesCode` and `EfiRuntimeServicesData` and
+`DEFAULT_PAGE_ALLOCATION_GRANULARITY` otherwise (`Page.c:1455-1464`), and **on
+this build both are 0x1000** -- so `EFI_SIZE_TO_PAGES (Alignment) - 1` is 0 and
+those two lines are no-ops for every memory type.  There is no per-type
+rounding, and `pe-facts.py`'s `req`/`pg` was right as written.
+
+0x1000 comes from `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:14`,
+`*_CLANGPDB_AARCH64_CC_FLAGS = -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`,
+under `[BuildOptions]` with no module-type qualifier so the define appends to
+every AARCH64/CLANGPDB module in the platform build.  The include chain is
+`gauguin.dsc:71 -> BitraPkg/BitraPkg.dsc.inc:20 -> QcomPkg/QcomPkg.dsc.inc:10 ->
+SiliciumPkg/SiliciumPkg.dsc.inc`, and `MdePkg/Include/AArch64/ProcessorBind.h:166-171`
+is the `#ifdef` that reads it (0x1000) against an `#else` of 0x10000.  The
+compiled artifact is the proof and not the source: `Build/gauguinPkg/DEBUG_CLANGPDB/
+AARCH64/MdeModulePkg/Core/Dxe/DxeMain/GNUmakefile:131` ends its `CC_FLAGS` with
+`... -D __DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY -D
+HAS_ACTLR_EL1_UNIMPLEMENTED_ERRATA=0 ...`, in the include order above, and
+`BUILD_REPORT.TXT` repeats it 48 times.  A search for the macro across every
+`.dsc`, `.dsc.inc`, `.fdf`, `.fdf.inc`, `.inf`, `.dec`, `.h`, `.c`, `.py`,
+`.toml` and `.sh` in the tree returns exactly two hits outside `Build/`: that
+definition and that `#ifdef`.  The earlier revision of this header searched
+`--include=*.dsc` and never `*.dsc.inc`, which is the one extension the
+definition is in, and concluded from the empty result that the macro was
+undefined and the granularity 0x10000; it then "corrected" this tool and
+`pe-facts.py` to a per-type rounding that this build does not perform.  Both of
+the values that revision called over-statements are therefore correct requests,
+and the `Page.c` `P2BRINGUP` comment it contradicts -- which says "Alignment is
+one page for all four memory types" -- is right; only its arm labels read
+loosely (0x1000 is the `#ifdef` arm at `:167`, the `#else` 0x10000 at `:169`),
+and it is right that `raw > big` is a hypothetical here rather than the ordinary
+case.
 
 Rows printed per slot, all read from the PE32+ optional header of the file's
 `EFI_SECTION_PE32`:
@@ -140,8 +170,9 @@ Rows printed per slot, all read from the PE32+ optional header of the file's
             BasePeCoff.c's third case, "relocatable, no base relocs to apply"
     base    ImageBase, 0x0 on all 46
     sizimg  SizeOfImage
-    req     the pages Image.c:722 asks for, after CoreInternalAllocatePages'
-            per-type rounding (see req_pages)
+    req     the pages Image.c:722 asks for -- Image.c:682-688's expression, then
+            CoreInternalAllocatePages' alignment rounding, which is a no-op here
+            because both granularities are 0x1000 (see req_pages)
     sa      SectionAlignment
     sub     PE subsystem, and the memory type Image.c:629-646 derives from it
 
@@ -257,26 +288,42 @@ def memtype(pe):
 
 
 def req_pages(pe):
-    """The page count `Image.c:722` asks for, with CoreInternalAllocatePages' rounding.
+    """The page count `Image.c:722` asks for -- the loader's own expression.
 
-    `CoreInternalAllocatePages` picks `Alignment` from the memory type -- DEFAULT
-    (0x1000) for `EfiBootServicesCode`, RUNTIME for `EfiReservedMemoryType`,
-    `EfiACPIMemoryNVS`, `EfiRuntimeServicesCode` and `EfiRuntimeServicesData` --
-    then does `NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1` and
-    `&= ~(EFI_SIZE_TO_PAGES (Alignment) - 1)`.  On AArch64
-    `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x10000 unless
-    `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is defined
-    (`MdePkg/Include/AArch64/ProcessorBind.h:163-171`), and that macro is defined
-    **nowhere in this tree** -- so a runtime image's request is its page count
-    rounded up to a multiple of 16, searched for at a 64-KiB-aligned address.
-    `tools/pe-facts.py` models the same request as `ceil ((SizeOfImage +
-    SectionAlignment) / 4096)`, which is a different question and over-states
-    every runtime member by up to 16 pages.
+    `Image.c:682-688`:
+
+        if (Image->ImageContext.SectionAlignment > EFI_PAGE_SIZE) {
+          Size = (UINTN)Image->ImageContext.ImageSize + Image->ImageContext.SectionAlignment;
+        } else {
+          Size = (UINTN)Image->ImageContext.ImageSize;
+        }
+        Image->NumberOfPages = EFI_SIZE_TO_PAGES (Size);
+
+    so a 64-KiB `SectionAlignment` adds a whole 64 KiB to the request and a
+    4-KiB one adds nothing.  `CoreInternalAllocatePages` then rounds by
+    `Alignment`, which is `RUNTIME_PAGE_ALLOCATION_GRANULARITY` for the four
+    runtime types and `DEFAULT_PAGE_ALLOCATION_GRANULARITY` otherwise
+    (`Page.c:1455-1464`) -- and on this build **both are 0x1000**, because
+    `SiliciumPkg.dsc.inc:14` defines `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`
+    on every AARCH64 CLANGPDB module (chain: `gauguin.dsc:71 ->
+    BitraPkg.dsc.inc:20 -> QcomPkg.dsc.inc:10`; artifact:
+    `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/MdeModulePkg/Core/Dxe/DxeMain/
+    GNUmakefile:131`), reading the `#ifdef` arm of
+    `MdePkg/Include/AArch64/ProcessorBind.h:166-171`.  So
+    `NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1` adds 0 and
+    `&= ~(EFI_SIZE_TO_PAGES (Alignment) - 1)` clears nothing, at both `:1482-1483`
+    and `:1749-1750`.
+
+    An earlier revision of this function rounded the runtime types up to a
+    multiple of 16 pages, which is the `#else` arm of the same header and is not
+    compiled.  See the header for the search that missed
+    `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc` and the two hits that
+    settle it.
     """
-    n = -(-pe["size_image"] // 0x1000)
-    if pe["subsystem"] == SUBSYSTEM_RUNTIME:
-        n = -(-n // 16) * 16
-    return n
+    size = pe["size_image"]
+    if pe["sec_align"] > 0x1000:
+        size += pe["sec_align"]
+    return -(-size // 0x1000)
 
 
 def main():
