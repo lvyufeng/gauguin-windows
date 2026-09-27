@@ -3134,6 +3134,40 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > and the `p2-4.x` volumes are 123 files at 7,352,320 B — one file more than the payload's 122 and,
 > measured, no file different. See `docs/08` step 4.166.
 
+> **Corrected and completed 2026-09-27 by step 4.167 — the PCI absence is now stated over every
+> PCI-named GUID this tree defines, and the GUID bytes come from the definitions rather than from
+> recall.** `docs/08` step 4.166 quoted four GUIDs for its zero-hit scan; two of them are wrong in
+> the letter. `PciHostBridgeDxe`'s `FILE_GUID` is `128FB770-5E79-4176-9E51-9BB268A17DD1` (from
+> `MdeModulePkg/Bus/Pci/PciHostBridgeDxe/PciHostBridgeDxe.inf`), not `de375b25-…`, which is no
+> driver's `FILE_GUID` in this tree; the host-bridge resource-allocation protocol is
+> `CF8034BE-6768-4D8B-B739-7CCE683A9FBE` (`Protocol/PciHostBridgeResourceAllocation.h:27-30`); and
+> `PciRootBridgeIo` is `2F707EBB-4A1A-11D4-9A38-0090273FC14D`
+> (`Protocol/PciRootBridgeIo.h:18-21`), which 4.166 had right. Re-scanned with those bytes: **all
+> zero in both volumes, in the byte order the volumes use.** The scan then covers every `PCI`-named
+> protocol GUID under `MdePkg/Include` — fifteen of 482 resolved — and every `PCI`-named `FILE_GUID`
+> in the tree's `INF`s — forty-nine of them. Two nonzero rows: `PciIo` (4 occurrences in the phone's
+> volume, 6 in `usb-host`'s, and the only protocol row that is not zero) and `XhciPciEmulation`
+> (`[0, 2]`); its sibling `XhciDxe` (`B7F50E91-A759-412C-ADE4-DCD03E7F7C28`) reads `[0, 2]` by direct
+> scan but is outside that INF set, whose filter is the name and path containing `pci`. The
+> instrument is `tools/pci-guid-census.py`, which rebuilds both GUID maps from the tree on every run;
+> its `--depex` mode reports that **0 of the 64 scanned GUIDs appear in a depex section in either
+> volume**. Absent therefore, besides the host-bridge and bus files:
+> `PciHostBridgeLibNull`, `NonDiscoverablePciDeviceDxe`, `ArmPciCpuIo2Dxe`, `PciSioSerialDxe`,
+> `IncompatiblePciDeviceSupport`, `NvmExpressDxe`, `UhciDxe`, `EhciDxe`, `SdMmcPciHcDxe`,
+> `UfsPciHcDxe`, `SataController`, `IdeController` — which is what bounds the claim: the storage and
+> USB stacks on this SoC are the Qualcomm non-PCI drivers, not PCI ones that happen to be missing.
+> And a **carrier is not a consumer**: no `DXE_DEPEX` in either volume names `PciIo`. Both volumes
+> carry 27 and 29 files with a depex section (21 and 22 of them the single `TRUE` byte), and the
+> non-`TRUE` set is `AcpiPlatform`, `ArmTimerDxe`, `CapsuleRuntimeDxe` and `SCHandlerRtDxe` on
+> `EFI_PCD_PROTOCOL_GUID`, `BdsDxe` and `SetupBrowser` on the HII protocols, and `XhciPciEmulation`
+> on the twelve architectural protocols this file's earlier blockquotes decode. So nothing in either
+> image even waits on any of the 64 scanned GUIDs, and `XhciDxe` — which has no depex section at all
+> — binds to whatever handle offers one. Finally the cost of a host bridge is now measured on both halves:
+> `PciBusDxe.inf` and `PciHostBridgeDxe.inf` are in the tree, but the only `PciHostBridgeLib`
+> instances anywhere are `PciHostBridgeLibNull` (`A19A6C36-7053-4E2C-8BD0-E8286230E473`) and a
+> GoogleTest mock, so the library half is new code for a bus no other part of this firmware expects
+> to exist. See `docs/08` step 4.167.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

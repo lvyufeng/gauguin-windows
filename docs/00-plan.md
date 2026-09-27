@@ -759,6 +759,29 @@ Work:
 > XHCI path is the whole of the PCI world in this firmware by design, and adding a PCI bus stack
 > would be an FDF `INF` question plus a `PciHostBridgeLib` one, not a discovery one. See
 > `docs/08` step 4.166.
+>
+> **Step 4.167 (2026-09-27) re-read that PCI scan's inputs from the files that define them, and the
+> `PciHostBridgeDxe` GUID the paragraph above used is not that driver's.** Its `FILE_GUID` is
+> `128FB770-5E79-4176-9E51-9BB268A17DD1` per `PciHostBridgeDxe.inf`, not `de375b25-…`; the
+> resource-allocation GUID is `CF8034BE-6768-4D8B-B739-7CCE683A9FBE` per
+> `Protocol/PciHostBridgeResourceAllocation.h:27-30`. The zero-hit result survives both corrections,
+> and the scan is now complete instead of sampled: of the **fifteen** PCI-named protocol GUIDs the
+> headers define, `PciIo` is the only one either volume carries (4 in the phone, 6 in `usb-host`),
+> and of the **forty-nine** PCI-named `FILE_GUID`s in the tree's `INF`s the only nonzero row is
+> `XhciPciEmulation` (`XhciDxe`'s `B7F50E91-…` reads `[0, 2]` outside that set) — so `NvmExpressDxe`,
+> `UhciDxe`, `EhciDxe`, `SdMmcPciHcDxe`, `UfsPciHcDxe`, `SataController` and `IdeController` are all
+> absent too, which is what bounds "this firmware has no PCI": the storage and USB stacks here are
+> the Qualcomm non-PCI ones. The instrument is `tools/pci-guid-census.py`, which rebuilds both GUID
+> maps from the tree on every run. Moreover no `DXE_DEPEX` in either volume names any of the 64
+> scanned GUIDs — 27 files carry a depex in the phone's volume and 21 of them are `TRUE`, 29 and 22
+> in `usb-host`'s, and the non-`TRUE` set is PCD, HII and `XhciPciEmulation`'s twelve architectural
+> protocols, with no PCI term anywhere — so nothing in either image even *waits* on a `PciIo`
+> producer, which is why the absence never appears as a depex failure. And the cost of a host bridge
+> is now measured on both halves: the two `INF`s are in the tree, and the only `PciHostBridgeLib`
+> instances are `PciHostBridgeLibNull` and a GoogleTest mock — there is no real implementation in
+> this tree for any Qualcomm platform, so a host bridge is a library to write, not a line to add.
+> `usb-host`'s XHCI pair is the reason item 3's USB-stick half needs none of that. See `docs/08`
+> step 4.167.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

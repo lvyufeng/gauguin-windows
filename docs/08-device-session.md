@@ -33985,7 +33985,13 @@ is right in substance and wrong in the letter. A 16-byte scan for `EFI_PCI_IO_PR
 Four carriers in the phone's volume, six in `usb-host`'s, and **no occurrence at all, in either byte
 order, in either volume** of `PciRootBridgeIo` (`2f707ebb-…`), `PciHostBridgeResourceAllocation`
 (`cf8034be-…`), `PciBusDxe`'s FILE_GUID (`93b80004-…`) or `PciHostBridgeDxe`'s FILE_GUID
-(`de375b25-…`). The four phone-side carriers are all *consumers* — `ConPlatformDxe`'s
+(`de375b25-…`). *(**Step 4.167 re-reads all four from the files that define them and one of them is
+wrong:** `PciHostBridgeDxe`'s `FILE_GUID` is `128FB770-5E79-4176-9E51-9BB268A17DD1` per its own `INF`,
+not `de375b25-…`, which is no driver's `FILE_GUID` in this tree; the resource-allocation GUID is
+`CF8034BE-6768-4D8B-B739-7CCE683A9FBE` per `Protocol/PciHostBridgeResourceAllocation.h:27-30`. The
+zero-hit result survives both corrections, and 4.167 extends the scan from these four to every
+PCI-named GUID the tree defines — fifteen protocol GUIDs and forty-nine INF `FILE_GUID`s, 64 rows —
+with `PciIo` and `XhciPciEmulation` the only nonzero ones.)* The four phone-side carriers are all *consumers* — `ConPlatformDxe`'s
 `LocateDevicePath (&gEfiPciIoProtocolGuid, …)` at `ConPlatform.c:1297` declared `## SOMETIMES_CONSUMES`
 at `.inf:90`, and the BDS and application uses are boot-option and boot-policy path expansion. So the
 substantive reading stands and is now sharper: **the firmware has no PCI host bridge, no PCI bus
@@ -34056,3 +34062,130 @@ that are `s` show that a *promoted* producer is what the wall is waiting for, no
   and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install
   and P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and
   cameras cannot be driven.
+
+## Step 4.167 — the four GUIDs 4.166's PCI scan quoted are re-read from the tree's own `INF`s and `MdePkg` headers, one of them was not that driver's, and with the sources as input every PCI-named GUID the tree defines scans to zero in both volumes except `PciIo` — while the only `PciHostBridgeLib` in the tree is the `Null` one, so a host bridge would be a library to write and not an `INF` line to add
+
+4.166 closed its PCI paragraph with a zero-hit scan for four GUIDs. Three of the four were written from
+memory, and a scan is only as good as the bytes it is handed: the claim it made — no host bridge, no bus
+enumeration, no producer of `PciIo` — is load-bearing for P3's item 3, so this step re-reads every GUID
+from the file that defines it and re-runs the scan with those bytes. The conclusion survives unchanged;
+one of the four quoted GUIDs was not that driver's, and the scan is now complete rather than sampled.
+
+### The input, read from the tree
+
+| what | GUID | where the tree states it | phone | `usb-host` |
+|---|---|---|---|---|
+| `EFI_PCI_IO_PROTOCOL_GUID` | `4CF5B200-68B8-4CA5-9EEC-B23E3F50029A` | `MdePkg/Include/Protocol/PciIo.h` | 4 | 6 |
+| `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID` | `2F707EBB-4A1A-11D4-9A38-0090273FC14D` | `Protocol/PciRootBridgeIo.h:18-21` | 0 | 0 |
+| `EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_GUID` | `CF8034BE-6768-4D8B-B739-7CCE683A9FBE` | `Protocol/PciHostBridgeResourceAllocation.h:27-30` | 0 | 0 |
+| `PciBusDxe`'s `FILE_GUID` | `93B80004-9FB3-11D4-9A3A-0090273FC14D` | `MdeModulePkg/Bus/Pci/PciBusDxe/PciBusDxe.inf` | 0 | 0 |
+| `PciHostBridgeDxe`'s `FILE_GUID` | `128FB770-5E79-4176-9E51-9BB268A17DD1` | `MdeModulePkg/Bus/Pci/PciHostBridgeDxe/PciHostBridgeDxe.inf` | 0 | 0 |
+
+Two of these are corrections to 4.166's own text. The `PciHostBridgeDxe` line there reads
+`de375b25-…`, which is not this driver's `FILE_GUID` anywhere in the tree — the INF states
+`128FB770-…`, and that is what was scanned here. And the resource-allocation GUID was quoted as the
+prefix `cf8034be-…` only; the first re-scan in this window filled the tail in wrongly
+(`…-4a83-bce8-187ebb8ae1a5`) and also returned zero, which is the same answer for the wrong reason and
+would have been recorded as a measurement if the header had not been read. Both zero-hit results are
+real, now, against bytes taken from the definitions rather than from recall.
+
+### The whole PCI space the headers define, not a sample of it
+
+The scan above covers the four GUIDs 4.166 asserted about. To keep it from being a sample, the same
+pass was run over **every** GUID with `PCI` in its name that any header under `MdePkg/Include` defines
+(482 protocol GUIDs resolved out of 527 `*_GUID` defines, fifteen of them PCI-named counting the PEI
+PPI and the MM variant) and over every PCI-named `FILE_GUID` in every `INF` in the tree (forty-nine of
+them) — 64 rows, and the instrument is now `tools/pci-guid-census.py`, which rebuilds both maps from
+the tree on every run so nothing it prints is quoted from memory. The fifteen protocol rows:
+
+    EFI_PCI_IO_PROTOCOL_GUID                              phone 4   usb-host 6   <- the only nonzero row
+    EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID                  0         0
+    EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_GUID 0         0
+    EFI_PCI_PLATFORM_PROTOCOL_GUID                        0         0
+    EFI_PCI_HOTPLUG_REQUEST_PROTOCOL_GUID                 0         0
+    EFI_PCI_HOT_PLUG_INIT_PROTOCOL_GUID                   0         0
+    EFI_PCI_ENUMERATION_COMPLETE_GUID                     0         0
+    EFI_PCI_OVERRIDE_GUID                                 0         0
+    EFI_INCOMPATIBLE_PCI_DEVICE_SUPPORT_PROTOCOL_GUID     0         0
+    (the four `EFI_*_ERROR_SECTION_*` and the PEI and MM variants, all)  0   0
+
+and of the forty-nine PCI-named INF `FILE_GUID`s, **`XhciPciEmulation` is the only nonzero row**
+(`[0, 2]`); its sibling `XhciDxe` (`B7F50E91-A759-412C-ADE4-DCD03E7F7C28`) is the other addition and
+falls outside that set only because neither its name nor its path carries `pci` — scanned directly it
+reads `[0, 2]` as well. Every other PCI-named row is zero in both volumes, including the ones a phone
+that booted Windows off a stick would need to have thought about: `PciBusDxe`, `PciHostBridgeDxe`,
+`PciHostBridgeLibNull`, `NonDiscoverablePciDeviceDxe`, `ArmPciCpuIo2Dxe`, `PciSioSerialDxe`,
+`IncompatiblePciDeviceSupport`, and — worth noting because it bounds what "no PCI" means on this SoC —
+`NvmExpressDxe`, `UhciDxe`, `EhciDxe`, `SdMmcPciHcDxe`, `UfsPciHcDxe`, `SataController`,
+`IdeController`. The storage and USB stacks here are the Qualcomm non-PCI ones (`UFSDxe`, `SdccDxe`,
+and the `XhciPciEmulation` + `XhciDxe` pair), which is why the platform carries no bus driver and boots
+anyway.
+
+### Nothing in either volume *waits* on `PciIo`, which is the sharper form of the claim
+
+A GUID occurring in a volume is a carrier, and a carrier is not a consumer. So the same pass decoded
+every `DXE_DEPEX` section in both volumes and resolved each pushed GUID against the headers:
+
+    phone    27 files carry a DXE_DEPEX, 21 of them the single byte 0x06 (TRUE)
+    usb-host 29 files carry a DXE_DEPEX, 22 of them TRUE
+
+The six non-TRUE ones in the phone's volume are `AcpiPlatform`, `ArmTimerDxe`, `CapsuleRuntimeDxe` and
+`SCHandlerRtDxe` on `EFI_PCD_PROTOCOL_GUID`, `BdsDxe` on the three HII protocols, and `SetupBrowser` on
+HII plus PCD; `usb-host` adds one more, `XhciPciEmulation` on the twelve architectural protocols
+(`tools/depex-census.py`'s decode at 4.50, re-derived here and unchanged — no PCI term in it). **`PciIo` is in no depex in either
+volume**, and `tools/pci-guid-census.py --depex` states it as the census rather than as a spot check:
+*of the 64 scanned GUIDs, 0 appear in a depex*, in both volumes. So not one file in either image
+declares a dependency on a `PciIo` producer: the four or six
+carriers are PE-body references reached at run time, from `ConPlatformDxe`'s
+`LocateDevicePath (&gEfiPciIoProtocolGuid, …)` (4.166's citation, `.inf:90` `## SOMETIMES_CONSUMES`) and
+from binding and boot-option code in the BDS and the two applications. That is why the absence is
+invisible as a depex failure and had to be found by scanning: a missing protocol nobody lists in a
+depex is a protocol the dispatcher never complains about, and `XhciDxe` — which has no `DXE_DEPEX`
+section at all, 4.50's "no-depex bucket" — binds to whatever handle offers `PciIo` if one ever exists.
+
+### What a host bridge would cost, now measured rather than estimated
+
+4.166 wrote that adding a PCI stack is "an FDF `INF` question plus a `PciHostBridgeLib`-not-`Null`
+question". The first half is one line, since `PciBusDxe.inf` and `PciHostBridgeDxe.inf` are both in the
+tree with the GUIDs above. The second half is the whole cost: the only `PciHostBridgeLib` instances in
+the tree are `MdeModulePkg/Library/PciHostBridgeLibNull/PciHostBridgeLibNull.inf`
+(`A19A6C36-7053-4E2C-8BD0-E8286230E473`) and a GoogleTest mock under
+`MdeModulePkg/Test/Mock/Library/GoogleTest/MockPciHostBridgeLib/`. There is no real implementation
+anywhere in this tree, for any Qualcomm platform, so a host bridge is a library to write against
+`PciHostBridgeLib.h` — and on this SoC it would have to describe a bus that, by the census above, no
+other part of the firmware expects to exist.
+
+### Rows:
+
+- **instrument**: the two inflated volumes (`/tmp/fv-old.bin` `c8f57e46046c86c5…`, 7,348,224 B, and
+  `/tmp/fv-usb.bin` `ca60789d47e263d4…`, 7,536,640 B); `tools/pci-guid-census.py`, written here, which
+  scans 15 PCI-named protocol GUIDs and 49 PCI-named INF `FILE_GUID`s (64 rows, 2 nonzero) with the
+  GUID bytes taken from the `*_GUID` defines under `MdePkg/Include` and each `INF`'s own `FILE_GUID`
+  line, and then splits both volumes into sections and decodes every `DXE_DEPEX` (0x13) — the tool's
+  set-membership question, as against `tools/depex-census.py`'s harder one about which drivers are
+  held off. Device-side: nothing.
+- **shows**: that `PciHostBridgeDxe`'s `FILE_GUID` is `128FB770-5E79-4176-9E51-9BB268A17DD1`, not the
+  `de375b25-…` 4.166 quoted, and that the zero-hit result holds for it and for the
+  host-bridge-resource-allocation GUID once both are read from their definitions; that of the fifteen
+  PCI-named protocol GUIDs the headers define, `PciIo` is the only one carried by either volume, and of
+  the forty-nine PCI-named INF `FILE_GUID`s only `XhciPciEmulation` is (with `XhciDxe` reading `[0, 2]`
+  outside that set); and that no `DXE_DEPEX` in either volume names `PciIo`, so nothing waits on a
+  producer that does not exist.
+- **adds**: the GUID-to-source column (every GUID cited with the file that states it, so the next
+  session re-derives rather than re-quotes); the counts 27/21 and 29/22 for the depex census with the
+  six and seven non-TRUE files named; the full PCI-named absences including the storage and USB
+  controllers, which is what bounds "this firmware has no PCI"; and the measured cost of a host bridge
+  — `PciHostBridgeLibNull` plus a GoogleTest mock and no real library anywhere in the tree.
+- **corrects**: 4.166's `de375b25-…` for `PciHostBridgeDxe`, and this window's own first re-scan, which
+  used a wrong tail on the host-bridge-resource-allocation GUID and returned zero for the wrong reason.
+  Both are recorded rather than edited away, and 4.166's paragraph is amended in place as well.
+- **does not close**: whether a host bridge is ever needed (the `usb-host` build answers the USB-stick
+  half without one, which is the case P3's item 3 actually has); the `E722B03F-…` peer that `UsbInitDxe`
+  waits on, which 4.50 left to a Qualcomm driver in the payload; and every item 4.163-4.166 left open,
+  none of which this pass touches.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and nothing was rebuilt. `userdata`
+  (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The porting goal is
+  unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a Windows
+  tablet whose modem and cameras cannot be driven.
