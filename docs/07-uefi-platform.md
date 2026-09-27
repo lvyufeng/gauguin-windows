@@ -3287,6 +3287,36 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > (`work/out/p2-variants/Mu-gauguin-apriori-extras-gzip.img`, `2a5b6326cda68457…`), the alignment to
 > the stock array moves 54 → 57, and the `usb-host` payload's array stays at 70. See `docs/08` step
 > 4.171.
+>
+> **The coverage instrument cannot see the class it most needs to — measured 2026-09-28 by
+> step 4.172.** `tools/make_xbl_binaries.py`'s `present_drivers()` iterates the `DRIVERS`
+> table and checks the extraction for each name *in it*, so a driver whose `.ffs` and `.efi`
+> sit in `device/dxe` but whose name is not a key is never packaged and — because
+> `tools/make_uefi_platform.py`'s orphan line is `have - referenced` with `have` from that
+> same table — never reported either. The table's header comment explains the class rather
+> than excusing it: it was derived from `Binaries/surya/QcomPkg/Drivers`, so the invisible
+> set is exactly `extraction − surya`. `tools/xbl-unmapped.py`, new, measures it: **86**
+> `.efi` in `device/dxe` (118 `.ffs`, the other 32 carrying no `PE32`), **55** packaged,
+> **22** built from tree source, **9** named by nothing — `RscRtDxe`, `SCHandlerRtDxe`,
+> `FvSimpleFileSystem`, `VariableDxe`, `ResetRuntimeDxe`, `FvDxe`, `ASN1X509Dxe`,
+> `FontDxe`, `MiTokenDxe`, at stock a-priori positions 2, 3, 28, 33, 39, 42, 48, 57 and
+> none, i.e. eight of the nine promoted by the phone's own firmware. `VariableDxe` and
+> `ResetRuntimeDxe` are substitutions, not gaps: this volume ships the Mu
+> `VariableRuntimeDxe` (`DXE.inc:12`) and `ResetSystemRuntimeDxe` (`:15`) and the stock
+> array names neither. The first run of the tool was wrong and the correction is part of
+> the record: it counted any `BASE_NAME` hit as "the tree builds this", and
+> `FvSimpleFileSystem` — source at
+> `Mu_Basecore/MdeModulePkg/Universal/FvSimpleFileSystemDxe/FvSimpleFileSystemDxe.inf`,
+> listed by `MdeModulePkg.dsc:487`, named 0 times anywhere in `gauguinPkg` — shows that
+> source in the tree is not a driver in the volume, so a source row now also has to be in
+> `DXE.inc`. It is also the one row whose fix is not a `DRIVERS` entry:
+> `EXTRA_DRIVERS` hard-codes the `Binaries/{device}/` prefix
+> (`tools/make_uefi_platform.py:845`), so it cannot express a source INF. The same array
+> closes a P3 candidate the other way round — it promotes `DiskIoDxe`, `PartitionDxe`,
+> `UFSDxe` and `Fat` at 25, 26, 30 and 31 and no SCSI disk driver, and `device/dxe` holds
+> no `ScsiDisk*`, because `UFSDxe.ffs`'s `DXE_DEPEX` is one `PUSH` on
+> `gEfiSMEMProtocolGuid` and the `BlockIo` GUID is in its `PE32` and not its depex: the
+> UFS is the block device and no SCSI layer sits above it. See `docs/08` step 4.172.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

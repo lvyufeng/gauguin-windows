@@ -908,6 +908,36 @@ Work:
 > array the build's own gate reads back at **74 entries** against the payload of record's 70, with the
 > alignment to the stock array moving 54 → 57, while the `usb-host` payload stays at 70. See `docs/08`
 > step 4.171.
+>
+> **Step 4.172 (2026-09-28) measured the class of driver this repository has no instrument
+> for at all: the ones no table ever names.** `tools/make_xbl_binaries.py:219-227`'s
+> `present_drivers()` iterates the `DRIVERS` table and asks the extraction about each name
+> in it, and `tools/make_uefi_platform.py`'s orphan line is `have - referenced` with `have`
+> built from that same table — so a driver whose `.efi` sits in `device/dxe` but whose name
+> is not a key is neither packaged nor reported, by anything. The table's own header comment
+> says why the class exists: it was *"Derived by matching against
+> `Binaries/surya/QcomPkg/Drivers`"*, so the blind spot is exactly `extraction − surya` and
+> it is invisible by construction. `tools/xbl-unmapped.py`, new, measures it: of the 86
+> `.efi` in `device/dxe`, **55 are packaged, 22 are built from tree source, and 9 are named
+> by nothing** — `RscRtDxe`, `SCHandlerRtDxe`, `FvSimpleFileSystem`, `VariableDxe`,
+> `ResetRuntimeDxe`, `FvDxe`, `ASN1X509Dxe`, `FontDxe`, `MiTokenDxe`. The device's own
+> a-priori array promotes eight of the nine (entries 2, 3, 28, 33, 39, 42, 48, 57), so the
+> phone ran them; two of the eight (`VariableDxe`, `ResetRuntimeDxe`) are substitutions for
+> the Mu drivers this volume ships at `DXE.inc:12` and `:15`, and the two arrays name
+> neither of the other's — which makes them a choice of implementation rather than a
+> missing service. The tool's first run was wrong by one in each direction and the error is
+> recorded rather than quietly fixed: it scored any `BASE_NAME` hit as "the tree builds
+> this", and `FvSimpleFileSystem` refutes that — source at
+> `Mu_Basecore/MdeModulePkg/Universal/FvSimpleFileSystemDxe/`, INF listed by
+> `MdeModulePkg.dsc:487`, and 0 occurrences of the name anywhere in `gauguinPkg`. A source
+> row now also requires the INF to be listed by `DXE.inc`, so the count is 22 and 9. The
+> same array settles a P3 candidate gap the other way: it promotes `DiskIoDxe` 25,
+> `PartitionDxe` 26, `UFSDxe` 30, `Fat` 31 and **no SCSI disk driver**, and `device/dxe`
+> has no `ScsiDisk*` at all — because `UFSDxe.ffs`'s 22-byte `DXE_DEPEX` is a single `PUSH`
+> on `gEfiSMEMProtocolGuid` and the `BlockIo` GUID is in its image and not in its depex, so
+> the UFS is published as a block device with no SCSI layer above it. The half of the gate
+> that says *sees the internal UFS* has no missing driver; the half that says *boots off a
+> USB stick* is still the `xhci-host` work. See `docs/08` step 4.172.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

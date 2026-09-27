@@ -34995,3 +34995,204 @@ is still **70**, so the switch does not leak into the experiment already staged 
   Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and P5's
   peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
   be driven.
+
+## Step 4.172 — the generator's coverage instrument cannot see the class it most needs to: `present_drivers()` iterates the `DRIVERS` table itself, so a driver the table never names is not "packaged but unlisted" but unnoticed — 9 of the extraction's 86 `.efi` are named by nothing at all, 8 of the nine are promoted by the device's own a-priori array, and the same array settles that the internal UFS needs no SCSI disk driver
+
+### The instrument, and the shape of its blind spot
+
+`tools/make_xbl_binaries.py:219-227` is the gate every packaged driver in this port
+passes through:
+
+```python
+def present_drivers(dxe_dir):
+    return {f"QcomPkg/Drivers/{d}/{i}"
+            for src, (d, i, _) in DRIVERS.items()
+            if os.path.isfile(os.path.join(dxe_dir, src + ".efi"))}
+```
+
+It iterates `DRIVERS` — the table — and asks the extraction whether each named driver
+is there. That is the right direction for its own question ("never reference a blob
+that is not there") and the wrong direction for the one this step needed answered.
+`tools/make_uefi_platform.py`'s orphan line cannot supply it either: that line is
+`have - referenced`, and `have` is built from the same table's names. So there are two
+ways to be invisible in this repository and only one of them is instrumented:
+
+- **packaged into the volume but not listed in the reference** — reported, and 4.171
+  measured 11 of those.
+- **in the extraction and in no table at all** — reported by nothing, anywhere.
+
+The table's own header comment (`:24-27`) says how it was built — *"Derived by matching
+against `Binaries/surya/QcomPkg/Drivers`, which is the same Qualcomm driver set for a
+sibling SoC."* So the second class is not a bag of accidents. It is exactly
+`extraction − surya`, and it is invisible by construction rather than by oversight.
+
+### The measurement
+
+`tools/xbl-unmapped.py` (new) measures that class. It imports `DRIVERS` from the
+generator rather than restating it, walks the Mu tree for INF `BASE_NAME`s while
+skipping `Build/` and `Binaries/` — the exclusion is the point, because a hit under
+`Binaries/<other device>/` is a different phone's signed blob and counting it would
+make every row look covered — and reads the stock a-priori array out of a payload image
+by its FREEFORM file's GUID.
+
+```
+=== device/dxe: 86 .efi files
+    blob table (tools/make_xbl_binaries.py DRIVERS): 55 names
+    source BASE_NAMEs in work/uefi/Mu-Silicium: 1364
+    INFs listed by uefi/Platforms/Xiaomi/gauguinPkg/Include/DXE.inc: 77
+    stock a-priori array: 74 entries
+
+=== 77 of 86 extracted DXE drivers are accounted for by this build
+      55  packaged from the extraction (a `DRIVERS` table row)
+      22  built from tree source instead, INF listed in DXE.inc
+      9   named by nothing: not packaged, not built, and not reported by
+          the generator's orphan line, whose input is the blob table itself
+    (55 + 22 + 9 = 86)
+```
+
+`device/dxe` holds 118 `.ffs` and 86 `.efi`, so the other 32 files carry no `PE32` —
+they are the panel XMLs, the charger config, `uefipil.cfg` and the boot logo, packaged
+by `copy_raw_files` down a different path and not drivers at all. The nine, with the
+stock array's own position for each:
+
+| driver | stock a-priori entry | what the tree has for it |
+|---|---|---|
+| `RscRtDxe` | 2 | nothing |
+| `SCHandlerRtDxe` | 3 | nothing |
+| `FvSimpleFileSystem` | 28 | source in the tree, not built — see below |
+| `VariableDxe` | 33 | nothing |
+| `ResetRuntimeDxe` | 39 | nothing |
+| `FvDxe` | 42 | nothing |
+| `ASN1X509Dxe` | 48 | nothing |
+| `FontDxe` | 57 | nothing |
+| `MiTokenDxe` | — | nothing |
+
+### The correction the first run forced
+
+The tool's first run reported **23 built from source and 8 named by nothing**, and it was
+wrong by one in each direction. It scored any `BASE_NAME` hit as "the tree builds this",
+which is one step too generous: a tree vendors INFs for whole packages and a platform DSC
+picks a subset, so a matching INF proves the *source* is present and says nothing about
+whether anything compiles it into this volume. `FvSimpleFileSystem` is the refutation —
+its source is at `Mu_Basecore/MdeModulePkg/Universal/FvSimpleFileSystemDxe/`, its INF is
+listed by `MdeModulePkg.dsc:487`, and `FvSimpleFileSystem` appears **0** times in
+`gauguinPkg/Include/DXE.inc` and 0 times in `APRIORI.inc`. The tree has the driver; this
+platform does not build it.
+
+So a source row now additionally requires the INF to be listed by `DXE.inc`
+(`built_infs()`), which is the one line that separates "built from source" from "source
+sitting in the tree". That moves the row into the uncovered set — 23→22 and 8→9 — and it
+is why the tool's own output now describes it as *"driver, source in tree but the volume
+does not build it"* rather than counting it as covered.
+
+It is also the only one of the nine whose acquisition is a build question rather than a
+packaging one, and that is worth one sentence because the mechanism does not reach it.
+For the other eight, the packaging path is a `DRIVERS` row — `tools/make_xbl_binaries.py`
+stages from `device/dxe`, where all nine `.efi` already sit, so nothing has to be found or
+copied. But `EXTRA_DRIVERS` hard-codes the `Binaries/{device}/` prefix
+(`tools/make_uefi_platform.py:845`: `lines.insert(idx + 1, f"  INF Binaries/{device}/{path}")`),
+so it cannot express a source INF under `MdeModulePkg/`. Nothing in this step delivers
+that driver; the row is recorded because the class it belongs to had no instrument before
+now, and the instrument is what this step adds.
+
+### What the device's own array says about the nine
+
+Eight of the nine are named by the stock a-priori array — entries 2, 3, 28, 33, 39, 42,
+48 and 57 — so the stock firmware ran them. Only `MiTokenDxe` is missing from it, and
+absence from that array is not absence from the volume: a driver that is not promoted is
+still dispatched by its dependency expression like any other. The honest reading of the
+ninth is therefore "the array says nothing about it", not "the phone never ran it".
+
+Two of the eight are substitutions rather than gaps, and the two arrays side by side are
+what says so:
+
+| the stock array promotes | this volume ships instead | line |
+|---|---|---|
+| `VariableDxe` (33) | `MdeModulePkg/Universal/Variable/Runtime/Dxe/VariableRuntimeDxe.inf` | `DXE.inc:12` |
+| `ResetRuntimeDxe` (39) | `MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystemRuntimeDxe.inf` | `DXE.inc:15` |
+
+The stock array names neither Mu driver and this volume names neither Qualcomm one, so
+for those two the question is which implementation, not whether the service exists — and
+it was answered the same way for the whole Mu lineage this platform is copied from. The
+same reading is available for `FvDxe` against DxeCore's own firmware-volume handling, but
+this step did not take it.
+
+`FontDxe` (57) has no counterpart of any kind: this volume carries no font driver at all,
+and the stock array promotes it immediately before `QcomBds` (58), in the same cluster as
+`GraphicsConsoleDxe` (73), `ConSplitterDxe` (72) and `HiiDatabase` (56). Nothing here
+claims it is *required*; what is claimable is narrower and still worth having — the stock
+console path had a font driver and this port's does not.
+
+`RscRtDxe` (2) and `SCHandlerRtDxe` (3) are the two whose position is the interesting
+part: entries two and three, ahead of `RuntimeDxe` (4), so the stock firmware had them
+running before almost anything else. Whether a driver this volume packages waits on a
+protocol one of them publishes is a question this step does not answer. It is answerable
+now in a way it was not before 4.170: the packaged `.ffs` files carry their stock
+`DXE_DEPEX` again, so a driver naming a protocol that nothing in the volume publishes is
+visible by reading the volume's own dependency expressions — a stall, in other words, and
+the same shape of measurement 4.168 made against `PciIo`.
+
+### What the same array settles about the P3 gate's other half
+
+The gate is *"a Windows 11 ARM64 installer boots off a USB stick and sees the internal
+UFS"*, and one of the two halves turns out to have no missing driver. The device's own
+array puts the storage chain at 25, 26, 30 and 31 — `DiskIoDxe`, `PartitionDxe`,
+`UFSDxe`, `Fat` — and **never names a SCSI disk driver**, and the extraction has none
+either: `device/dxe` carries no `ScsiDisk*` of any kind, while
+`Mu_Basecore/MdeModulePkg/Bus/Scsi/ScsiDiskDxe/ScsiDiskDxe.inf` sits unbuilt in the tree.
+This was checked as a candidate gap and it is not one.
+
+The reason is in the blob this volume already packages. `device/dxe/UFSDxe.ffs` is three
+sections — `DXE_DEPEX` 22 B, `PE32` 114,692 B, `UI` 18 B — and the depex is
+
+```
+02 d0c7e5f4 39d2cb47 aacd7f66 ef763238 08
+```
+
+which is `PUSH gEfiSMEMProtocolGuid` (`F4E5C7D0-D239-47CB-AACD-7F66EF763238`,
+`QcomPkg.dec:60`) followed by the `END` terminator: one dependency, on SMEM, and nothing
+else. The `BlockIo` protocol GUID (`964E5B21-6459-11D2-8E39-00A0C969723B`) is present in
+that PE32 and absent from the depex, which is the shape of a producer rather than a
+consumer. `UFSDxe` waits on SMEM, publishes the UFS as a block device, and there is no
+SCSI layer above it to miss. `DXE.inc:51`, `:38`, `:39` and `:40` then hold `UFSDxe`,
+`DiskIoDxe`, `PartitionDxe` and `Fat` — the whole chain, in the volume.
+
+So the half of the gate that says *sees the internal UFS* has no missing driver at all.
+The half that says *boots off a USB stick* is the `xhci-host` work, and it is still the
+open one.
+
+### Rows:
+
+- **instrument**: `tools/xbl-unmapped.py`, new — the class it measures is the one
+  `present_drivers()` cannot report, because that function iterates the `DRIVERS` table
+  and so can only ask about drivers the table already names. Runs against
+  `--dxe device/dxe`, `--mu work/uefi/Mu-Silicium`, `--dxe-inc
+  uefi/Platforms/Xiaomi/gauguinPkg/Include/DXE.inc` and an optional
+  `--stock-array /tmp/phone-payload.raw`; `--rows` prints all 86.
+- **shows**: 55 packaged, 22 built from source, **9 named by nothing** — `RscRtDxe`,
+  `SCHandlerRtDxe`, `FvSimpleFileSystem`, `VariableDxe`, `ResetRuntimeDxe`, `FvDxe`,
+  `ASN1X509Dxe`, `FontDxe`, `MiTokenDxe` with stock a-priori positions 2, 3, 28, 33, 39,
+  42, 48, 57 and none. Eight of the nine promoted by the device's own firmware. Also
+  that the internal UFS needs no `ScsiDiskDxe`: `UFSDxe`'s depex is a single `PUSH` on
+  `gEfiSMEMProtocolGuid`, and `BlockIo` is in its image and not in its depex.
+- **adds**: an instrument for a class that had none, and a tool that can be re-run
+  against any extraction or any future sibling reference. Nothing else — this step
+  packages no driver and changes no volume.
+- **corrects**: the tool's own first run, which scored any `BASE_NAME` hit as "the tree
+  builds this" and so reported 23 source and 8 uncovered. `FvSimpleFileSystem` is the
+  counter-example — source in the tree, INF in `MdeModulePkg.dsc:487`, 0 occurrences of
+  the name anywhere in `gauguinPkg` — and the corrected tool reads `DXE.inc` before
+  calling a source row built, which is 22 and 9. Also corrects, before it was written
+  down, the guess that the UFS needs a SCSI disk driver: it does not, and the driver is
+  absent from the array and from the extraction alike.
+- **does not close**: anything on the device, and nothing about why the phone stops
+  where it does. `RscRtDxe` and `SCHandlerRtDxe` are named and unread, `FontDxe` remains
+  a driver the stock console path had that this one does not, and every item 4.163–4.171
+  left open is still open, including 4.164's `HAL_clk_FabiaPLLEnableVote` park. Which
+  payload `boot` currently holds is still the first question whenever a device is present.
+- **not an action**: no device was touched, nothing was flashed, no partition was written,
+  no stub, firmware source or Microsoft image was changed or patched, and no firmware was
+  built. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
+  untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin,
+  P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun,
+  and the end state remains a Windows tablet whose modem and cameras cannot be driven.
