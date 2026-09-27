@@ -3106,7 +3106,33 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > boot logos. Finally, the walk's window has a numeric boundary now: the 46-entry batch is `seen` 48 or
 > 49, `DALTLMM` at DRIVER rank 47 is the last entry inside it, `FeatureEnablerDxe` at rank 48 is the
 > file between the two and is not an Apriori entry, and `SimpleFbDxe` at rank 49 is the lowest unhit
-> one that has a file. See `docs/08` step 4.166.
+> one that has a file.
+>
+> Two further results from the same series of measurements, both taken after the above was written and
+> while no device was attached, are worth carrying here because they are about how this file's own
+> tables are to be read. **First, the identity map is dead on a 46-character line.** Where the tables
+> below join the 46 characters to the array one-to-one (slot *k* = array entry *k+1*, which is what
+> `tools/fv-census.py` prints as `=== SEQ join: ap1..ap69 vs the 46 characters ===`), slot 21 lands on
+> `ap22 ShmBridgeDxe`. That driver's DRIVER rank is 72 of 80, and any walk that reached rank 72
+> promotes all 69 matchable entries and prints 69 characters — so on a 46-character line slot 21 cannot
+> be `ShmBridgeDxe`, and the loop's map (slot *k* = the *k*-th entry that matched, where unpromoted
+> entries write nothing and the slots close up) is the one the letters are readable through. The
+> loop's map is what `docs/00`'s "the failure begins at slot 18, which is Apriori 20 = `PdcDxe`" has
+> always used, so that sentence stands, and it now stands for a measured reason: the lone `s` is
+> `ap24 DiskIoDxe`, DRIVER rank 33, inside any prefix of 48. `BdsDxe` at rank 71 is the same argument
+> for the ninth missing name — its `L` cannot be on a 46-character line either, which is why the
+> missing-`Bds` row is a walk failure and not a load failure. **Second, no archived image can produce
+> the 46 on a complete walk.** The same array census run over every archived image on this disk — the
+> `p2-4.14` … `p2-4.94` series, `p2-variants`, `p2-pmic`, `p2-gio0`, `p2-freewhy`, `p2-phywake`,
+> `p2-4.92`, `usb-host` and `usb-host-0925` (three flavours each), plus `boot-before-p2walk.img`,
+> `p2-silicon-gzip-preread-0923d.img` and `retracted/Mu-gauguin-arch-first-gzip.img` — returns 70
+> Apriori entries with 69 matchable `DRIVER` files in every one, so a complete walk prints 69
+> characters everywhere and the 46 is never a finished walk in this repository's history. That leaves
+> the `entries=70` versus `entries=47` fork a run-time read rather than an image property. Two file
+> facts fall out of the same pass: the phone payload's volume is byte-identical to
+> `work/out/boot-before-p2walk.img`'s (`c8f57e46046c86c5…`, 7,348,224 B, written 2026-09-23 15:09),
+> and the `p2-4.x` volumes are 123 files at 7,352,320 B — one file more than the payload's 122 and,
+> measured, no file different. See `docs/08` step 4.166.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

@@ -33751,6 +33751,15 @@ all. This step measures the two payloads' **string contents** rather than their 
 answer is that the rows the record has been calling owed are a property of the image, not of the
 machine: the device's payload does not contain the code that prints them.
 
+The same pass, extended afterwards while no device was attached, then closed a second thing. The
+record had carried the `P2 SEQ` string as readable through two different maps — the loop's, where
+unpromoted entries write no character, and an identity map, where slot *k* is array entry *k+1* — and
+the two disagree about which driver the lone `s` belongs to. They are separable on a 46-character line
+by a DRIVER rank, and the rank says the identity map is not available at that length; §"The two maps"
+below states the argument. The archive-wide half of the same pass shows that no image this repository
+has ever built can produce 46 on a *complete* walk, which sharpens the `entries=70`/`entries=47` fork
+into a run-time question rather than an image one.
+
 ### The build identity, and this time with `cmp`
 
 The current build tree's own volume,
@@ -33829,12 +33838,36 @@ The cut, then, is a boundary in the order the walk hands drivers over — DRIVER
     48  FeatureEnablerDxe  <- between them, and *not* an Apriori entry, so it leaves no character either way
     49  SimpleFbDxe        <- lowest rank among the 24 unhit that has a file
 
-`DALTLMM` is `ap32` and occupies slot 29 of the 46; `SimpleFbDxe` is `ap61` and is unhit. So the
-observed string is consistent with `seen ∈ {48, 49}` and with nothing else, and within the batch the
-letter is **not** predicted by rank: `SecurityStubDxe` is rank 3 and fails while `DALSys` is rank 37
-and succeeds. That is 4.126's "no physical cutoff" result restated numerically (`apriori-prefix.py`
-prints the same thing as *lowest failed file 5, highest loaded file 43 -> a physical cutoff is
-IMPOSSIBLE*), and it is the reason the letters cannot be read off the volume order.
+`DALTLMM` is `ap32` and occupies slot 29 of the 46; `SimpleFbDxe` is `ap61` and is unhit. The other
+unhit entries that have a file are, in walk order, `PlatformInfoDxeDriver` (rank 50), `PmicDxe` (52),
+`BdsDxe` (71) and `ShmBridgeDxe` (72) — and those ranks are what the next paragraph turns on. What the
+length alone fixes is the batch: `seen` 48 and 49 are the only prefixes giving 46 promotions, and they
+give the same 46 entries, so *if* the line is a stopped walk on this volume then this is its batch.
+What the length does **not** fix is the letter: within the batch the letter is not predicted by rank —
+`SecurityStubDxe` is rank 3 and fails while `DALSys` is rank 37 and succeeds — which is 4.126's "no
+physical cutoff" result restated numerically (`apriori-prefix.py` prints the same thing as *lowest
+failed file 5, highest loaded file 43 -> a physical cutoff is IMPOSSIBLE*), and it is the reason the
+letters cannot be read off the volume order.
+
+### The archive cannot supply the 46 either, and the payload's class has a name on disk
+
+The same array census run over **every archived image on this disk** — the whole `p2-4.14` … `p2-4.94`
+series, `p2-variants`, `p2-pmic`, `p2-gio0`, `p2-freewhy`, `p2-phywake`, `p2-4.92`, `usb-host` and
+`usb-host-0925`, three flavours each, plus the loose `boot-before-p2walk.img`,
+`p2-silicon-gzip-preread-0923d.img` and `retracted/Mu-gauguin-arch-first-gzip.img` — returns **70
+Apriori entries with 69 matchable `DRIVER` files in every one of them**, and a complete walk therefore
+prints 69 characters everywhere in the archive. There is no archived build whose array is short, so
+the "array read 368 bytes short, `entries=47`" candidate has no artifact behind it and would have to be
+a run-time short read — which 4.129's size-field replay already rules out. The 46 cannot be a completed
+walk on any image this repository has ever produced.
+
+Two file-level facts come out of the same pass and are worth having. The phone payload's volume is
+byte-identical to `work/out/boot-before-p2walk.img`'s — both 7,348,224 B at `c8f57e46046c86c5…`, the
+latter written 2026-09-23 15:09, which is 4.165's "the gunzipped kernel of `boot-before-p2walk.img`"
+stated as a file date. And the `p2-4.x` series' volumes are **123** files at 7,352,320 B with the *same*
+GUID set as the payload's 122 — one file more and no file different, a difference this step measured
+and did not chase — while `retracted/Mu-gauguin-arch-first-gzip.img` is a third 122-file volume at
+`fd7c1fa94be75b3f…`, i.e. same size and same file count as the phone's and not the same bytes.
 
 ### The slot table, and the nine-name set against it
 
@@ -33859,11 +33892,7 @@ implies, which the arch-protocol census calls "the loop's map":
     15 ap17 CmdDbDxe(r29)       31 ap34 ResetSystemRuntimeDxe(r13) L
 
 so the first `L` is **slot 18 = `ap20 PdcDxe`**, the lone `s` after it is **slot 21 = `ap24 DiskIoDxe`**,
-and the 24 closing `L`s run to the last slot. `docs/00`'s reading — *"the failure begins at slot 18,
-which is Apriori 20 = `PdcDxe`…the one exception being slot 21, which is Apriori 24 = `DiskIoDxe`"* —
-is therefore **correct as written** under the array-ordered 0-based convention, and needs no
-correction; what it needs is the rank column above, which says the two are ranks 32 and 33 and are
-adjacent in the walk's own order, so nothing about their positions in the volume separates them.
+and the 24 closing `L`s run to the last slot.
 
 Against the nine-name set of missing architectural protocols (`Security, Bds, Watchdog, Variable,
 Variable Write, Capsule, Monotonic, Reset, Real Time Clock` — nine names, **eight** producers, because
@@ -33879,6 +33908,34 @@ Variable Write, Capsule, Monotonic, Reset, Real Time Clock` — nine names, **ei
 That is the wall's shape in one sentence: eight of its nine names are a *load* failure and the ninth is
 a *walk* failure, and the two are separable. It is also why `P2 SEQ`'s length is the only evidence the
 never-promoted entries leave — an entry that never matched produces neither `s` nor `L` nor `?`.
+
+### The two maps, and which one a 46-character line can be read through
+
+`docs/00`'s sentence — *"the failure begins at slot 18, which is Apriori 20 = `PdcDxe`…the one
+exception being slot 21, which is Apriori 24 = `DiskIoDxe`"* — is the map above, the one the promotion
+loop implies: a slot is a *match*, and an entry the walk never handed over writes no character at all,
+so the slots close up over the unhit entries. The record calls the alternative the **identity map**,
+slot *k* = array entry *k+1* whatever the walk did, and it is what `tools/fv-census.py` prints in its
+`=== SEQ join: ap1..ap69 vs the 46 characters ===` table: there slot 17 = `ap18 NpaDxe` `s`,
+18 = `ap19 RpmhDxe` `L`, 19 = `ap20 PdcDxe` `L`, 20 = `ap21 ClockDxe` `L`, **21 = `ap22 ShmBridgeDxe`
+`s`**, 22 = `ap23 ScmDxe` `L`, 23 = `ap24 DiskIoDxe` `L`. Both maps put the first `L` at slot 18 and
+both read the recorded string without contradiction *as a string*; they disagree about which driver
+that `L` belongs to, and the record has carried the disagreement as open (the
+`tools/apriori-index.py` / `tools/pe-facts.py` item in 4.165's `does not close`).
+
+The ranks settle it, and only for a 46-character line. The identity map's slot 21 is `ShmBridgeDxe`,
+whose **DRIVER rank is 72** — of 80. A walk that handed over 72 drivers is a walk that was not stopped
+at 48 or 49, and such a walk promotes all 69 matchable entries and prints 69 characters
+(4.130). So on this volume the identity map's slot 21 can only be read on a 69-character line, and the
+line under discussion is 46; the `s` at slot 21 therefore cannot be `ShmBridgeDxe`'s, and the map that
+gives `DiskIoDxe` — rank 33, inside any prefix of 48 — is the one the letters are readable through.
+`BdsDxe` at rank 71 is the same argument applied to the wall: the identity map's slot 43 is `BdsDxe`
+and stamps it `L`, but at 46 characters no prefix on this volume has promoted it, which is why the
+missing-`Bds` row is a walk failure and not a load failure (see the nine-name set above). The
+retracted `work/out/retracted/README.md` records the reading this replaces: it refuted "the walk
+stopped at physical 49 or 50" by pointing out that the string's slot 21 holds `ShmBridgeDxe` and that
+`ShmBridgeDxe` "cannot be promoted by any stop below 74" — the right fact, applied to the identity map
+rather than used to reject it, which is what retires the identity map instead of the cut.
 
 ### The file-type census, and five applications the Apriori walk can never promote
 
@@ -33950,32 +34007,48 @@ that are `s` show that a *promoted* producer is what the wall is waiting for, no
 - **instrument**: the two inflated volumes (7,348,224 B `c8f57e46…` and 7,536,640 B `ca60789d…`), the
   tree's `FVMAIN.Fv` (byte-identical to the second by `cmp`); `tools/fv-apriori.py` and
   `tools/apriori-prefix.py` on `/tmp/phone-payload.raw`; `tools/arch-protocol-census.py` on
-  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`; a 16-byte GUID scan over both volumes; an
-  FFS-type census with UI-section names read out of the files themselves. Device-side: nothing.
+  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`; the same Apriori-array census run over **every
+  archived image on this disk** (`p2-4.14` … `p2-4.94`, `p2-variants`, `p2-pmic`, `p2-gio0`,
+  `p2-freewhy`, `p2-phywake`, `p2-4.92`, `usb-host`, `usb-host-0925` in three flavours each, plus
+  `boot-before-p2walk.img`, `p2-silicon-gzip-preread-0923d.img` and
+  `retracted/Mu-gauguin-arch-first-gzip.img`); a 16-byte GUID scan over both volumes; an FFS-type
+  census with UI-section names read out of the files themselves. Device-side: nothing.
 - **shows**: that the phone's payload contains four of the twelve recorder literals and `usb-host`'s
   contains eleven, so the owed rows are a property of the image; that the tree's current build output
   *is* the `usb-host` volume, so obtaining them needs no rebuild; that the 46-batch is `seen` 48 or 49
   with the cut between DRIVER ranks 47 (`DALTLMM`) and 49 (`SimpleFbDxe`) and 48
   (`FeatureEnablerDxe`) not an Apriori entry; that the first `L` is `ap20 PdcDxe` and the lone `s` is
-  `ap24 DiskIoDxe`, at ranks 32 and 33; that seven of the nine missing architectural protocols fail at
-  a promoted-and-loaded producer while the ninth (`Bds`) has a producer the walk never promoted; that
-  the volume carries five applications including `MsBootPolicy`, none promotable; and that no PCI host
-  bridge, bus driver or `PciIo` producer exists in either volume.
+  `ap24 DiskIoDxe`, at ranks 32 and 33; that **the identity map is not available on a 46-character
+  line**, because its slot 21 is `ShmBridgeDxe` at DRIVER rank 72 and no 46-prefix on this volume
+  reaches rank 72, so the loop map is the one the letters are readable through; that seven of the nine
+  missing architectural protocols fail at a promoted-and-loaded producer while the ninth (`Bds`) has a
+  producer the walk never promoted; that the volume carries five applications including `MsBootPolicy`,
+  none promotable; and that no PCI host bridge, bus driver or `PciIo` producer exists in either volume.
 - **adds**: the per-literal path to the owed rows (which payload can print which row, measured);
   the file-type census with the PI type table and the five application names; the corrected PCI carrier
-  list; the rank boundary of the walk's window; and the one-line form of the wall, eight names from
-  load failures and one from a walk failure.
+  list; the rank boundary of the walk's window; the archive-wide result that **every** image this
+  repository has built has a 70-entry array with 69 matchable DRIVER files and therefore prints 69
+  characters on a complete walk, so the 46 cannot be a completed walk on any of them; the on-disk name
+  for the payload's class (`boot-before-p2walk.img`, and `retracted/Mu-gauguin-arch-first-gzip.img` as
+  the third 122-file volume); and the one-line form of the wall, eight names from load failures and one
+  from a walk failure.
 - **corrects**: this window's own working note that `ConPlatformDxe` holds the only PCI GUID in either
   volume — there are four carriers in the phone's volume and six in `usb-host`'s, and what is absent is
   the host-bridge and bus-enumeration set, which is the claim that matters. Also the habit, in this
   window's scratch work, of reading FFS type 0x02 as PEI_CORE: 0x02 is FREEFORM, 0x05 is DXE_CORE, and
   the volume has one of the latter — `DxeCore`, which is why `ap1` is the single unmatchable entry.
+  And the record's own carried-as-open identity/cut disagreement: it is resolved above, in favour of
+  the loop map, by the same `ShmBridgeDxe` rank fact that the retracted note had pointed at the wrong
+  map -- so `docs/00:53`'s sentence is the reading that survives, and it stands for a measured reason
+  and not just because it was written first.
 - **does not close**: which payload is flashed in `boot` (now decidable from the panel by whether
   `P2 WALK` or `Loading driver at` appears, but not yet decided); whether `P2 SEQ`'s two occurrences in
   each volume are one print site or two; the `entries=70` versus `entries=47` fork, which only
-  `P2 APRI` on a payload that can print it will settle; what names the file whose UI text is the
-  Apriori GUID string; the identity/cut join disagreement between `tools/apriori-index.py` and
-  `tools/pe-facts.py`; and every item 4.163, 4.164 and 4.165 left open.
+  `P2 APRI` on a payload that can print it will settle — now with the added result that no archived
+  artifact carries a short array, so the fork is a run-time read and not an image property; what names
+  the file whose UI text is the Apriori GUID string; why the `p2-4.x` volumes carry one more file than
+  the payload's with an identical GUID set; and every item 4.163, 4.164 and 4.165 left open other than
+  the identity/cut one.
 - **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
   firmware source or Microsoft image was changed or patched, and nothing was rebuilt — the identity of
   the tree's `FVMAIN.Fv` with the existing image is a comparison, not a build. `userdata` (107 GB,

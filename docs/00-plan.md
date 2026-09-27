@@ -59,7 +59,22 @@ present in the tree's — whose `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` i
 clean) to the `usb-host` volume, so no rebuild is needed to obtain them. And the physical-stop pair
 named in the sentence above can now be stated as a DRIVER-rank boundary: `seen` 48 or 49, with
 `DALTLMM` at rank 47 the last entry inside the batch, `FeatureEnablerDxe` at 48 the file between the
-two that is not an Apriori entry, and `SimpleFbDxe` at 49 the lowest unhit one that has a file.) Zero `?`
+two that is not an Apriori entry, and `SimpleFbDxe` at 49 the lowest unhit one that has a file.
+**Amended a third time 2026-09-27, still step 4.166:** the sentence forty lines down that reads the
+string through the *loop's* map — slot *k* = the *k*-th entry that **matched** — is now decided
+against the alternative, rather than merely preferred. `tools/fv-census.py` prints the other map
+(slot *k* = array entry *k+1*), under which slot 21 is `ap22 ShmBridgeDxe`; that driver's DRIVER rank
+is **72 of 80**, and a walk that reached rank 72 promotes all 69 matchable entries and prints 69
+characters. On a 46-character line the identity map's slot 21 therefore cannot be `ShmBridgeDxe`, so
+the loop's map is the one the letters are readable through and `DiskIoDxe` is the driver the lone `s`
+belongs to. `BdsDxe` at rank 71 is the same argument for the ninth missing name — its `L` cannot be
+on a 46-character line either, which is why the missing-`Bds` row is a walk failure and not a load
+failure. And the same census run over **every archived image on this disk** returns 70 entries with
+69 matchable `DRIVER` files in all of them, so a complete walk prints 69 characters on every image
+this repository has built and the 46 cannot be a completed walk on any of them — which leaves the
+`entries=70` versus `entries=47` fork a run-time read and not an image property. The phone payload's
+volume is byte-identical to `work/out/boot-before-p2walk.img`'s at `c8f57e46046c86c5…`, written
+2026-09-23 15:09. See `docs/08` step 4.166.) Zero `?`
 says the 46 promoted drivers were all *attempted* — a statement about the drain,
 not about the walk. The names move too, because `P2 SEQ`'s slot *k* belongs to the
 *k*-th entry that **matched** and a stopped walk's batch is not `ap1..apN`: at
