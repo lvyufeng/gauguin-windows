@@ -34189,3 +34189,181 @@ other part of the firmware expects to exist.
   unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a Windows
   tablet whose modem and cameras cannot be driven.
+
+## Step 4.168 — the GUID references 4.167 could only count are disassembled: the phone's payload reaches for `PciIo` at seven call sites and publishes it at none, `usb-host`'s publishes it once from `XhciPciEmulation`, and the publisher `UsbInitDxe` waits on turns out to be `UsbConfigDxe` — while byte-identity against `Binaries/` shows the `usb-host` USB stack is gauguin's two USB binaries plus bitra's three
+
+4.167 ended on the sentence it could not get past: a GUID occurrence in a volume is a *carrier*, and a
+carrier is not a *consumer*, so a census can say how many times `PciIo`'s sixteen bytes appear and
+nothing about which way each appearance points. That is not a limit of the method; it is a limit of
+counting bytes. The bytes sit inside `EFI_SECTION_PE32` sections, those sections are code, and the
+difference between publishing a protocol and reaching for one is the difference between which
+`EFI_BOOT_SERVICES` entry point the GUID's address is handed to. So this step extracts the sections,
+disassembles them for AArch64, and reads the call.
+
+### The instrument, and the two ways it was wrong before it was right
+
+`tools/guid-refs.py`, new here. For each volume it walks the FFS files, keeps the ones whose `PE32`
+section carries the GUID, maps the GUID's file offset to an RVA through the PE section headers,
+disassembles the image with `aarch64-linux-gnu-objdump`, resolves the `ADRP`+`ADD` pair that
+materialises the GUID's address into a register, takes the `BLR` that register is an argument to, and
+reads the `EFI_BOOT_SERVICES` slot the callee came from — `InstallProtocolInterface` at `+0x80`,
+`InstallMultipleProtocolInterfaces` at `+0x148`, `LocateProtocol` at `+0x140`, `OpenProtocol` and
+`CloseProtocol` at `+0x120` and `+0x118`. The slot, not the presence, is the answer: an install slot
+means the file publishes the protocol and every other named slot means it reaches for one.
+
+Two things it got wrong on the first run, and both wrong answers are in the tool as prose because
+each is the trap the next reader would fall into:
+
+- **the slot load is not the nearest load into the callee register.** The first version scanned back
+  from the `BLR` and returned the nearest `ldr x8, [.., #imm]`, which for the very site it was built
+  to read was `+1424` — the load of the `EFI_BOOT_SERVICES` *table* — and it printed `BS+0x590` for
+  an `InstallMultipleProtocolInterfaces` call. The slot load comes after the table load and before
+  several argument set-ups, so the scan now covers a twenty-instruction window and prefers an offset
+  that is a real slot; an offset that is not prints as raw `BS+0x..` and is then visibly a miss.
+- **argument registers have to be read close to the call.** A twenty-four instruction window picked
+  up stale values and printed them as GUIDs — `x0=&EFI_PART_TYPE_UNUSED_GUID` is the all-zero GUID
+  reached through a *handle* variable, and `x8=&C0C0C0C0-…` is a pointer that happens to land on
+  sixteen arbitrary bytes. The window is now eight instructions, `x0` is skipped (it holds the GUID
+  at a `LocateProtocol` and the handle at an install, so it is never a *second* GUID worth printing),
+  and only GUIDs the tree can name are shown.
+
+What it does not do is decide whether a call site *executes*. A call site is a fact about the binary;
+the run-time question is separate, and where it matters it is stated below as a `does not close`.
+
+### The phone's payload reaches for `PciIo` seven times and publishes it none
+
+The four files 4.167 counted turn out to hold **seven** references between them, and not one is an
+install:
+
+| file | VA | slot | what it does |
+|---|---|---|---|
+| `ConPlatformDxe` | `0x2584` | `LocateDevicePath` | reaches for a handle |
+| `BdsDxe` | `0xa920` | `LocateHandleBuffer` | enumerates every `PciIo` handle |
+| `BdsDxe` | `0xa950` | `HandleProtocol` | then opens the one it picked |
+| `BootManagerMenuApp` | `0x9950` | `LocateHandleBuffer` | same pair |
+| `BootManagerMenuApp` | `0x9980` | `HandleProtocol` | |
+| `MsBootPolicy` | `0x8dc8` | `LocateHandleBuffer` | same pair |
+| `MsBootPolicy` | `0x8df8` | `HandleProtocol` | |
+
+The `LocateHandleBuffer`/`HandleProtocol` pairs are one shape repeated three times — the BDS, the
+boot-manager menu and the boot policy each enumerate PCI handles to build a device list — which is
+also why the phone's volume carries `PciIo` at all: it is the *consumer* side of a PCI world that
+the same volume does not contain. That is the sharpest available form of 4.166's claim. It is no
+longer "no producer was found"; it is "seven sites ask, and none of the four files is able to
+answer".
+
+`usb-host`'s volume holds the same seven, plus three in `XhciPciEmulation` and six in `XhciDxe` —
+sixteen call sites in six files, counted by the tool and not by hand — and **exactly one of the
+sixteen is a publisher**:
+
+    XhciPciEmulation  VA 0x187c  InstallMultipleProtocolInterfaces  publishes
+                                  (beside it, x3 = &EFI_DEVICE_PATH_PROTOCOL_GUID — the emulated
+                                  device and its path, installed in one call)
+
+and `XhciDxe`'s five references are the standard driver-binding shape around it: `OpenProtocol` at
+`0x1500`, `0x17f0` and `0x1bbc`, `CloseProtocol` at `0x1488` and `0x1564`. A sixth site at `0xb884` is listed as a
+`CloseProtocol` too, and it is the one row here whose attribution is a hint rather than a reading:
+the GUID the tool prints for its `x1` is `EFI_USB2_HC_PROTOCOL_GUID`, but the instruction before the
+call overwrites `x1` with a table load (`ldr x1, [x23, #40]`), so the printed register is stale
+relative to the call and the slot may belong to a different argument. The reference is real and the
+slot is not certain, which is why it is listed and not counted. `XhciPciEmulation` also closes and
+uninstalls its own `PciIo` (`0x18e8` `CloseProtocol`, `0x1918` `UninstallProtocolInterface`) when it
+is stopped, which is the emulated-device life cycle rather than a second producer. So the pair is complete on this side: one file fabricates a PCI
+device, one binds to it, and `XhciDxe`'s "binds to whatever handle offers one" from 4.50 is now
+shown from the call sites rather than asserted from the absence of a depex.
+
+### The publisher `UsbInitDxe` waits on is `UsbConfigDxe`'s install, which closes 4.105's open question
+
+4.105 narrowed `E722B03F-B250-42CE-8EBD-5BD51812D037` — the GUID no header in the tree defines,
+sitting in `UsbInitDxe`'s 18-byte shipped depex — to two candidates, `UsbfnDwc3Dxe` and
+`UsbConfigDxe`, both a-priori and both promoted in the first dispatch round, and left exactly one
+thing open: *whether either candidate installs it*. Disassembled, the two candidates come apart
+cleanly:
+
+    UsbConfigDxe      VA 0x03aa4  InstallMultipleProtocolInterfaces  publishes
+    UsbConfigDxe      VA 0x0517c  InstallMultipleProtocolInterfaces  publishes
+    UsbConfigDxe      VA 0x052c8  InstallMultipleProtocolInterfaces  publishes
+    UsbfnDwc3Dxe      VA 0x014c0  CloseProtocol                      consumes
+    UsbfnDwc3Dxe      VA 0x01518  OpenProtocol                       consumes
+    UsbfnDwc3Dxe      VA 0x01928  CloseProtocol                      consumes
+    UsbfnDwc3Dxe      VA 0x01ba4  OpenProtocol                       consumes
+    XhciPciEmulation  VA 0x01488  CloseProtocol                      consumes
+    XhciPciEmulation  VA 0x014e0  OpenProtocol                       consumes
+    XhciPciEmulation  VA 0x019e0  OpenProtocol                       consumes
+    XhciDxe           VA 0x01960  LocateProtocol                     consumes
+    UsbInitDxe        VA 0x017c4  LocateProtocol                     consumes
+
+`UsbConfigDxe` is the publisher; `UsbfnDwc3Dxe` is not, and neither is anything else. That does not
+contradict 4.105's reading of the two carriers — it separates them: the file that *also* publishes
+`EFI_USBFN_IO_PROTOCOL_GUID` (`UsbfnDwc3Dxe`, `InstallMultipleProtocolInterfaces` at `0x19cc`, with
+`UsbMsdDxe` and `UsbDeviceDxe` locating it) is the *consumer* of this one, and the file that looked
+like the quieter candidate is the publisher. The ordering therefore closes in the affirmative in both
+directions: the publisher is depex-less and promoted in the first round, the waiter carries a depex
+and is judged in the second, and `LocateProtocol` at `UsbInitDxe` `0x17c4` is the call behind the
+depex.
+
+What stays open is the same thing as before, now narrower: the *phone's* volume carries
+`UsbConfigDxe`'s three install sites and `UsbfnDwc3Dxe`'s four open sites, but **no `UsbInitDxe` at
+all** — so in the phone's payload nothing waits on this protocol and the publisher has no consumer,
+while in `usb-host` both halves are present.
+
+### Underneath it: gauguin's two USB binaries and bitra's three, byte for byte
+
+The five USB `PE32` sections extracted from `usb-host`'s volume are each byte-identical to exactly
+one prebuilt under `Binaries/`:
+
+| module | FFS `PE32` | sha256 | equals | copies in the tree |
+|---|---|---|---|---|
+| `UsbConfigDxe` | 77,824 B | `6943cc615f7d4ba5…` | `Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/` | 74 copies, 68 digests |
+| `UsbfnDwc3Dxe` | 106,496 B | `ed77c506995b6d2b…` | `Binaries/gauguin/QcomPkg/Drivers/UsbfnDwc3Dxe/` | 74 copies, 66 digests |
+| `XhciDxe` | 94,208 B | `d579eaa0c1238b7d…` | `Binaries/bitra/QcomPkg/Drivers/XhciDxe/` | 39 copies, 33 digests |
+| `XhciPciEmulationDxe` | 45,056 B | `68ee8cf1f8412b1b…` | `Binaries/bitra/QcomPkg/Drivers/XhciPciEmulationDxe/` | 39 copies, 33 digests |
+| `UsbInitDxe` | 32,768 B | `bb95fcb96d990104…` | `Binaries/bitra/QcomPkg/Drivers/UsbInitDxe/` | 42 copies, 36 digests |
+
+and `Binaries/gauguin/QcomPkg/Drivers` has **no** `XhciDxe`, no `XhciPciEmulationDxe` and no
+`UsbInitDxe` — which is why the build takes bitra's three, and why the phone's payload's volume
+carries neither of the XHCI files nor `UsbInitDxe`. The provenance also explains the depex identity
+4.105 measured: `UsbInitDxe`'s `DXE_DEPEX` section here is 18 bytes hashing `ac68645cdf6f47e6…` and
+`XhciPciEmulation`'s is 234 hashing `6e3f02198c4fa8c8…`, both equal to the `.depex` files shipped
+beside those bitra binaries, and the twelve terms of the second decode — against the tree's own
+headers — to `Bds`, `Cpu`, `Metronome`, `MonotonicCounter`, `RealTimeClock`, `Reset`, `Runtime`,
+`Security`, `Timer`, `VariableWrite`, `Variable` and `WatchdogTimer`, with no PCI term among them.
+`XhciDxe` itself is the `Mu_Basecore/MdeModulePkg/Bus/Pci/XhciDxe` module's `FILE_GUID` on a binary
+whose source is not that module's: the tree's own `XhciDxe` source has no `LocateProtocol` call at
+all, and the shipped binary's `E722B03F` locate is Qualcomm's addition to it.
+
+### Rows:
+
+- **instrument**: the two inflated volumes (`/tmp/fv-old.bin` `c8f57e46046c86c5…`, 7,348,224 B, and
+  `/tmp/fv-usb.bin` `ca60789d47e263d4…`, 7,536,640 B); `tools/guid-refs.py`, written here, which
+  extracts `EFI_SECTION_PE32` (0x10) sections and reads the `EFI_BOOT_SERVICES` slot each GUID
+  reference is an argument to, with `aarch64-linux-gnu-objdump` as the
+  disassembler; the five extracted images in `/tmp/x/`. Device-side: nothing.
+- **shows**: that the phone's volume's four `PciIo` files hold seven references and all seven are
+  reaches (`LocateDevicePath`, three `LocateHandleBuffer`/`HandleProtocol` pairs) — so that volume
+  *asks* for a PCI handle seven times and cannot answer once; that exactly one of `usb-host`'s
+  sixteen call sites publishes, namely `XhciPciEmulation`'s `InstallMultipleProtocolInterfaces` of
+  `PciIo` beside a device path, which is the producer `XhciDxe` binds to; that `UsbConfigDxe` installs `E722B03F` at three sites and
+  `UsbfnDwc3Dxe` only opens and closes it, which answers 4.105's "whether either candidate installs
+  it"; and that the five-section USB stack is gauguin's two function-side binaries plus bitra's
+  three host-side ones.
+- **adds**: `tools/guid-refs.py`, and with it a way to ask the publisher question about any GUID that
+  the census can only count; the seven-site table for `PciIo` in the phone's volume, which is the
+  consumer side 4.167 could infer but not show; the twelve named terms of `XhciPciEmulation`'s depex,
+  re-decoded from bitra's shipped 234 bytes rather than from the earlier prose; and the byte-identity
+  table tying every one of the five FFS images to a single prebuilt copy in the tree.
+- **corrects**: my own working reading during 4.167 that `XhciDxe`'s `LocateProtocol` site referred to
+  the GUID at RVA `0x150B8` — that address holds `E722B03F`; the `PciIo` GUID in the same image is
+  the *neighbouring* one at `0x15088`, and the two are adjacent in `.data`, which is exactly how a
+  hand-run scan picks the wrong one. The tool resolves every occurrence of the GUID rather than the
+  first for that reason.
+- **does not close**: whether any of these call sites executes on the device — the phone payload's
+  park inside `ClockDxe`'s `CpuDeadLoop` (4.164) is upstream of all of them, so a publisher shown
+  present is not a protocol shown published; whether `UsbConfigDxe`'s install sites are on the path
+  its driver entry takes; and every item 4.163-4.167 left open, none of which this pass touches.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and nothing was rebuilt. `userdata`
+  (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The porting goal is
+  unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.

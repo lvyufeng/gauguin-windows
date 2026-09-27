@@ -782,6 +782,41 @@ Work:
 > this tree for any Qualcomm platform, so a host bridge is a library to write, not a line to add.
 > `usb-host`'s XHCI pair is the reason item 3's USB-stick half needs none of that. See `docs/08`
 > step 4.167.
+>
+> **Step 4.168 (2026-09-27) disassembled the references 4.167 could only count, and both of that
+> step's inferences come out right — one of them now a measurement instead of an inference.** The
+> paragraph above says every occurrence of the `PciIo` constant is a consumer's; that was read off
+> the set of files carrying it, and reading the call sites says the same thing site by site: the
+> phone's four files hold **seven** references and **not one** is an install — `ConPlatformDxe`
+> `LocateDevicePath` at `0x2584`, and a `LocateHandleBuffer`/`HandleProtocol` pair each in `BdsDxe`
+> (`0xa920`, `0xa950`), `BootManagerMenuApp` (`0x9950`, `0x9980`) and `MsBootPolicy` (`0x8dc8`,
+> `0x8df8`), i.e. the BDS, the boot menu and the boot policy each enumerating PCI handles for a
+> device list. So the sharper form of this section's claim is available now: the phone's payload does
+> not merely lack a producer, it **asks for a PCI handle seven times and cannot answer once.** In
+> `usb-host`'s volume the same four files are there with exactly **one** producer added —
+> `XhciPciEmulation`'s `InstallMultipleProtocolInterfaces` of `PciIo` beside a
+> `EFI_DEVICE_PATH_PROTOCOL_GUID` at `0x187c` — with `XhciDxe` around it in the standard binding
+> shape (`OpenProtocol` at `0x1500`/`0x17f0`/`0x1bbc`, `CloseProtocol` at `0x1488`/`0x1564`, and a
+> close-and-uninstall of its own `PciIo` at `0x18e8`/`0x1918` when the emulated device is stopped).
+> So item 3's USB-stick half rests on a pair this plan added that is **complete on both sides by
+> construction**: one file fabricates the PCI device, one binds to it. Second, **the open question
+> this section has carried since 4.105 is closed**: 4.105 narrowed the publisher `UsbInitDxe`'s
+> depex waits on to `UsbfnDwc3Dxe` or `UsbConfigDxe` and left "whether either candidate installs it"
+> open; disassembled, `UsbConfigDxe` installs `E722B03F-B250-42CE-8EBD-5BD51812D037` at `0x3aa4`,
+> `0x517c` and `0x52c8` and `UsbfnDwc3Dxe` only opens and closes it — so the publisher is the
+> depex-less file promoted in the first round and the waiter is the depexed one judged in the second,
+> and the affirmative ordering 4.105 hoped for is the measured one. The same pass found where the
+> XHCI pair comes from: the five USB `PE32` sections in `usb-host`'s volume are each byte-identical
+> to one prebuilt under `Binaries/`, `UsbConfigDxe` and `UsbfnDwc3Dxe` to gauguin's and `XhciDxe`,
+> `XhciPciEmulationDxe` and `UsbInitDxe` to bitra's, and `Binaries/gauguin/QcomPkg/Drivers` has none
+> of those three — which is why the phone's volume carries neither XHCI file nor `UsbInitDxe`, and
+> why `UsbConfigDxe`'s publisher has no consumer there. The instrument is `tools/guid-refs.py`, new
+> here, which resolves the `ADRP`+`ADD` pair that materialises a GUID's address and reads which
+> `EFI_BOOT_SERVICES` slot the register is handed to — the slot, not the presence, is the answer, and
+> an install slot versus `LocateProtocol`/`OpenProtocol` is what separates a publisher from a
+> consumer. A call site is a fact about the binary, not about the run: nothing here says any of these
+> paths is reached on the device, and the phone payload's park inside `ClockDxe`'s `CpuDeadLoop`
+> (4.164) sits upstream of all of them. See `docs/08` step 4.168.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

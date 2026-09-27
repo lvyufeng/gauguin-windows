@@ -3167,6 +3167,46 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > instances anywhere are `PciHostBridgeLibNull` (`A19A6C36-7053-4E2C-8BD0-E8286230E473`) and a
 > GoogleTest mock, so the library half is new code for a bus no other part of this firmware expects
 > to exist. See `docs/08` step 4.167.
+>
+> **Read from the code 2026-09-27 by step 4.168 — the "carrier is not a consumer" paragraph above is
+> now a table of call sites, and the inference holds site by site.** The four `PciIo` files in the
+> phone's volume hold seven references between them and **none of the seven is an install**:
+> `ConPlatformDxe` `0x2584` `LocateDevicePath`; `BdsDxe` `0xa920` `LocateHandleBuffer` and `0xa950`
+> `HandleProtocol`; `BootManagerMenuApp` `0x9950` and `0x9980`, the same pair; `MsBootPolicy`
+> `0x8dc8` and `0x8df8`, the same pair. Three copies of one shape — a `LocateHandleBuffer` walk
+> followed by a `HandleProtocol` open — which is a BDS-side enumeration of PCI handles, and is why
+> this volume contains `PciIo` at all. `usb-host`'s volume carries those seven plus `XhciDxe`'s five
+> (`OpenProtocol` at `0x1500`, `0x17f0`, `0x1bbc`; `CloseProtocol` at `0x1488`, `0x1564`) plus
+> exactly **one publisher**: `XhciPciEmulation` `0x187c`
+> `InstallMultipleProtocolInterfaces` of `PciIo` with `x3 = &EFI_DEVICE_PATH_PROTOCOL_GUID`, the
+> emulated device and its path installed in one call — and that file also closes and uninstalls its
+> own `PciIo` at `0x18e8` and `0x1918` when it is stopped, which is the emulated-device life cycle
+> and not a second producer. A sixth `XhciDxe` site at `0xb884` is listed as a
+> `CloseProtocol` whose printed `x1` is `EFI_USB2_HC_PROTOCOL_GUID` while the instruction before the
+> call overwrites `x1` with a table load, so that one row's slot attribution is a hint and is
+> recorded as one rather than counted. Second, the GUID no header in the tree defines —
+> `E722B03F-B250-42CE-8EBD-5BD51812D037`, the term of `UsbInitDxe`'s 18-byte shipped depex — is
+> **published by `UsbConfigDxe`** at `0x3aa4`, `0x517c` and `0x52c8` and only consumed by
+> `UsbfnDwc3Dxe` (`CloseProtocol` `0x14c0`, `0x1928`; `OpenProtocol` `0x1518`, `0x1ba4`),
+> `XhciPciEmulation` (`0x1488`/`0x14e0`/`0x19e0`), `XhciDxe` (`LocateProtocol` `0x1960`) and
+> `UsbInitDxe` itself (`LocateProtocol` `0x17c4`, the call behind its depex) — which settles 4.105's
+> "whether either candidate installs it" in the affirmative, and matches
+> `UsbfnDwc3Dxe`'s own role: it *publishes* `EFI_USBFN_IO_PROTOCOL_GUID` (`32D2963A-…`,
+> `InstallMultipleProtocolInterfaces` at `0x19cc`, located by `UsbMsdDxe` `0x1acc` and
+> `UsbDeviceDxe` `0x1f2c`) and consumes this one. Third, provenance: every USB `PE32` section in that
+> volume is byte-identical to exactly one prebuilt under `Binaries/` — `UsbConfigDxe` (77,824 B,
+> `6943cc615f7d4ba5…`) and `UsbfnDwc3Dxe` (106,496 B, `ed77c506995b6d2b…`) to
+> `Binaries/gauguin/QcomPkg/Drivers/…`, `XhciDxe` (94,208 B, `d579eaa0c1238b7d…`),
+> `XhciPciEmulationDxe` (45,056 B, `68ee8cf1f8412b1b…`) and `UsbInitDxe` (32,768 B,
+> `bb95fcb96d990104…`) to `Binaries/bitra/QcomPkg/Drivers/…` — and gauguin's `Drivers` directory has
+> no `XhciDxe`, no `XhciPciEmulationDxe` and no `UsbInitDxe` at all, which is why the XHCI path on
+> this platform is bitra's binaries on a gauguin build and why the phone's volume has neither. On the
+> last claim above, `XhciDxe` is `MdeModulePkg/Bus/Pci/XhciDxe`'s `FILE_GUID` on a binary whose
+> behaviour is not that module's: the tree's source for it contains no `LocateProtocol` call at all,
+> so the shipped binary's `E722B03F` locate is Qualcomm's addition. The instrument is
+> `tools/guid-refs.py`, new here — it extracts each `EFI_SECTION_PE32` (0x10) carrying the GUID,
+> disassembles it, resolves the `ADRP`+`ADD` pair that materialises the GUID's address and reads the
+> `EFI_BOOT_SERVICES` slot the register is handed to. See `docs/08` step 4.168.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
