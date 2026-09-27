@@ -161,6 +161,19 @@ at the end.
 | `fsg` | 8 MB | 16,908,288 | modem filesystem golden copy |
 | `fsc` | 1 MB | 25,296,896 | modem file system cache |
 
+### `boot` holds firmware, and 128 MB is why Windows arrives on a stick
+
+`boot` is the one partition the standing relaxation allows writing, and what it is written
+*with* is the UEFI payload — the `fastboot flash boot` image, 1,171,456 B at Step 4.155.
+It is 128 MB, so it cannot also hold an OS: the smallest Microsoft-signed ARM64 Windows
+image obtainable is the WinRE at 446,983,676 B, and with the ESP that boots it the medium is
+481,626,167 B. Measured against this table, `boot`, `recovery` and `rawdump` (128 MB) miss by
+325 MiB, `minidump` (96 MB) by 357, `cache` and `exaid` (384 MB) by 69, and the only two that
+fit are `super` — the installed ROM, whose loss is unrecoverable — and `userdata`. So the
+Windows media is external by design and is booted from a USB stick, which is why the UEFI's
+USB host stack is a P3 item and not a later nicety. The medium itself is built by
+`tools/p3-medium-build.sh`; see `docs/08-device-session.md`, Step 4.155, for the numbers.
+
 ## Restoring
 
 The small-LUN dumps are byte-exact images including their partition tables, so a raw write

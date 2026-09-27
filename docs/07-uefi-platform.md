@@ -2719,6 +2719,33 @@ and nothing in it needs the vendor package — which is the point, because the g
 platform reach a Windows that can see UFS", and the media's own answer to `QCOM24A5` is
 already yes.
 
+**Step 4.155 asked where that medium lives, and the answer puts the USB host stack inside the
+P3 gate rather than after it.** `boot` — the only partition the standing relaxation allows
+writing — is **128 MiB** and holds the *firmware*, the `fastboot flash boot` payload that is
+currently 1,171,456 B. The smallest Microsoft-signed ARM64 Windows image obtainable is the
+WinRE at 446,983,676 B LZX, and the ESP that boots it is another 34,642,491 B, so the medium
+is 481,626,167 B and the partition table has nowhere to put it: `boot`, `recovery` and
+`rawdump` at 128 MiB miss by 325 MiB, `minidump` at 96 by 357, `cache` and `exaid` at 384 by
+69, and the two that fit are `super` (the installed ROM, unrecoverable) and `userdata` (off
+limits). Stripping does not rescue it either: image 2 applied is 1,565,170,844 B with
+`Windows/System32` at 933 M and `Windows/WinSxS` at 364 M before compression, and LZX runs
+2.8:1 on the deduplicated data, so a stripped PE lands around 250–300 MiB. So a P3 that
+reaches BDS without a working XHCI host has reached a menu with nothing on it, and `UsbBusDxe`
+— item 2 above — is on the critical path for the gate itself.
+
+The medium is built by `tools/p3-medium-build.sh`: image 1's EFI tree, image 2 exported as
+`\sources\boot.wim`, the four paths the BCD names checked against what was written, and
+nothing edited — image 2's own `winpeshl.ini` runs `recenv.exe`, so what boots is unmodified
+Microsoft Recovery, deliberately, because a GUI on the panel is a stronger visible signal
+than a shell and proving stock media boots is a cleaner result than proving an edited image
+does. The tree is 51 files and 481,626,167 B (459.3 MiB), built in 51 s. Two traps are
+recorded in the tool because both cost time here: the `--ref` list must be `*.esd`/`*.wim`
+only, since a glob reaching the set's `.cab` files fails with "Invalid magic characters in
+header" and reads like a corrupt download; and `wimlib-imagex export` is not byte-
+reproducible — two builds agreeing in every field `info` reports and in `dir`'s complete
+listing still differ in sha256 because the WIM GUID is regenerated, so a hash of `boot.wim`
+fingerprints the build and not the content.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

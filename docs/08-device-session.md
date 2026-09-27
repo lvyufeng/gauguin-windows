@@ -31319,3 +31319,120 @@ untouched; the extractions went to `/tmp/p3boot` and `/tmp/winre-infs` and are b
 device state. The porting goal is unchanged and unmet, with P3 unfinished, P4's
 `userdata`-destroying install and P5's peripherals not begun, and the end state still a Windows
 tablet whose modem and cameras are undrivable.
+
+## Step 4.155 — the P3 medium is a USB stick, not a partition: `boot` is 128 MiB and holds the *firmware*, the smallest Microsoft-signed ARM64 Windows image is 426.3 MiB, and of the whole partition table nothing inside the standing relaxation could ever have held one — so `UsbBusDxe` is P3 work and not a P5 nicety, and the medium is now built
+
+Step 4.154 ended with a medium that resolved to image 1's EFI tree plus image 2 written out
+as `\sources\boot.wim`. It did not ask where that medium is supposed to *live*, and the
+answer changes what P3 is. `boot` — the one partition the standing relaxation allows writing
+— is **128 MiB** (`docs/02-partitions.md`: `sde`, 128 MB, byte offset 667,574,272) and holds
+the *firmware*: the payload the platform's own tooling builds and `fastboot flash boot`
+writes, currently `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` at 1,171,456 B. It has
+never held an OS image in this port and cannot.
+
+The arithmetic against the partition table, once the sizes are known:
+
+    ARM64 WinRE, LZX-compressed, verified            446,983,676 B    426.3 MiB
+    the ESP that boots it (loader, BCD, fonts)        34,642,491 B     33.0 MiB
+    assembled medium                                 481,626,167 B    459.3 MiB
+
+     boot       128 MiB   too small by 325 MiB
+     recovery   128 MiB   too small by 325 MiB
+     rawdump    128 MiB   too small by 325 MiB
+     minidump    96 MiB   too small by 357 MiB
+     cache      384 MiB   too small by  69 MiB
+     exaid      384 MiB   too small by  69 MiB
+     cust     1,000 MiB   fits
+     super    8,704 MiB   fits, and is the installed ROM
+     userdata   107 GB    fits, and is off limits
+
+So no medium fits beside the firmware in the one partition that is writable, and the two
+partitions big enough are the ROM (unrecoverable) and `userdata` (untouchable). The medium
+was never going to be internal. That is the design, not a workaround: on this class of port
+Windows arrives on a USB stick, which is why the UEFI's own USB host stack — `UsbBusDxe`,
+P3 item 2 — is on the critical path for the gate rather than a peripheral for later. A P3
+that reaches BDS without a working XHCI host has reached a menu with nothing on it.
+
+The size profile, measured by applying image 2 rather than estimating it, because "strip it
+smaller" is the obvious idea and it does not survive contact with the numbers. Applied, the
+WinRE filesystem is 1,565,170,844 B (1.46 GiB) — well under its 2,765,776,494 B of file data
+because 1,200,605,650 B of that is hard links materialised once. Where it sits:
+
+    Windows/System32        933 M     (drivers 64, wbem 48, config 33, DriverStore 16 …)
+    Windows/WinSxS          364 M
+    Windows/Boot             61 M
+    Windows/Fonts            46 M
+    Windows/SystemResources  35 M
+    Windows/Globalization    34 M
+    Windows/servicing        19 M
+    Windows/Speech           15 M
+    Windows/UUS              11 M
+    Windows/SysWOW64         11 M
+    Windows/INF             5.6 M
+
+Dropping WinSxS, the DVD/PXE templates, Fonts, Globalization, Speech, UUS, SysWOW64 and
+every one of those would still leave `System32` plus `drivers` plus `config` in the
+hundreds of MiB before compression, and LZX on this image runs about 2.8:1 on deduplicated
+data (1,211 MiB of file data to 426 MiB). A stripped WinPE might reach 250-300 MiB. 128 MiB
+is not reachable by stripping, only by a hand-built PE with a file list nobody here has,
+and an ARM64 ADK is not on this host to supply one. The full-image medium is also the more
+honest test: if it boots, it is Microsoft's own bytes that booted.
+
+Two build measurements worth keeping. `wimlib-imagex apply` gives **274,582,934 B for image
+1** and 1,565,170,844 B for image 2; `export … 2 --compress=LZX --boot` gives a
+446,983,676 B `boot.wim` that `verify` reports clean. And **`export` is not
+byte-reproducible**: two builds of the same image in the same session agree in every field
+`info` reports — size, chunk size, boot index, image name, 3,518 directories, 17,406 files,
+2,765,776,494 total bytes, 1,200,605,650 hard-link bytes — and in `dir`'s complete listing,
+and differ in the on-disk sha256 (`5cf7ddfab661f5f0b5c5bb38778518df2495bba4263a619a05363e5caeb896f9`
+against `617d172537db2cfe1da93d1179847a85057ec85226788322aab87386ab0aba5d`) because the WIM
+GUID is regenerated per run. A hash of `boot.wim` is a fingerprint of the build, not of the
+content, and a future session comparing hashes across two sessions will find them different
+and be wrong about why.
+
+`tools/p3-medium-build.sh` is the recipe, run end to end in 51 s. It applies image 1, exports
+image 2, lays out the stick's FAT32 root, and then checks the four paths the BCD names —
+`BOOT/BOOT.SDI`, `SOURCES/BOOT.WIM`, `EFI/BOOT/BOOTAA64.EFI`, `EFI/MICROSOFT/BOOT/BCD` —
+against what it wrote, because a medium missing one of those boots to a hex status on the
+panel and that is a worse afternoon than a failed check. Two traps are in its header because
+both cost time here: the ref list must be `*.esd`/`*.wim` only, since a glob that also
+matches the set's `.cab` files dies with "Invalid magic characters in header" and reads like
+a corrupt download; and the loader slot on ARM64 is `BOOTAA64.EFI`, a name whose obvious
+analogue `bootarm64.efi` exists in none of the three images. The tree it builds is identical
+to the hand-assembled one in paths, sizes and content — 51 files, 481,626,167 B — the only
+difference being the WIM GUID above.
+
+One design choice, deliberately made and worth stating so it is not mistaken for an
+oversight: **`winpeshl.ini` is not overridden.** Image 2's own 53-byte copy runs
+`X:\sources\recovery\recenv.exe`, so the stock image brings up Recovery rather than a prompt,
+and for this gate that is the better target — a GUI on the panel is a stronger visible signal
+than a shell, Recovery's own command prompt is where a UFS check would be typed, and proving
+that *unmodified* Microsoft media boots is a cleaner result than proving that an image this
+port edited boots. A prompt-first variant is one `winpeshl.ini` update away and is not built.
+
+What the device window reads, and it is three outcomes rather than two: the recovery UI means
+the platform reached BDS, loaded an ARM64 PE, started the kernel and brought up a session
+whose own driver set binds `ACPI\QCOM24A5` — the P3 gate's first half, answered. A Windows
+Boot Manager error screen means `bootaa64.efi` ran and the BCD parsed, so handoff succeeded
+and the failure is downstream of it. A blank panel means the failure is upstream and the
+medium is not implicated, so the next step is the firmware in `boot` and not the stick. The
+stick needs a FAT32 filesystem and no boot code: the UEFI specification's removable-media
+path is a file lookup, not a boot sector, so there is no MBR to install and no `bootsect` to
+run.
+
+Left open: the sticky question from Step 4.154 — whether the stock Setup-Media BCD boots a
+*substituted* `boot.wim` unchanged — which the first device window answers rather than
+anything here; the `winpeshl.ini` fallback, still documented and not measured; whether a
+1 GB stick is enough in practice once FAT32 overhead is counted; `UrsSynopsys.sys`'s child
+naming, `ExcludeFromSelect` and the `*<PNP-id>` position carried from 4.153; and the P2 gate,
+which is where the next device window starts.
+
+Not an action: no device was touched, nothing was flashed, no partition was written, no stub
+or firmware source was changed and no Microsoft image was modified. No QEMU run, no probe and
+no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB
+device is present. `userdata`, the partition table and the firmware LUN remain untouched. The
+medium was written to `~/work/woa-ref/p3-medium/` and `~/work/woa-ref/p3-medium-built/` and
+is a build input, not device state; no stick has been written and the operator writes it. The
+porting goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying install
+and P5's peripherals not begun, and the end state still a Windows tablet whose modem and
+cameras are undrivable.

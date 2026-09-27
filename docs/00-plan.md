@@ -462,7 +462,7 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153 and 4.154): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154 and 4.155): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the
@@ -555,6 +555,27 @@ earlier reading that booting the installer would leave `URS0` unbound does not t
 also carries `diskpart.exe`, `Dism.exe` and `bcdboot.exe`, so Microsoft-signed files alone can
 partition, format, apply and re-boot, and the only non-Microsoft byte a P3 medium needs is a
 two-line `winpeshl.ini` — image 2's own 53-byte copy starts `recenv.exe`, not a prompt.
+Step 4.155 then asked where that medium is supposed to *live*, and the answer makes the USB host
+stack part of the gate rather than a peripheral. `boot`, the one partition the standing relaxation
+allows writing, is **128 MiB** and holds the firmware — the `fastboot flash boot` payload, currently
+1,171,456 B — so no OS image has ever been able to sit there beside it. Against the partition table
+the smallest Microsoft-signed ARM64 Windows image, the WinRE at 446,983,676 B LZX, plus the
+34,642,491 B ESP that boots it, is 481,626,167 B: `boot`, `recovery` and `rawdump` at 128 MiB miss by
+325 MiB, `minidump` at 96 by 357, `cache` and `exaid` at 384 by 69, and the only two large enough are
+`super` (the installed ROM, unrecoverable) and `userdata` (off limits). So the medium is external by
+design, which is why `UsbBusDxe` is P3 item 2: a BDS without a working XHCI host has reached a menu
+with nothing on it. The size profile says stripping was never an option either — applying image 2
+gives 1,565,170,844 B, of which `System32` is 933 M and `WinSxS` 364 M before any compression, and
+LZX runs 2.8:1 on the deduplicated data, so a stripped PE might reach 250–300 MiB and 128 MiB is
+reachable only by a hand-built PE with a file list no ARM64 ADK on this host can supply. The medium
+is built by `tools/p3-medium-build.sh` (51 s end to end) and is 51 files of unmodified Microsoft
+bytes; the device window reads three outcomes rather than two — the recovery UI means the kernel
+booted with a driver set that binds `ACPI\QCOM24A5` and the gate's first half is answered, a Boot
+Manager error means handoff succeeded and the failure is downstream, and a blank panel means the
+failure is upstream and the stick is not implicated. Its one recorded trap beyond the layout:
+`wimlib-imagex export` is not byte-reproducible, so two builds agreeing in every reported field and
+in the full file listing still differ in sha256 — a hash of `boot.wim` fingerprints the build, not
+the content.
 Buttons are written as of Step 4.89 (`BTNS`, `ACPI0011`), the node that needed
 no shipped driver at all because the operating system supplies it, and the USB port is written
 as of Step 4.90 — the `RHUB`/`PRT1` pair under each of `URS0`'s two children, the node that
