@@ -32175,3 +32175,274 @@ and its only delta from the two runs of step 4.158 is the third loader line. `us
 partition table and the firmware LUN remain untouched. The porting goal is unchanged and unmet,
 with P3 unfinished, P4's `userdata`-destroying install and P5's peripherals not begun, and the end
 state still a Windows tablet whose modem and cameras are undrivable.
+
+## Step 4.160 — `ClockDriver.c +260` is an assert over five exits and the one that reads the clock controller cannot fire: `Clock_InitTarget` returns `0xfffffffd` from five places that print the same line, its only hardware reads are `0xa93c`'s `0x18321110`-family probes, and each probe returns 1 on every argument that function passes it — so this wall is the driver's own data and not the machine, and `X30` at RVA `0xa7b4` is what separates the five
+
+Step 4.159 closed with one question — whether `ClockDriver.c +260` is "a checkable state or another
+unpassable one, which needs the disassembly step 4.139 began and not another panel". This step does
+that disassembly, and it goes **inside** `Clock_InitTarget` rather than up to it, which 4.139 did.
+The answer is neither of the two the question offered. Line 260 is a **block** assert: five distinct
+failure exits inside `Clock_InitTarget` return the same `0xfffffffd`, are logged by the same block
+at `0x2ba0`-`0x2bf4`, and print the same `ASSERT ClockDriver.c +260: 0`. And the exit the panel
+invites a reader to blame — the one that reads the clock-controller registers this QEMU machine
+zeroes — **provably cannot fire**, because its two probes return 1 on every argument `0xa93c` ever
+passes them. So the wall is in the driver's own tables, in the same family as `EnvDxe`'s SMEM word
+and `PdcDxe`'s capacity word, and this machine's absent clock controller is not what fails.
+
+The image is the one step 4.139 identified and hashed: `Binaries/gauguin/QcomPkg/Drivers/ClockDxe/
+ClockDxe.efi`, 192,512 B, sha256 `c200d38eb3224b31354912947f93eacf238c9d18897cc9fd03c821b677da329d`,
+`.text` `0x1000`-`0x1d000`, `.data` `0x1d000`-`0x2d000`, raw pointer equal to VA in every section.
+Every address below is an RVA in that file.
+
+### The row above the assert is `DebugLib`'s, not the driver's status
+
+4.159 read the row
+
+```
+Clock_DriverInitERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1A-8A82-677A683B0D29
+```
+
+as the driver reporting a failure and then asserting. Half of that is wrong, and the half that is
+wrong is the half that looked most informative. The format string is
+`SerialStatusCodeWorker.c:84`, `"ERROR: C%08x:V%08x I%x"` over `CodeType`, `Value`, `Instance` — the
+same file and the same pool the string was located in at `0x792a9` of the inflated FV. Against
+`MdePkg/Include/Pi/PiStatusCode.h` the two fields decode exactly:
+
+| field | value | meaning |
+|---|---|---|
+| `CodeType` | `0x90000002` | `EFI_ERROR_UNRECOVERED (0x90000000)` \| `EFI_ERROR_CODE (0x00000002)` |
+| `Value` | `0x03000007` | `EFI_SOFTWARE (0x03000000)` \| `EFI_SW_EC_ILLEGAL_SOFTWARE_STATE (0x00000007)` |
+| `Instance` | `0` | — |
+| caller id | `4DB5DEA6-…` | the asserting module's `gEfiCallerIdGuid` |
+
+and the emitter is `DebugAssert` itself. `0x8124` is `DebugAssert(FileName, LineNumber,
+Description)` — `mov x21, x0` / `mov x20, x1` / `mov x19, x2`, the same prologue 4.139 read out of
+`PdcDxe` — and its body hardcodes the report:
+
+```
+8160: mov  w0, #0x2
+8164: mov  w1, #0x7
+8168: movk w0, #0x9000, lsl #16      ; w0 = 0x90000002
+816c: movk w1, #0x300, lsl #16       ; w1 = 0x03000007
+8170: bl   0xff18                    ; ReportStatusCode-with-this-module's-caller-id
+```
+
+`0xff18` is a four-instruction thunk that loads `&gEfiCallerIdGuid` out of `.data` at `0x1d018`
+into `x3`, zeroes `x2` and `x4`, and tail-calls the reporter at `0xfe2c`. It is the **only**
+reference to `0x1d018` in the image, and `0xff18` is called from exactly one place, `0x8170`. So
+`4DB5DEA6-5302-4D1A-8A82-677A683B0D29` is not a name the driver chooses at the failure; it is the
+module identity `DebugLib` stamps on every status code it reports, and it proves `ClockDxe`'s
+`gEfiCallerIdGuid` by use rather than by inference from an INF elsewhere in the tree.
+
+The consequence for the record: the two codes are **constants of the assert path**, which is why
+step 4.158's run and step 4.159's run — a `RpmhDxe` failure and a `ClockDxe` failure, in different
+modules at different sites — carry byte-identical `C90000002:V03000007 I0` and differ only in the
+GUID. The row's only content is the caller id. It never said what failed, in either run, and
+4.159's step title calls it "the driver's own assert" correctly while the row itself carries no
+description of the failure at all.
+
+The `Clock_DriverInit` prefix on the same line is a separate print and not part of the report: each
+of the five blocks calls `0x8020` with `x0 = 0x80000000` (`DEBUG_ERROR`) and `x1 = 0x131b5`
+(`Clock_DriverInit`, no newline) *before* it calls `DebugAssert`, so the banner and the status-code
+row share a line by construction. `DebugAssert` then formats its own text with `AsciiSPrint` at
+`0x6ca4` against `0x14592` — `"ASSERT %a +%d: %a\n"` — giving `ASSERT ClockDriver.c +260: 0` from
+the three literals `0x131c6`, `260`, `0x131d4`. That format is **not** `MdePkg`'s
+`"ASSERT [%a] %a(%d): %a\n"` (`Mu_Basecore/MdePkg/Library/BaseDebugLibSerialPort/DebugLib.c:222`),
+and the file with ` +%d` is in no source in this tree: the vendor's `DebugLib` is a different
+implementation, which is why its two status constants had to be decoded from the PI headers instead
+of read off a source line.
+
+### The five-block gate, named by its own strings
+
+`ClockDxe`'s init function at `0x28d0` runs five checks in order, and each failing one logs a fatal
+string and then asserts at its own line. The mapping is by string and not by offset — the fatal-log
+strings are `DALSYS_LOGEVENT_FATAL_ERROR: <name> failed.` and each is the `x3` of the `bl 0xbf48`
+in its own block:
+
+| block | `bl` site | helper | line | fatal-log string | what the helper is |
+|---|---|---|---|---|---|
+| 1 | `0x2918` | `0x92a8` | 145 | `…DALSYS_SyncCreate failed.` (`0x1317e`) | DAL sync-object create through the DAL function table |
+| 2 | `0x2a44` | `0x2f6c` | 199 | `…Clock_InitBases failed.` (`0x13214`) | `Clock_InitBases`, conditional on `[x19+106] != 0` |
+| 3 | `0x2b0c` | `0x6b9c` | 232 | `…Clock_InitVoltage failed.` (`0x13249`) | `Clock_InitVoltage` |
+| 4 | `0x2ba4` | `0xa75c` | **260** | `…Clock_InitTarget failed.` (`0x13280`) | `Clock_InitTarget` — the wall |
+| 5 | `0x2c00` | `0x31f4` | 275 | `…Clock_InitNPA failed.` (`0x132b6`) | `Clock_InitNPA` |
+
+Blocks 1 through 4 therefore **passed** in the 4.159 run: the DAL sync object was created, the
+rail-config walk completed, and the driver entered `Clock_InitTarget`. Block 5 was not reached.
+Two of the four passed checks are worth naming because they are the two that resolve vendor data,
+and both resolved:
+
+- **Block 3, `Clock_InitVoltage` (`0x6b9c`), is the rail-config walk.** It iterates the driver's
+  rail list (`[x19]` → `[+16]` array, `[+24]` count) and for each entry calls `0xad18` on the
+  entry's name with the entry's `+220` as the out-word. `0xad18` loads a table at `0x1561c` —
+  the DAL property named `ClockRailConfig` — and returns `-41` (`0xffffffd7`) if an entry slot is
+  empty, `-24` on a NULL argument, and `0` with the resolved index on a match. When it fails,
+  `0x6b9c` logs `0x13b0b`, which is `DALSYS_LOGEVENT_FATAL_ERROR: Unable to determine default boot
+  voltage for %s.` That string did not print and line 232 did not assert, so **every rail's default
+  boot voltage resolved on this machine, out of the driver's own `ClockRailConfig`.** The DAL
+  config database is live here; that is no longer an open question.
+- **Block 1's helper is a DAL dispatch and not a device read.** `0x92a8` takes a global DAL
+  interface at `0x2be40`, dereferences `[+16]`, and tail-branches to `[+88]`; if the interface is
+  NULL it returns `-1`. It succeeded, so that interface is populated.
+
+The three strings `…Clock_InitVoltage failed.`, `…Clock_InitTarget failed.` and `…Clock_InitNPA
+failed.` are adjacent at `0x13249`-`0x132b6`, which is why 4.159 could quote the cluster and still
+not know which member it was looking at: the run's own assert line (260) is the only thing that
+selects one, and it selects it correctly.
+
+### Inside `Clock_InitTarget`: five exits, one message
+
+`0xa75c` writes its result block pointer into `[x19+96]` — `0x2be98`, a zeroed `.data` region in
+this image, which is scratch rather than a table: every qword from `0x2be98` to `0x2bf38` is `0` in
+the file and is filled at run time. It then calls `0xaaa4`, fills three 16-byte domain descriptors
+at `0x2bea0`/`0x2bf00`/`0x2bf60`, and runs the steps below. **Every failure exit sets `w0 =
+0xfffffffd` and jumps to the same epilogue at `0xa7b4`**, so the caller at `0x2ba4` cannot tell
+them apart, and neither can the assert:
+
+| # | exit site | gated on | helper | the helper's own failure |
+|---|---|---|---|---|
+| 1 | `0xa7b0 cbz w0, 0xa7cc` | `0xa93c` returns non-zero | `0xa93c` | **unreachable** — see below |
+| 2 | `0xa7f4 cbnz w0, 0xa7b4` | `0x33d8` returns non-zero | `0x33d8` | `-41`: the domain's name is absent from the driver's own table |
+| 3 | `0xa804 cbz x0, 0xa7b4` | `0x3468` returns NULL | `0x3468` | the tagged index it was handed is out of range |
+| 4 | `0xa888 cbnz w0, 0xa7b4` | `0xb348(0, …)` returns non-zero | `0xb348` | `0xb8f0` fails inside it, `-1` from `0xb3e4` |
+| 5 | `0xa898 cbnz w0, 0xa7b4` | `0xb348(2, …)` returns non-zero | `0xb348` | as above |
+
+Exits 2 and 3 are one lookup in two halves: `0x33d8` takes a name, walks the context's table
+(`[ctx]` → `[+32]`), which is an array of `0x60`-stride entries with count `[+40]`, and ASCII-compares
+each entry's first qword against the name with `0x9cc8`; on a match it returns `0` and writes `index
+| 0x10000` to the out-pointer. `0x3468` then tests exactly that `0x10000` tag
+(`and x8, x1, #0xffff0000; cmp x8, #0x10, lsl #12`) and masks it back off to index the same table,
+returning the entry pointer or NULL. Exits 4 and 5 are the same call for two different domains:
+`0xb348` re-fetches the driver context through `0x1cc0`, reads its `[+96]` — the same slot
+`Clock_InitTarget` just wrote — and either early-outs with `0x11e1a300` (300,000,000 Hz, the same
+constant the frequency pass below uses as its default) when the global at `0x2c398` is non-zero, or
+calls `0xb8f0` and, when that succeeds, reads a rate out of a table indexed by its out-value.
+
+### The exit that reads the clock controller cannot fire
+
+`0xa93c` is the only part of `Clock_InitTarget` that touches hardware, and it is unreachable as a
+failure. It loops `x20 = 0..2` (three clock domains, guard `cmp x20, #0x2; b.ls`) and inside, `x21 =
+0..0x27` (forty clocks, guard `cmp x21, #0x27; b.hi 0xa9d8`), calling `0xb9cc` and then `0xba88`.
+Those two are register readers, and this is what they read:
+
+| domain | `0xb9cc` reads | `0xba88` reads | extracts |
+|---|---|---|---|
+| 0 | `0x18321110 + index*32 + 0x2000` | `0x18321114 + index*32 + 0x2000` | `[31:30]` and `[7:0]`; `[11:0]` |
+| 1 | `0x18325910 + index*32` | `0x18325914 + index*32` | as above |
+| 2 | `0x18321110 + index*32` | `0x18321114 + index*32` | as above |
+
+so six register bases in all: `0x18321110`, `0x18321114`, `0x18323110`, `0x18323114`, `0x18325910`,
+`0x18325914`. On this machine those addresses are inside the EL3 stub's 4 GB identity map, so they
+are plain zeroed RAM and read `0` — which is exactly the reading step 4.159's text invites a reader
+to blame for the assert, and it is wrong. Look at what the readers do with the value: they store it
+into the caller's out-words (`0xb900004b`-style `str wN, [x2]`, `str wN, [x3]`) and return; they
+**never test it**. Every value path sets `w0 = 1`:
+
+```
+ba10: orr w0, wzr, #0x1      ; domain 0, 0xb9cc
+ba34: orr w0, wzr, #0x1      ; domain 1
+ba60: orr w0, wzr, #0x1      ; domain 2
+bac8/bae0/bb00: orr w0, wzr, #0x1   ; 0xba88, all three domains
+```
+
+The only `w0 = 0` returns are the argument guards, and they are the whole of `0xb9cc`'s and
+`0xba88`'s heads:
+
+```
+b9d4: cmp w8, #0x2
+b9d8: b.hi 0xba50            ; domain out of range   -> return 0
+b9dc: cmp w1, #0x27
+b9e0: b.hi 0xba50            ; index out of range    -> return 0
+b9e4: cbz x2, 0xba50         ; NULL out-pointer      -> return 0
+b9e8: cbz x3, 0xba50         ; NULL out-pointer      -> return 0
+```
+
+and `0xa93c` passes only valid arguments: `w0 = w20` is `0`, `1` or `2` by its own loop guard; `w1 =
+w21` is at most `0x27` by its own loop guard; `x2 = x22+8` and `x3 = x22+4` (or `x2 = x22` for
+`0xba88`) point into `.data` at `0x1d5e8 + domain*0x1e0 + index*0xc` and are never NULL. So both
+probes return `1` on **every one of the 120 iterations**, the two exits to the failure epilogue at
+`0xa9b0` and `0xa9d4` are never taken, and `0xa93c` always reaches `0xaa80` and returns `0`. Exit 1
+of `Clock_InitTarget` is an argument-validation guard with no reachable trigger.
+
+That is the answer to 4.139's "why `Clock_InitTarget` fails". It is not the machine: the driver
+reads six clock-controller register bases, gets zeros, writes those zeros into its own clocks table,
+and **cannot** fail on them. What the zeros do change is the frequency pass after the probe, which
+computes each clock's rate from the table and falls back to `0x11e1a300` = 300 MHz through a `csel`
+when a per-clock flag is zero — the identical constant `0xb348` early-outs with. Whether exits 4 or
+5 then fail *because* every rate collapsed to that default is a hypothesis this image does not
+settle, and it is falsifiable in one run.
+
+### What this buys, and what is still wall
+
+What it buys is a way to name the wall's cause without guessing at firmware behaviour, because the
+five exits leave different evidence and the evidence is a single register. All five converge on the
+same three instructions, so at the moment the CPU is there, `X30` still holds the return address of
+the `bl` that returned into the branch that jumped:
+
+| exit | `X30` at `0xa7b4` | the `bl` it came from |
+|---|---|---|
+| 1 | `0xa7b0` | `bl 0xa93c` (unreachable) |
+| 2 | `0xa7f4` | `bl 0x33d8` |
+| 3 | `0xa804` | `bl 0x3468` |
+| 4 | `0xa888` | `bl 0xb348` for domain 0 |
+| 5 | `0xa898` | `bl 0xb348` for domain 2 |
+
+So one breakpoint at RVA `0xa7b4` with `X30` read out separates all five, and the probe harness
+step 4.139 built already captures registers at an RVA. That is the next instrument, and it is
+cheaper than any of the five seeds before it: it needs no new loader line, only a second capture
+point. Without it, all this step's disassembly can say is that the wall is one of `0xa7f4`,
+`0xa804`, `0xa888`, `0xa898` — a lookup that is missing a name, a lookup whose index is out of
+range, or one of two rate lookups — which is already much narrower than "a driver assert", and much
+more specific than the panel could ever be: the panel's three reported facts (`Clock_DriverInit`,
+the constant `ERROR:` row, and the file and line) are **identical for all five exits**.
+
+There is one further thing this step establishes by omission. Exit 1 is the only member of
+`Clock_InitTarget` that reads the machine, and it cannot fire; exits 2 through 5 read only the
+driver's own context, its own `.data` and its own DAL tables. Combined with block 3's
+`ClockRailConfig` lookup having *resolved*, the picture is that `ClockDxe` is not being blocked by
+the absent clock controller at all but by a gap in the data it expects to find, in the same family
+as every other wall on this ladder.
+
+Left open: which of the four reachable exits fired, which one breakpoint at `0xa7b4` and one read of
+`X30` decides; whether the zeroed `0x18321110`-family reads are the *cause* of exits 4 and 5 or
+merely adjacent to them; what `ClockDriver.c` line 260 says as source, which is still absent from
+the tree; what the third domain's two `0xb348` calls are keyed on, since `0xb8f0`'s own table is not
+identified here; `P2 APRI`'s eight fields, which remain the one row family nothing has read and are
+unaffected by this step; the arch-protocol display's nine names; and the step 4.153-4.156 items
+unchanged — whether the stock Setup-Media BCD boots a *substituted* `boot.wim`, `winpeshl.ini`, the
+1 GB stick, `UrsSynopsys.sys`'s child naming, `ExcludeFromSelect` and the `*<PNP-id>` position. The
+rest of step 4.158's list is unchanged too.
+
+Rows:
+
+- **instrument**: none written and none run. Every address, string and branch in this step comes out
+  of `Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi` under `aarch64-linux-gnu-objdump` and
+  direct byte reads of the file, plus `SerialStatusCodeWorker.c` and `Pi/PiStatusCode.h` from
+  `Mu_Basecore` for the two decoded constants. The run it reasons about is step 4.159's
+  `work/out/qemu-panel-4.159-pdc-cap.txt` and step 4.139's `work/out/qemu-probe-4.139/step4139.md`,
+  both already in the record.
+- **shows**: `ClockDriver.c +260` is one message for five exits of `Clock_InitTarget`; the `ERROR:`
+  row above it is `DebugAssert`'s own `EFI_ERROR_UNRECOVERED|EFI_ERROR_CODE` /
+  `EFI_SOFTWARE|EFI_SW_EC_ILLEGAL_SOFTWARE_STATE` report with this module's caller id and no
+  failure information; block 3's `ClockRailConfig` rail-voltage walk passed; and `0xa93c`'s clock
+  controller reads cannot fail their own callers.
+- **adds**: the five-block table with each block's line, helper and fatal-log string; the five exits
+  of `Clock_InitTarget` with their sites; the six clock-controller register bases
+  (`0x18321110`/`14`, `0x18323110`/`14`, `0x18325910`/`14`); the proof that `0x8170`'s `bl 0xff18`
+  is the only reference to `gEfiCallerIdGuid` at `0x1d018` in the image and the only caller of that
+  thunk; the `ASSERT %a +%d: %a` format at `0x14592`, which is not `MdePkg`'s; and `X30` at RVA
+  `0xa7b4` as the one-register discriminator between the five.
+- **corrects**: 4.159's reading of the `ERROR:` row as the driver's failure status — the codes are
+  `DebugLib`'s assert constants, identical in a `RpmhDxe` failure and a `ClockDxe` failure, and the
+  row carries only the caller id; and the reading 4.159's own text invites, that the clock
+  controller's zeroed registers are what `Clock_InitTarget` rejects, which the probe guards make
+  impossible.
+- **does not close**: which of the four reachable exits fired, what line 260 says as source, whether
+  the zeroed registers cause exits 4/5, and every larger open item — `P2 APRI`, the P3 gate,
+  `UsbBusDxe`, and the absent device.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, and no
+  stub, firmware source or Microsoft image was changed or patched. The only writes in this step are
+  to `docs/`. `userdata`, the partition table and the firmware LUN remain untouched. The porting
+  goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying install and P5's
+  peripherals not begun, and the end state still a Windows tablet whose modem and cameras are
+  undrivable.

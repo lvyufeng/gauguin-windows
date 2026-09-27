@@ -2835,6 +2835,31 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > not finish, the correction above stands unchanged: `P2 APRI` is still the one family nothing has
 > read. See `docs/08` step 4.159.
 
+> **Extended 2026-09-27 by step 4.160 — `ClockDriver.c +260` names a block and not a check, and the
+> one exit inside it that reads hardware cannot fire.** `ClockDxe`'s init at `0x28d0` runs five
+> checks, each with its own fatal string and assert line: `0x92a8`/145, `0x2f6c`/199
+> (`Clock_InitBases`), `0x6b9c`/232 (`Clock_InitVoltage`), `0xa75c`/260 (`Clock_InitTarget`),
+> `0x31f4`/275 (`Clock_InitNPA`). The run's 260 says blocks 1-4 passed, and block 3 passing is the
+> new fact: `0x6b9c` resolves every rail's default boot voltage out of the DAL property
+> `ClockRailConfig` (`0x1561c`) and logs `Unable to determine default boot voltage for %s.`
+> (`0x13b0b`) when a rail is missing — it did not log, so the DAL config database is live under this
+> instrument. `Clock_InitTarget` has exactly five failure exits, all returning `0xfffffffd` through
+> the same epilogue at `0xa7b4` and all printing the same line: `0xa7b0` from `0xa93c`, `0xa7f4`
+> from `0x33d8`, `0xa804` from `0x3468`, `0xa888` and `0xa898` from `0xb348`. The first is the only
+> one that touches hardware and it is unreachable: `0xa93c` loops 3 domains × 40 clocks calling
+> `0xb9cc`/`0xba88`, which read the six clock-controller bases `0x18321110`/`0x18321114`/
+> `0x18323110`/`0x18323114`/`0x18325910`/`0x18325914` (`+ index*32`) into out-structs and return `1`
+> unconditionally, returning `0` only for a domain above 2, an index above 39 or a NULL out-pointer,
+> none of which `0xa93c` passes. So the zeroed reads this machine returns are gathered, not tested,
+> and the wall is the driver's own data — the same family as `EnvDxe`'s SMEM word and `PdcDxe`'s
+> capacity word. The `ERROR: C90000002:V03000007 I0 <caller>` row is also not the driver's status:
+> `DebugAssert`'s body at `0x8160`-`0x8170` hardcodes `EFI_ERROR_UNRECOVERED|EFI_ERROR_CODE` and
+> `EFI_SOFTWARE|EFI_SW_EC_ILLEGAL_SOFTWARE_STATE` and reports through a thunk at `0xff18` that loads
+> `gEfiCallerIdGuid` from `0x1d018` — the image's only reference to it — which is why a `RpmhDxe`
+> failure and a `ClockDxe` failure print byte-identical codes. `X30` at RVA `0xa7b4` reads
+> `0xa7b0`/`0xa7f4`/`0xa804`/`0xa888`/`0xa898` for the five exits, so one breakpoint decides which
+> fired. See `docs/08` step 4.160.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

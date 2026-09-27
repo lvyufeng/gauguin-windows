@@ -491,6 +491,34 @@ at `ClockDxe.efi:0x1d018` being 73 boards' `ClockDxe` against gauguin's `34F2573
 rows are still `Ss` with `free=1024`. The phase still does not finish, so `P2 APRI` remains the one
 row family nothing has read. See `docs/08` step 4.159.
 
+**Step 4.160 opened `Clock_InitTarget` and the wall inside it is the driver's own data, not this
+machine.** Step 4.159's question — is `ClockDriver.c +260` a checkable state or another unpassable
+one — has an answer that is neither: line 260 is a **block** assert. `ClockDxe`'s init at `0x28d0`
+runs five checks, each with its own fatal string and its own assert line — `0x92a8`/145 (a DAL
+`DALSYS_SyncCreate` dispatch), `0x2f6c`/199 (`Clock_InitBases`), `0x6b9c`/232 (`Clock_InitVoltage`),
+`0xa75c`/260 (`Clock_InitTarget`), `0x31f4`/275 (`Clock_InitNPA`) — and the run's line 260 says the
+fourth is where it stopped, so blocks 1-4 passed. Block 3 passing is load-bearing: `0x6b9c` walks
+the driver's rails and resolves each one's default boot voltage out of the DAL property
+`ClockRailConfig` (`0x1561c`), logging `Unable to determine default boot voltage for %s.`
+(`0x13b0b`) when a rail is absent — and it did not log, so the DAL config database is live here. A
+`Clock_InitTarget` failure is one of exactly **five** exits inside `0xa75c`, each setting
+`0xfffffffd` and jumping to the same epilogue at `0xa7b4`: from `0xa93c` (`0xa7b0`), from `0x33d8`
+(`0xa7f4`, a name absent from the context's own table, `-41`), from `0x3468` (`0xa804`, a tagged
+index out of range), and from `0xb348` for domain 0 and domain 2 (`0xa888`, `0xa898`). Only the
+first touches hardware, and it **cannot fire**: `0xa93c` loops 3 domains × 40 clocks calling
+`0xb9cc`/`0xba88`, which read the six clock-controller bases `0x18321110`/`0x18321114`/
+`0x18323110`/`0x18323114`/`0x18325910`/`0x18325914` (`+ index*32`) into out-structs and return `1`
+unconditionally, returning `0` only for a domain above 2, an index above 39 or a NULL out-pointer —
+none of which `0xa93c` ever passes. So the zeroed reads are information-gathering, not the wall.
+The `ERROR: C90000002:V03000007 I0 <caller>` row above the assert is not the driver's failure status
+either: it is `DebugAssert`'s own report at `0x8170`, `EFI_ERROR_UNRECOVERED|EFI_ERROR_CODE` and
+`EFI_SOFTWARE|EFI_SW_EC_ILLEGAL_SOFTWARE_STATE` under `SerialStatusCodeWorker.c:84`, stamped with
+`gEfiCallerIdGuid` — which `0xff18` loads from `0x1d018`, the only reference to it in the image —
+so the codes are identical in 4.158's `RpmhDxe` failure and 4.159's `ClockDxe` one and the row's
+only content is the caller id. What separates the five exits is one register: `X30` at RVA `0xa7b4`
+reads `0xa7b0`/`0xa7f4`/`0xa804`/`0xa888`/`0xa898` for exits 1-5, so one breakpoint there decides
+it without a new seed. See `docs/08` step 4.160.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
