@@ -3253,6 +3253,21 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `PdcDxe` into `ClockDxe` with nothing between. Whether that bears on 4.164's
 > `HAL_clk_FabiaPLLEnableVote` failure is a run-time question; that the three are promotable without
 > adding a file is not. See `docs/08` step 4.169.
+>
+> **Named and fixed 2026-09-27 by step 4.170 — the volume's drivers had no dependency expressions at
+> all, and the extraction had been holding them.** The generated `INF`s in `Binaries/gauguin/` carried
+> a single `[Binaries.AArch64]` line, `PE32|<name>.efi|<mtype>`, while the stock FFS file the same
+> extraction kept (`device/dxe/<name>.ffs`) holds a `DXE_DEPEX` (0x13) section beside its `PE32`. The
+> generator now writes that payload out as `<name>.depex` and emits
+> `DXE_DEPEX|<name>.depex|<mtype>` — the shape `Binaries/9707f` and `Binaries/surya` use — for the 48
+> of its 55 mapped drivers whose stock file has one; the other 7 (`CipherDxe`, `FeatureEnablerDxe`,
+> `HashDxe`, `MacDxe`, `QcomChargerApp`, `RngDxe`, `SecRSADxe`) have none in their stock file either,
+> and 11 of the 48 are drivers the volume does not carry, so **37** land. Measured on a before/after
+> pair one build command apart, at the `Binaries/gauguin` resolution: **0 → 37**, nothing lost. The
+> reason this is a correctness repair and not a behaviour change is the a-priori guard —
+> `Dispatcher.c:2114-2125` sets `Dependent = FALSE` for a driver the a-priori array names, and 35 of
+> the 37 are in that array, so only `VcsDxe` (`AE37B942 AND gEfiChipInfoProtocolGuid`) and
+> `PwrUtilsDxe` (`TRUE`) get a depex that is actually read. See `docs/08` step 4.170.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

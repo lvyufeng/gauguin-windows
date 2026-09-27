@@ -862,6 +862,26 @@ Work:
 > three is a one-line `APRIORI.inc` change with the machinery already in place
 > (`tools/make_uefi_platform.py --apriori-move`, `tools/build-apriori-variant.sh`). See `docs/08`
 > step 4.169.
+>
+> **Step 4.170 (2026-09-27) gave 37 of the drivers in the volume their stock dependency expression
+> back, and the measurement says that is one binding depex and one no-op rather than a
+> re-ordering.** `tools/make_xbl_binaries.py` had been shipping `PE32|<name>.efi|<mtype>` and nothing
+> else, while the extraction's `<name>.ffs` carries the stock `DXE_DEPEX` section beside the `PE32` —
+> so **no** driver this build packaged from the extraction had a dependency expression, and the DXE
+> core reads that as UEFI 2.0 (`Dispatcher.c:892`) and releases the driver on
+> `CoreAllEfiServicesAvailable` (`Dependency.c:221-225`). Measured: the volume's 42
+> `Binaries/gauguin`-resolved files went from **0 to 37** depex sections, 0 lost, and the whole
+> volume from 29-with to 66-with. The part that matters is what that binds: read out of the artifact
+> rather than out of `APRIORI.inc`, **35 of the 37 sit in the 70-entry a-priori array**, where
+> `Dispatcher.c:2114-2125` sets `DriverEntry->Dependent = FALSE` before the depex is ever consulted —
+> so for those 35 the restored expression is dead code. The two that bind are exactly the two 4.169
+> had singled out by position and by their absence from `APRIORI.inc`: **`VcsDxe`**
+> (`AE37B942 AND gEfiChipInfoProtocolGuid`, both producers in the array) and **`PwrUtilsDxe`**
+> (`TRUE`). Nothing in the change can make a driver disappear; it can only delay one, and the three
+> depex terms with no publisher in the volume are consumed only by promoted drivers, which is why
+> they cannot stall anything. This does **not** claim to explain 4.164's `HAL_clk_FabiaPLLEnableVote`
+> park, and `VcsDxe` remains un-promoted, so the batch still goes from `PdcDxe` into `ClockDxe`. See
+> `docs/08` step 4.170.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

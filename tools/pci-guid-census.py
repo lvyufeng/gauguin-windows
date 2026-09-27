@@ -161,15 +161,19 @@ def depex_guids(payload):
     """The pushed GUIDs of a packed depex. `0x02` (`PUSH`) is the only opcode that carries a GUID:
     `0x00` BEFORE, `0x01` AFTER, `0x03` AND, `0x04` OR, `0x05` NOT, `0x06` TRUE, `0x07` FALSE,
     `0x08` END and `0x09` SOR take no argument, so treating any of them as a GUID marker
-    desynchronises the stream and every later GUID comes out as noise."""
+    desynchronises the stream and every later GUID comes out as noise.
+
+    The parse starts at offset 0, and that is a correction. The first version consumed a leading
+    `0x02` as a guard and then began reading opcodes at offset 1 - i.e. at the first byte of the
+    first GUID - so every depex lost its first operand and every later GUID came out one PUSH
+    behind. Found by dumping five stock depexes as hex (`VcsDxe` carries two GUIDs and read as one);
+    a depex whose first GUID is the one being looked for would have read as a miss."""
     out = []
-    if len(payload) < 2 or payload[0] != 0x02:
-        return out
-    i = 1
+    i = 0
     while i < len(payload):
         op = payload[i]
         i += 1
-        if op == 0x00:
+        if op == 0x08:
             break
         if op != 0x02:
             continue

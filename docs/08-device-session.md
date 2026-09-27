@@ -34484,7 +34484,10 @@ stock-only-by-position entries it does:
 
 All three are `DRIVER` files in both volumes and all three are in `Include/DXE.inc` — so the build
 puts them in the firmware and leaves them to the ordinary dependency walk, while the stock firmware
-ran them in the a-priori batch.
+ran them in the a-priori batch. *(Corrected in 4.170: the ordinary dependency walk had nothing to run
+on — the volume carried no `DXE_DEPEX` section in any of the 42 packaged files, so all three were
+released on `CoreAllEfiServicesAvailable` as UEFI 2.0 drivers. The sizes above are the pre-4.170
+ones.)*
 
 The other eleven stock-only entries are in neither volume, and here the alignment's vocabulary needs
 one more caution, because "not in the volume" and "not in the tree" are different facts and only two
@@ -34577,3 +34580,206 @@ position is not the one our build puts the substitutes in.
   unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.170 — the build shipped no dependency expression for a single one of the drivers it packaged from the extraction, the stock one was sitting in the same `.ffs` file the whole time, and putting it back moves **two** drivers rather than thirty-seven — because 35 of the 37 sit in the a-priori array, where `Dispatcher.c` sets `Dependent = FALSE` before the depex is ever consulted
+
+### The half of the stock file the packaging threw away
+
+`tools/make_xbl_binaries.py` reads the extraction's `<name>.efi` and writes an `INF` around it whose
+`[Binaries.AArch64]` section has held exactly one line since it was written: `PE32|<name>.efi|<mtype>`.
+The extraction kept more than the PE. `device/dxe/` holds a whole stock FFS file per driver,
+`<name>.ffs`, and a driver's `PE32` is one section of that file — beside it, in every driver whose
+dependency expression is not the trivial one, sits a `DXE_DEPEX` (0x13) section carrying the stock
+firmware's own answer to *what has to exist before this driver's entry point runs*.
+
+Nothing in this tree read it, and no other packaged driver set in the checkout is shaped that way:
+`Binaries/9707f/QcomPkg/Drivers/VcsDxe/` carries `VcsDxe.depex` and its `INF` the line
+`DXE_DEPEX|VcsDxe.depex|*`. Ours carried neither.
+
+What is lost is not a missing feature but a missing *constraint*, and the DXE core reads the absence
+as a licence:
+
+- `MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:892` — *"If no Depex assume UEFI 2.0 driver
+  model"* — a failed `ReadSection` leaves `DriverEntry->Depex = NULL`.
+- `MdeModulePkg/Core/Dxe/Dispatcher/Dependency.c:221-225` — `if (DriverEntry->Depex == NULL) {
+  … Status = CoreAllEfiServicesAvailable (); }`.
+
+A depex-less driver is released the moment the architectural protocol set is complete, whatever the
+protocols it actually names are doing. Every driver this build packaged from the extraction was in
+that state, which is a fact about the artifact and not an inference from the generator: the old
+payload's volume carries 42 files that resolve to a `Binaries/gauguin/**` `INF`, and **0 of the 42
+had a `DXE_DEPEX` section.**
+
+### The fix, and the pair it was measured on
+
+`stock_depex(dxe_dir, src_name)` walks the stock FFS file's section stream from offset 24 and returns
+the `DXE_DEPEX` payload, or `None`. `main()` writes it to `<efi basename>.depex` beside the `.efi`
+and fills the template's new `{depex}` slot with `DXE_DEPEX|<name>.depex|<mtype>`, which is the shape
+`Binaries/9707f` and `Binaries/surya` use. Against what the generator wants to write:
+
+- `DRIVERS` has **55** entries, all 55 present in `device/dxe/`, collapsing to 55 distinct
+  `(directory, inf, mtype)` triples.
+- **48 of the 55** have a `DXE_DEPEX` in their stock `.ffs`. The **7** that do not — `CipherDxe`,
+  `FeatureEnablerDxe`, `HashDxe`, `MacDxe`, `QcomChargerApp`, `RngDxe`, `SecRSADxe` — have no
+  depex section in their stock file either, so the stock firmware shipped them as UEFI 2.0 drivers
+  too and the generated `INF` keeps the old shape. That is the device's own answer and not a gap in
+  the extraction (`device/dxe` holds 238 entries, 86 `.efi` and 118 `.ffs`, and **0 `.ffs` files
+  carry a PE32 section with no extracted `.efi`**).
+- **11 of the 48** are drivers the volume does not carry — `ADSPDxe`, `CPRDxe`, `DisplayDxe`,
+  `MinidumpTADxe`, `PILDxe`, `PILProxyDxe`, `QcomBds`, `QcomMpmTimerDxe`, `QcomWDogDxe`,
+  `VerifiedBootDxe`, `VibratorDxe`, all of them held out by `DXE.inc` (`CPRDxe` and `DisplayDxe`
+  behind `USE_CUSTOM_DISPLAY_DRIVER`, the other nine named in its header comment) — so **37** land
+  in it: 48 − 11.
+
+The pair is two payloads one build command apart — same FD, same `BootShim.bin`, same
+`sm7225-xiaomi-gauguin.dtb`, `--compression gzip --profile silicon` — measured with
+`tools/depex-gap.py`, which gained a `read_volume()` able to descend this project's own payload shape
+(boot image → gzip → 112-byte `BootShim` stub → FD → LZMA'd GUID-defined section → the inner volume)
+by delegating the FD descent to `tools/fv-inventory.py` rather than keeping a second copy of the
+padding and `DataOffset` rules:
+
+| | payload | sha256 | size | volume files | with `DXE_DEPEX` | without |
+|---|---|---|---|---|---|---|
+| before | `work/out/fd-archive/Mu-gauguin-xhci-host-pre-depex.img` | `f1a7106b76f98e11…` | 1,171,456 B | 126 | 29 | 97 |
+| after | `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` | `34360470b8a7aafad…` | 1,171,456 B | 126 | 66 | 60 |
+
+**37 gained, 0 lost, 0 names present on one side only.** Of the old payload's 97 depex-less files, 37
+had a stock namesake carrying a real dependency expression; of the new payload's 60, **0** do. At the
+`Binaries/gauguin` resolution — the 42 volume files that resolve to a packaged driver's `INF`, the
+same 42 on both sides — the row is **0 → 37** with the three bitra XHCI blobs excluded, since
+`Binaries/gauguin` does not resolve them. The plain, non-variant build measures the same way, 123
+files / 64 / 59 (`work/out/depex/Mu-gauguin-depex-gzip.img`, `e30ec6c2…`, 1,144,832 B), which is the
+check that the 37 is a property of the fix and not of the variant.
+
+Lineage, because a before/after needs its "before" to be the artifact that was actually recorded: the
+control payload's volume is 7,536,640 B, sha
+`ca60789d47e263d4228f2ccbe454187105beac09e28b38c68e8ec03217a0c307`, **byte-identical to
+`/tmp/fv-usb.bin`** — the volume 4.168 and 4.169 measured — and the control payload itself
+(`f1a7106b…`) is the image those steps recorded as the next flash. The after-image's contents were
+checked against GenFv's own map: 126 offsets and GUIDs, zero mismatches.
+
+### The a-priori guard: 35 of the 37 can never be consulted
+
+`Dispatcher.c:2062` reads the a-priori array by file GUID —
+`Fv->ReadSection (Fv, &gAprioriGuid, EFI_SECTION_RAW, 0, …)` — and `Dispatcher.c:2114-2125`, on a
+match, does `DriverEntry->Dependent = FALSE;` and prints `RESULT = TRUE (Apriori)`. `CoreIsSchedulable`
+is then never called for that driver and its depex is never read.
+
+Read out of the artifact rather than out of `APRIORI.inc` (`tools/apriori-order.py`'s `apriori_array`
+on the after-image): the a-priori file `FC510EE7-FFDC-11D4-BD41-0080C73C8881` holds **70 entries, all
+70 of them naming a file in the volume**, and **35 of the 37** drivers that gained a depex have their
+file GUID in it. For those 35 the restored depex is dead code.
+
+The two that are not are the two the a-priori array does not promote, and they are the two 4.169
+identified by position:
+
+- **`VcsDxe`** — stock depex `AE37B942-457F-4C91-A196-D9669FD347A3 AND
+  B0760469-970C-487A-A4B5-28DB7B45CEF1` (`gEfiChipInfoProtocolGuid`), 36 bytes, hex
+  `02 42b937ae7f45914ca196d9669fd347a3 02 690476b00c977a48a4b528db7b45cef1 03 08`.
+- **`PwrUtilsDxe`** — stock depex `TRUE`, 2 bytes, `06 08`.
+
+`PwrUtilsDxe`'s expression is a no-op and its only effect is to move the driver off
+`CoreAllEfiServicesAvailable` and onto the first dispatch pass, i.e. **earlier**. `VcsDxe`'s is a real
+dependency and moves it to a point defined by its producers instead of by the architectural protocol
+set — which may be later, and if later, later by construction: the alternative was releasing it at
+`CoreAllEfiServicesAvailable` and finding `DALSys` and `ChipInfo` not yet installed. Both producers are
+in the array (`AE37B942` published by `DALSys`, `gEfiChipInfoProtocolGuid` by `ChipInfo`), so the
+expression is satisfiable before the dispatcher reaches `VcsDxe`. Nothing in the change can make a
+driver *disappear*: a depex can only delay a driver, and the only depexes that bind are these two.
+
+### The three terms with no producer in the volume, and why they cannot block
+
+Every GUID the restored depexes push was resolved to a publisher with `tools/guid-refs.py`, whose own
+caveat is that a call site is a fact about the binary and not about what executes:
+
+| GUID | publisher |
+|---|---|
+| `AE37B942-457F-4C91-A196-D9669FD347A3` | `DALSys`, VA 0x014d4 `InstallMultipleProtocolInterfaces` — the sole publisher among 18 call sites |
+| `FA5F306B-F47D-4AC4-A47D-882F8204EC30` | `SPMI`, VA 0x016c8 |
+| `9E61DE7C-9927-4F28-9F3D-320705D81801` | `HWIODxeDriver`, VA 0x014c4 |
+| `AD9AEC18-7BF0-4809-9E96-3012309F3DF7` | `DALTLMM`, VA 0x01660 — and `DALTLMM` is **not** in the a-priori array |
+| `241AFAE6-…` `gEfiClockProtocolGuid` | `ClockDxe`, VA 0x01be4 |
+| `157A5C45-…` `gEfiPlatformInfoProtocolGuid` | `PlatformInfoDxeDriver`, VA 0x014b0 |
+| `B0760469-…` `gEfiChipInfoProtocolGuid` | `ChipInfo`, VA 0x018bc |
+
+Three have no publisher in the volume at all:
+
+- `60759B13-A8BF-46FE-B7E6-797BFB335DF3` — consumed by `AdcDxe`, `ButtonsDxe` and `UsbConfigDxe`
+  (and by stock `DisplayDxe`, which is not in the volume).
+- `9BA45B66-EFA4-441C-A3E4-ED2224786BE2` — by `ButtonsDxe`, `ChargerExDxe` and `QcomChargerDxeLA`
+  (and by stock `RealTimeClock` and `ResetRuntimeDxe`, the second of them through
+  `RegisterProtocolNotify`).
+- `76B95DAD-1E66-4D98-9CE7-B294D9596895` — by `UsbfnDwc3Dxe` only, and referenced by no stock file
+  at all, alongside the same driver's own `EFI_DRIVER_BINDING_PROTOCOL_GUID`.
+
+These are not an extraction gap: no `.ffs` in `device/dxe` carries a PE32 with no extracted `.efi`, so
+no stock driver was skipped, and the three protocols' publishers are simply not on this device.
+
+What makes them inert is the a-priori guard applied once more: **every consumer of all three is in the
+array** — `AdcDxe`, `ButtonsDxe`, `ChargerExDxe`, `QcomChargerDxeLA`, `UsbConfigDxe` and `UsbfnDwc3Dxe`
+are six of the 35 — so `Dependent = FALSE` is set for each before its depex is read, and an
+unsatisfiable term in a promoted driver's dependency expression has no effect at all. Counting the
+terms alone would have read as three blocking dependencies; the guard is what makes them three inert
+strings.
+
+The one that is *not* in the array, `AD9AEC18`, is waited on only by `I2C`, whose depex in full is
+`AE37B942 AND gEfiClockProtocolGuid AND AD9AEC18 AND EFI_TIMER_ARCH_PROTOCOL_GUID` — and `I2C` is one
+of the 35. A driver that were in `I2C`'s position but outside the array would be stuck, which is the
+reason to state the 35/2 split rather than the 37.
+
+### Rows:
+
+- **instrument**: the built payloads `work/out/fd-archive/Mu-gauguin-xhci-host-pre-depex.img`
+  (`f1a7106b76f98e11…`) and `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+  (`34360470b8a7aafad…`), plus `work/out/depex/Mu-gauguin-depex-gzip.img` (`e30ec6c2…`) for the
+  non-variant cross-check, all read by `tools/depex-gap.py` (extended here) and
+  `tools/apriori-order.py`; `device/dxe/` (238 entries, 118 `.ffs`) and `device/dxe-inventory.txt` for
+  the stock side; `tools/guid-refs.py` for every publisher above; and the two payload sources
+  (`tools/make_xbl_binaries.py`, extended here). The four archive files are kept in
+  `work/out/fd-archive/`. No device was touched.
+- **shows**: that the old volume's 42 `Binaries/gauguin`-resolved files carried **0** `DXE_DEPEX`
+  sections, so every blob driver this build packaged was dispatched as UEFI 2.0 on
+  `CoreAllEfiServicesAvailable`; that restoring the stock expression fills 37 of those 42 and no
+  others; that read out of the artifact, 35 of the 37 sit in the 70-entry a-priori array where
+  `Dispatcher.c:2114` makes the depex unreadable; that the two that bind are `VcsDxe`
+  (`AE37B942 AND gEfiChipInfoProtocolGuid`) and `PwrUtilsDxe` (`TRUE`), both of them entries 4.169
+  had already singled out by their position in the stock order; and that the three depex terms with no
+  producer in the volume are consumed only by promoted drivers and therefore cannot stall anything.
+- **adds**: `tools/make_xbl_binaries.py`'s `stock_depex()` and the `DXE_DEPEX|<name>.depex|<mtype>`
+  line its `INF_TEMPLATE` now emits, plus the per-driver count it prints; `tools/depex-gap.py`, which
+  answers the question underneath `tools/pci-guid-census.py --depex` — how many files carry a depex at
+  all and whether the stock one is recoverable — and now reads a payload image as well as a volume;
+  and the archive pair in `work/out/fd-archive/` that makes the change replayable.
+- **corrects**: 4.169 said the three volume-resident stock-only entries are in `Include/DXE.inc` and
+  "left to the ordinary dependency walk". They are in `DXE.inc`, and there was no dependency walk to
+  leave them to: the old volume had no depex section in any of the 42, so `VcsDxe`, `PwrUtilsDxe` and
+  `FeatureEnablerDxe` alike were released on `CoreAllEfiServicesAvailable` and the phrase described a
+  mechanism that was not running. Two smaller counts in the same step are also off: the three sizes
+  4.169's table quotes — 32,824 / 49,198 / 32,836 B — are the pre-fix ones, and after this step
+  `PwrUtilsDxe` is 32,832 B and `VcsDxe` 49,238 B, each larger by its restored depex section header
+  and payload, while `FeatureEnablerDxe` is unchanged at 32,836 B because its stock file has no depex
+  to restore; and the table's "in our volume as a file" column is a column about the packaging, where
+  the thing that decides the fact is one `INF` line in `DXE.inc` and not the extraction. One thing
+  4.169 got exactly right and this step extends: its nine stock-only entries, `DisplayDxe`, `ADSPDxe`,
+  `PILProxyDxe`, `PILDxe`, `CPRDxe`, `QcomWDogDxe`, `SecRSADxe`, `VerifiedBootDxe` and `QcomBds`, are
+  the nine tree-present names in the stock a-priori array's 74 entries — re-derived here by resolving
+  all 74 stock GUIDs against `device/dxe/*.ffs`, 74 of 74 naming a file. That list and `DXE.inc`'s
+  held-out list are different lists: `MinidumpTADxe`, `QcomChargerApp`, `QcomMpmTimerDxe` and
+  `VibratorDxe` are packaged, held out, and in neither the stock array nor ours, so they were never
+  promoted by anyone.
+- **does not close**: whether any of it changes what happens on the phone. The two binding depexes are
+  a correctness repair, not a fix for a symptom — and this step explicitly **does not claim** they
+  explain `ClockDxe`'s `HAL_clk_FabiaPLLEnableVote` park (4.164) or the `HID`-device banner. `VcsDxe`
+  remains un-promoted, so the batch still goes from `PdcDxe` into `ClockDxe` with nothing between;
+  whether promoting it — the one-line `APRIORI.inc` change 4.169 described — is what the phone needs is
+  the run-time question that step left open and this one does not answer. Also open: which payload
+  `boot` currently holds, and every item 4.163–4.169 left open.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched. The firmware was rebuilt twice (the plain
+  platform and the `xhci-host` variant) and neither image replaced anything on the phone; the payload
+  the device session would flash is `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, and under
+  **对照的那张必须在覆盖之前读** the control it would replace has to be read off `boot` and
+  fingerprinted first. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
+  untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state
+  remains a Windows tablet whose modem and cameras cannot be driven.

@@ -108,8 +108,11 @@ INF_TEMPLATE = """##
   VERSION_STRING = 1.0
 
 [Binaries.AArch64]
-  PE32|{name}.efi|{mtype}
+{depex}  PE32|{name}.efi|{mtype}
 """
+
+# The section type whose payload is a driver's dependency expression.
+SECTION_DXE_DEPEX = 0x13
 
 # Drivers this device's XBL does not carry, taken from the SM7225 sibling.
 #
@@ -169,6 +172,48 @@ def guid_for(name):
         [h[0], h[1], h[2], h[3], h[4], h[5],
          (h[6] & 0x0F) | 0x50, h[7], (h[8] & 0x3F) | 0x80, h[9],
          h[10], h[11], h[12], h[13], h[14], h[15]]))).upper()
+
+
+def stock_depex(dxe_dir, src_name):
+    """The stock FFS file's `DXE_DEPEX` payload for `src_name`, or None.
+
+    The `.efi` is only half of what the stock firmware shipped. A driver's
+    dependency expression is not inside the PE - it is a section *beside* it in
+    the FFS file, and the FFS file is what the extraction kept: `device/dxe/`
+    holds both `<name>.efi` (the PE32 section, written out) and `<name>.ffs` (the
+    whole stock file, depex included).
+
+    This matters because a template that ships only `PE32|<name>.efi` produces a
+    driver with no depex section at all, and the DXE core reads a missing depex as
+    "assume UEFI 2.0" - it dispatches the driver the moment all EFI services are
+    available instead of when the protocols it names exist
+    (`MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c` sets `Depex = NULL`, and
+    `Dispatcher/Dependency.c`'s `CoreIsSchedulable` then returns TRUE on
+    `CoreAllEfiServicesAvailable`). Every other package in the tree ships the
+    depex: `Binaries/9707f/QcomPkg/Drivers/VcsDxe/` carries `VcsDxe.depex` and its
+    INF a `DXE_DEPEX|VcsDxe.depex|*` line. The two are the same 36 bytes as the
+    payload this returns for gauguin's own `VcsDxe.ffs`, which is the check that
+    the extraction below is the right artifact.
+
+    Returns the payload alone - no section header - because that is what an
+    `DXE_DEPEX|file|type` line takes. A stock file with no depex section, or one
+    whose extraction is missing, returns None and the INF keeps the old shape.
+    """
+    path = os.path.join(dxe_dir, src_name + ".ffs")
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as fh:
+        d = fh.read()
+    i = 24  # the FFS file header is 24 bytes; the section stream follows it
+    while i + 4 <= len(d):
+        size = int.from_bytes(d[i:i + 4], "little") & 0xFFFFFF
+        typ = d[i + 3]
+        if size < 4 or i + size > len(d):
+            return None
+        if typ == SECTION_DXE_DEPEX:
+            return d[i + 4:i + size]
+        i += (size + 3) & ~3
+    return None
 
 
 def present_drivers(dxe_dir):
@@ -312,6 +357,7 @@ def main():
         print(f"  {len(other)} Qualcomm drivers with no mapped package: {', '.join(other)}")
 
     written = 0
+    with_depex = 0
     for src_name, (drvdir, infname, mtype) in sorted(DRIVERS.items(), key=lambda kv: kv[1]):
         src = os.path.join(args.dxe_dir, src_name + ".efi")
         if not os.path.isfile(src):
@@ -321,12 +367,26 @@ def main():
 
         efi_name = EFI_OVERRIDE.get(infname, src_name + ".efi")
         shutil.copyfile(src, os.path.join(dest, efi_name))
+
+        # The stock dependency expression, if the extraction kept one. Written
+        # next to the .efi and named after the INF's BASE_NAME, which is the
+        # shape `Binaries/surya` and `Binaries/9707f` use.
+        depex = stock_depex(args.dxe_dir, src_name)
+        if depex is not None:
+            with open(os.path.join(dest, efi_name[:-4] + ".depex"), "wb") as fh:
+                fh.write(depex)
+            with_depex += 1
+
         with open(os.path.join(dest, infname), "w") as fh:
-            fh.write(INF_TEMPLATE.format(name=efi_name[:-4], guid=guid_for(infname),
-                                         mtype=mtype))
+            fh.write(INF_TEMPLATE.format(
+                name=efi_name[:-4], guid=guid_for(infname), mtype=mtype,
+                depex=("  DXE_DEPEX|%s.depex|%s\n" % (efi_name[:-4], mtype)) if depex else ""))
         written += 1
 
     print(f"wrote {written} driver packages to {out}/QcomPkg/Drivers")
+    print(f"  {with_depex} of them ship the stock DXE_DEPEX the XBL extraction kept; "
+          f"the other {written - with_depex} have no depex section in their stock file "
+          f"and dispatch as UEFI 2.0 drivers")
     if args.sibling:
         names = sorted(set(args.sibling))
         print(f"staging {len(names)} driver(s) this XBL does not carry, "
