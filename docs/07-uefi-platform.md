@@ -2609,7 +2609,7 @@ sources that do not share a method:
 |---|---|
 | the name join above | `GIO0` = `QCOM0C` and `SPMI` = `QCOM0B` on lisa, a52sxq, renoir, Cedros, Kailua, Waipio, venus, vili, lemonade and Lahaina — twelve tables — and gauguin's `pinctrl@f100000` is `0x0F100000 + 0x300000`, which is lisa's window exactly |
 | the 21 PMIC-GPIO nodes in the 66-table corpus | nine distinct `_HID`s whose middle byte is a family and nothing else — `QCOM0269`/02, `QCOM0530`/05, `QCOM0830`/08, `QCOM092D`/09, `QCOM0A2D`/**0A**, `QCOM0C2D`/0C, `QCOM1430`/14, `QCOM1A2D`/1A, `QCOM252D`/25. gauguin is `QCOM0A2D` |
-| the SC7280/Kodiak Windows driver set | 112 `.inf`, 158 ids. Under `0A` it claims 4 of the 5 distinct index ids — `0B` qcspmi7280, `0C` qcgpio7280, `10` qci2c7280, `16` qcuart7280 — covering **8 of gauguin's 10 indexable blocks**. Under each of the other eight candidate bytes it claims **0 of 5**, covering 0 of 10 |
+| the SC7280/Kodiak Windows driver set | 112 `.inf`, 155 claimed ids (158 `ACPI\` occurrences before Step 4.151 stopped counting commented-out models lines and `[Strings]` key names as claims). Under `0A` it claims 4 of the 5 distinct index ids — `0B` qcspmi7280, `0C` qcgpio7280, `10` qci2c7280, `16` qcuart7280 — covering **8 of gauguin's 10 indexable blocks**. Under each of the other eight candidate bytes it claims **0 of 5**, covering 0 of 10 |
 
 The two blocks `0A` does not cover are `SE0` and `SE6` (both index `0E`), which no
 `.inf` in the set names — a real gap in that set, not a doubt about the byte. Step 4.70

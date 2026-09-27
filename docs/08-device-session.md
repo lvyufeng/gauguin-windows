@@ -30827,3 +30827,100 @@ from Step 4.149, unchanged.
 | corrects | "the same two are unclaimed", which the tool printed as one statement and the plan and this record repeated as one — the three readings are now printed separately; `tools/os-driver-store.sh`'s claim that both images measured 339 `.inf` and 85 ids, which was `boot.wim`'s count written twice; `--bind`'s PNP branch order; and fifteen parentheticals in `docs/00-plan.md`, `docs/07-uefi-platform.md` and this file that read `` `QCOM0A8B` (UFS) `` where the node is `URS0` and `` `QCOM24A5` `` is `UFS0`'s — corrected in place, because an id-to-node mapping is not a thing that was different at the time it was written |
 | does not close | the ARM64 reading, without which none of the OS-side claims is a statement about the phone; which id names `URS0`'s children, which is `UrsSynopsys.sys`'s behaviour and not in any `.inf`; `--bind`'s hardware-id versus compatible-id column; the P2 gate, the P3 gate and every device-side reading, all unchanged; P4's `userdata`-destroying install and P5's peripherals, not begun |
 | not an action | nothing was built for the device, nothing was flashed, no partition was written, no stub or firmware source was changed and no patch was written into any image; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN remain untouched; the porting goal is unchanged and unmet, and the end state is still a Windows tablet whose modem and cameras are undrivable |
+
+## Step 4.151 — `ACPI\<id>` was being read in five positions and counted as one, so the number that says how much of the driver set answers for gauguin was counting `[Strings]` key names and commented-out models lines as claims — and two of the phantoms name a *different* id than the file binds
+
+Step 4.150 left one item open and named it: `--bind`'s hardware-id versus
+compatible-id distinction, "which would have to parse models lines rather than
+grep for `ACPI\`". That is this step, and the parse turned out to have more than
+two answers.
+
+**The first correction is one line of plumbing and was already written.**
+`strip_inf_comments()` was added to the tool at the end of Step 4.150 and never
+called: an `.inf` comments with `;` to end of line, and a driver package's
+comments are not decoration but the disabled half of it. Three of the vendor
+set's 158 ids were claimed *only* by text a compiler never reads —
+`QCOM0200`, from the installer note `;    Using Devcon: Type "devcon update
+IOMMU.inf ACPI\QCOM0200" to install` repeated in `qciommu.inf`,
+`qciommuext7280.inf`, `qcsmmu7280.inf` and `qcsyscache7280.inf`; `QCOM02FA`,
+from `qcipcc7280.inf`'s commented-out `;%DeviceDesc%=IPCC_Inst,,ACPI\QCOM02FA`;
+and `QCOM0190`, another installer note in `qcslimbus7280.inf`. The set's
+coverage was three ids larger than the set is, and the failure direction is the
+dangerous one: a node written on the strength of it is absent from Device
+Manager with nothing to say why. Wired into `load_driver_set()` where the text is
+read, so all three walks see one text; the set is now **155 ids**, and the diff
+against the run before it is one line — the count. Not one verdict for gauguin's
+34 ids moved.
+
+**The count in the header was answering a question nobody asked.** "`N` distinct
+`ACPI\` ids" counts the *string*, and an `.inf` writes `ACPI\…` in five places of
+which two are a driver saying which ids it answers to. Parsing the positions
+apart, 2026-09-27:
+
+  * `~/work/woa-ref/inf-7280` — 155 ids, all 155 the hardware id of a models line;
+  * `boot.wim` index 1 — 85 occurrences: 76 hardware, 1 compatible (`WACF006`),
+    3 named only by `[ControlFlags] ExcludeFromSelect` (`NVDA0112`, `NVDA0212`,
+    `TXNW0073`), 5 not ids at all;
+  * `install.wim` index 1 — 116 occurrences: 105 hardware, 3 compatible
+    (`PNP0CA0`, `PNP0CA1`, `WACF006`), the same 3 `ExcludeFromSelect`, the same 5.
+
+A models line is `%description% = InstallSection, ACPI\HARDWARE[, ACPI\COMPATIBLE…]`,
+so the hardware id is the field after the install section and everything after it
+is a *compatible* id — the position a node is matched on when nothing claims its
+hardware id, which is the whole reason `PNP0CA1` reads as claimed in the full OS
+at all. That is the column, and it changes nothing about the verdict: it says
+where the answer came from.
+
+**The fifth position is the one that made this a parser.** A `[Strings]` entry is
+`ACPI\Foo.DeviceDesc = "…"`, and `INF_ACPI` read the *key name* as an id the set
+claims. Three of the five are keys for devices whose real ids are words —
+`%ACPI\DockDevice_Desc% = NO_DRV, ACPI\DockDevice`, and the same for
+`FixedButton` and `ThermalZone`, where the tool reported `DOCKDEVICE_DESC`,
+`FIXEDBUTTON_DESC` and `THERMALZONE_DESC` as ids in use. The other two are worse,
+because the key is named after a *different* id than the file binds:
+
+    %ACPI\INT33BA.DeviceDesc%   = SDHostIntelEMMC, ACPI\VEN_INT&DEV_33BA&REV_0001
+    %ACPI\ARMH_PL180.DeviceDesc%= SDHostARMHPL180, ACPI\ARMH0180
+
+`ARMH_PL180` is the ARM PrimeCell PL180 and `ARMH0180` the id the models line
+actually binds; the tool said `ARMH_PL180` was claimed by a file that binds
+`ARMH0180`. Same species as the comment-only claims and the same failure
+direction. Neither is a gauguin id and neither is a QCOM id, which is why it
+took a position census rather than a wrong decision to surface it.
+
+**So an id now reaches the claim bucket from a models line or an
+`ExcludeFromSelect` and from nowhere else**, and the four readings are kept
+instead of merged: `hardware` (the bind), `compatible` (bound, but only in the
+fallback position), `exclude` (named so it stays out of a device-selection list,
+and in this image tree of 3 of those, `NVDA0112`, `NVDA0212` and `TXNW0073` have
+no models line in the set at all), and key-name-only, which is what an id looks
+like when *nothing* claims it. `--bind` prints the position under the id when it
+is not the plain case, and the header prints the tally. Re-run against the three
+sets, every line for gauguin's 34 ids is byte-identical to the run before except
+one added note under `install.wim`'s `PNP0CA1`: *"compatible id — bound in the
+position a node is matched on when nothing claims its hardware id, not as a
+hardware id."* That sentence is the item Step 4.150 left open, closed, and it is
+the difference between "our `_HID` binds" and "our `_CID` does".
+
+**Counts quoted in two places are corrected rather than re-explained.**
+`tools/os-driver-store.sh`'s header said `boot.wim` 85 ids and `install.wim` 116,
+which were string counts; it now says 80 claimed and 111 claimed and states each
+image's position tally. This record's Step 4.150 summary repeated 158 / 85 / 116
+as the three sets' sizes; they are 155 / 80 / 111. The older `158` lines in this
+file, from Step 4.149 and before, are left as they are — that is what the tool
+printed then, and rewriting a step's own output is how a record stops being one.
+
+Still open, unchanged: the ARM64 image, without which none of the OS-side claims
+is a statement about the phone rather than about an x64 installer; whether
+`ExcludeFromSelect` deserves to count as a claim at all, which is a judgement and
+is now visible as one; which id names `URS0`'s children, which is
+`UrsSynopsys.sys`'s behaviour and in no `.inf`; the `0A0E` SPI question and every
+device-side item from Step 4.149.
+
+| | |
+|---|---|
+| instrument | `tools/acpi-hid-census.py --drivers <set> --bind --asl tools/acpi/gauguin.asl` against the same three sets — vendor `~/work/woa-ref/inf-7280` (112 `.inf`), `boot.wim` index 1 (339) and `install.wim` index 1 (712) — with the ids counted by the position they are written in, plus direct reads of the `[Strings]` sections of `machine.inf`-class packages for the five key names |
+| shows | the vendor set is 155 claims, every one a models-line hardware id; `boot.wim` is 80 claims (76 hardware, 1 compatible, 3 `ExcludeFromSelect`-only) out of 85 `ACPI\` occurrences; `install.wim` is 111 (105/3/3) out of 116; the 5 difference in each is the same 5 `[Strings]` key names, `ARMH_PL180`, `DOCKDEVICE_DESC`, `FIXEDBUTTON_DESC`, `INT33BA`, `THERMALZONE_DESC`, of which the first is named after a different id than its file binds and the middle three are not ids at all; `PNP0CA1` is one of `install.wim`'s 3 compatible-only claims, which is the position `URS0`'s `_CID` is matched through |
+| corrects | the header's "distinct `ACPI\` ids", which counted one of five positions and reported it as coverage — the vendor set 158 → 155 (the 3 comment-only ids), `boot.wim` 85 → 80, `install.wim` 116 → 111 (the 5 key names and, in the vendor set, the 3 comments); the uncalled `strip_inf_comments()` written at Step 4.150, now called; `tools/os-driver-store.sh`'s per-image counts and this record's Step 4.150 summary line; and the claim bucket itself, which now holds claims |
+| does not close | the ARM64 reading, without which none of the OS-side claims is a statement about the phone; whether `ExcludeFromSelect` should count as a claim, now visible as a judgement rather than buried in the count; which id names `URS0`'s children; the `0A0E` SPI question; the P2 gate, the P3 gate and every device-side reading, all unchanged; P4's `userdata`-destroying install and P5's peripherals, not begun |
+| not an action | nothing was built for the device, nothing was flashed and no partition was written; no QEMU run, no probe and no panel reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is present; `userdata`, the partition table and the firmware LUN remain untouched; the porting goal is unchanged and unmet, and the end state is still a Windows tablet whose modem and cameras are undrivable |

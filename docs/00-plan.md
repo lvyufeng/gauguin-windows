@@ -462,7 +462,7 @@ Work:
 > candidate are the measurement, not the prose: `0→1` waiting, `0→1` unjudgeable, `5→6` held
 > by the no-depex rule. Nothing about the gate changes — none of the three can run.
 
-**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149 and 4.150): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
+**Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150 and 4.151): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
 items this sentence used to list as open, **one is open and two were not.** The thermal zones closed
 at Step 4.73, which is the step that joined the board's zone names to `qcpep7280.inf`'s ids, and the
@@ -486,6 +486,15 @@ union of the two sets covers 33 of this table's 34 QCOM ids and the single excep
 vehicle is `tools/os-driver-store.sh`, which pulls the DriverStore `.inf` files out of
 `boot.wim` or `install.wim` so `--drivers` can be pointed at them; the two images are not the
 same set, and the parent driver is in the second one only.
+Step 4.151 then made the census count claims rather than the string `ACPI\…`, which had been
+standing in for one of five positions an `.inf` writes an id in. The vendor set is 155 claims (from
+158: three of its ids were claimed only by `;`-commented installer notes), `boot.wim` 80 of 85
+occurrences and `install.wim` 111 of 116 — the difference in each OS image being the same five
+`[Strings]` key names, `ARMH_PL180`, `DOCKDEVICE_DESC`, `FIXEDBUTTON_DESC`, `INT33BA` and
+`THERMALZONE_DESC`, two of which name a different id than the file binds. Nothing about item 1's
+coverage moved: every verdict for this table's 34 ids is unchanged, and `--bind` now prints *where*
+each answer came from — the position that matters here is `compatible`, the one `URS0`'s `_CID` is
+matched through and the one a hardware-id-only column would have reported as silence.
 Buttons are written as of Step 4.89 (`BTNS`, `ACPI0011`), the node that needed
 no shipped driver at all because the operating system supplies it, and the USB port is written
 as of Step 4.90 — the `RHUB`/`PRT1` pair under each of `URS0`'s two children, the node that

@@ -26,10 +26,18 @@
 #             read the full OS instead of the installer (default is boot.wim).
 #
 # Measured 2026-09-27 on Win11 25H2 x64 (10.0.26100). The two images are not
-# the same set, and the difference is the point:
+# the same set, and the difference is the point. Counts are *claims*: an id
+# bound by a models line or named by `ExcludeFromSelect`, not every place the
+# string `ACPI\...` occurs (Step 4.151 - the earlier counts here included five
+# `[Strings]` key names per image that bind nothing):
 #
-#   boot.wim   index 1   339 .inf   85 distinct `ACPI\` ids   1 of gauguin's 34
-#   install.wim index 1  712 .inf  116 distinct `ACPI\` ids   1 of gauguin's 34
+#   boot.wim   index 1   339 .inf   80 claimed ids   1 of gauguin's 34
+#   install.wim index 1  712 .inf  111 claimed ids   1 of gauguin's 34
+#
+# install.wim's 111 are 105 hardware ids, 3 compatible-only (`PNP0CA0`,
+# `PNP0CA1`, `WACF006`) and 3 `ExcludeFromSelect`-only (`NVDA0112`,
+# `NVDA0212`, `TXNW0073`). The compatible bucket is the one that matters here:
+# `PNP0CA1` is a bind for a node whose *hardware* id nothing claims.
 #
 # Both claim `QCOM24A5` (UFS0, `storufs.inf`) and no other QCOM id of ours; the
 # vendor set answers 32 of the 34 and the union is 33. What install.wim adds is
@@ -59,7 +67,7 @@ log() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in

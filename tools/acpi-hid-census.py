@@ -212,6 +212,11 @@ NAME_CID = re.compile(r'Name \(_CID, "(?:EisaId \(")?([^"]+)"')
 # An .inf names the hardware it binds as ACPI\<HID>, with the HID either four
 # to eight alphanumerics (QCOM1A0C) or a PNP id (PNP0C0E). Both are matched:
 # the question is coverage, and a block covered by a PNP device is covered.
+#
+# This pattern alone is not a claim - it is the *string*, wherever it is
+# written, and an .inf writes it in five places of which two are a driver
+# answering to the id. `inf_claim_shapes` sorts the positions apart; nothing
+# should use this regex to decide that a set claims an id.
 INF_ACPI = re.compile(r"ACPI\\\s*([A-Za-z0-9_]{3,16})", re.I)
 # A third net, and it does not answer `INF_ACPI`'s question. An .inf names ids it
 # does not bind: `URS\QCOM0A8B&HOST` is a *child* of the ACPI node QCOM0A8B,
@@ -251,6 +256,122 @@ def read_win_text(path):
     return raw.decode("utf-8", errors="replace")
 
 
+def strip_inf_comments(text):
+    """An `.inf` with its `;` comments removed, quotes respected.
+
+    An `.inf` comments with `;` to end of line, and the comments in a driver
+    package are not decoration: they are the disabled half. Measured
+    2026-09-27 against `~/work/woa-ref/inf-7280`, three of its 158 `ACPI\\` ids
+    are claimed *only* by text a compiler never reads -
+
+        QCOM0200   qciommu.inf, qciommuext7280.inf, qcsmmu7280.inf,
+                   qcsyscache7280.inf, all four as the installer note
+                   ";    Using Devcon: Type "devcon update IOMMU.inf
+                   ACPI\\QCOM0200" to install"
+        QCOM02FA   qcipcc7280.inf's ";%DeviceDesc%=IPCC_Inst,,ACPI\\QCOM02FA",
+                   a models line commented out
+        QCOM0190   qcslimbus7280.inf, the same installer note
+
+    so `--bind` reported them claimed by files that bind nothing, and the set's
+    coverage was three ids larger than the set is. The failure direction is the
+    dangerous one and it is the same one `inf_claim_shapes` describes below: the
+    answer says a driver answers to the id when no driver does, so a node written
+    on the strength of it is absent from Device Manager with nothing to say why.
+
+    None of gauguin's 34 ids is affected - the whole set of them is 3 - and the
+    two OS DriverStores have no comment-only claim at all, which is why this was
+    found by asking the question rather than by a decision going wrong. Stripped
+    in `load_driver_set` so all three nets read one text; the alternative, an
+    exclusion list per net, is how the same text gets read two ways.
+    """
+    out = []
+    for line in text.splitlines():
+        quoted, keep = False, []
+        for ch in line:
+            if ch == '"':
+                quoted = not quoted
+            elif ch == ";" and not quoted:
+                break
+            keep.append(ch)
+        out.append("".join(keep))
+    return "\n".join(out)
+
+
+def inf_claim_shapes(text):
+    """(hardware, compatible, exclude-only, key-only) - where an `.inf` writes ids.
+
+    `INF_ACPI` answers "does this set contain the string `ACPI\\<HID>`", which is
+    not the same question as "does a driver in this set bind it", and the gap
+    between the two is measured rather than hypothetical. Counting the three
+    positions apart, 2026-09-27:
+
+        ~/work/woa-ref/inf-7280   155 ids   155 hardware, 0 elsewhere
+        boot.wim index 1           85 ids    76 hardware, 1 compatible,
+                                            3 ExcludeFromSelect, 5 key names
+        install.wim index 1       116 ids   105 hardware, 3 compatible,
+                                            3 ExcludeFromSelect, 5 key names
+
+    A models line is `%description% = InstallSection, ACPI\\HARDWARE[,  ACPI\\COMPATIBLE...]`.
+    The hardware id is the field that follows the install section; anything after
+    it is a *compatible* id, the fallback a node is matched on when nothing claims
+    its hardware id - the position `URS0`'s `_CID` is bound through and the only
+    reason `PNP0CA1` reads as claimed in the full OS. `[ControlFlags]`'s
+    `ExcludeFromSelect` names an id without binding it, and of the 3 in each of
+    these images, `NVDA0112`, `NVDA0212` and `TXNW0073`, none has a models line
+    in the set at all - it is listed so the id does not appear in a
+    device-selection list.
+
+    The fifth shape is the one that made this a parser rather than a tally. A
+    `[Strings]` entry is `ACPI\\Foo.DeviceDesc = "..."`, and its *key name* holds
+    an `ACPI\\` token that `INF_ACPI` reads as an id the set claims. Three of the
+    five are keys for devices whose real ids are words:
+
+        %ACPI\\DockDevice_Desc%   = NO_DRV,    ACPI\\DockDevice
+        %ACPI\\FixedButton_Desc%  = NO_DRV,    ACPI\\FixedButton
+        %ACPI\\ThermalZone_Desc%  = NO_DRV,    ACPI\\ThermalZone
+
+    so `INF_ACPI` reports `DOCKDEVICE_DESC` as an id. The other two are worse,
+    because the key is named after a *different* id that the file does not bind:
+
+        %ACPI\\INT33BA.DeviceDesc%  = SDHostIntelEMMC, ACPI\\VEN_INT&DEV_33BA&REV_0001
+        %ACPI\\ARMH_PL180.DeviceDesc%= SDHostARMHPL180, ACPI\\ARMH0180
+
+    `ARMH_PL180` is the ARM PrimeCell PL180, `ARMH0180` the id the models line
+    actually binds; a reader checking a name against the set was told `ARMH_PL180`
+    was in use by a file that binds `ARMH0180`. That is the same species as the
+    comment-only claims above and it fails in the same direction.
+
+    Returned as four sets, and the caller is expected to treat `key-only` as *not*
+    a claim: that bucket is what an id looks like when nothing claims it.
+    """
+    hw, compat, exclude, keyonly = set(), set(), set(), set()
+    for line in text.splitlines():
+        if "=" not in line or "ACPI\\" not in line.upper():
+            continue
+        left, right = line.split("=", 1)
+        head = left.strip().upper()
+        if head.startswith("EXCLUDEFROMSELECT"):
+            exclude |= {m.group(1).upper() for m in INF_ACPI.finditer(right)}
+            continue
+        if "%" not in left:
+            # A `[Strings]` key, referred to elsewhere as `%<key>%`. The id in
+            # the key's name is decoration unless a models line binds the same
+            # id, which is exactly what the three-way split above measured.
+            if head.startswith("ACPI\\"):
+                keyonly |= {m.group(1).upper() for m in INF_ACPI.finditer(left)}
+            continue
+        fields = right.split(",")
+        if len(fields) < 2:
+            continue
+        # `%desc% = ACPI\X` with no install section is legal and rare; read it
+        # rather than dropped, so the id is not lost to a section-less line.
+        body = fields if "ACPI\\" in fields[0].upper() else fields[1:]
+        for i, field in enumerate(body):
+            for m in INF_ACPI.finditer(field):
+                (hw if i == 0 else compat).add(m.group(1).upper())
+    return hw, compat, exclude, keyonly
+
+
 def load_driver_set(directory):
     """(id -> [inf paths], encoding tally, file count, notes).
 
@@ -259,21 +380,28 @@ def load_driver_set(directory):
     answered differently in the second copy.
 
     `notes` is the second reader: how the set *names* an id besides claiming it,
-    as `{"bus": {id: {form: file}}, "text": {file: uppercased text}}`. It is what
+    as `{"bus": {id: {form: file}}, "text": {file: uppercased text},
+    "shape": {id: {shape}}, "keyonly": {id: {file}}}`. It is what
     separates two absences that the `ACPI\\` column reports identically -
     `QCOM0A8B`, which two INFs in this set name as the parent of the children
     they bind, and `QCOM24A5`, which this set does not name at all. Kept in one
     pass rather than a second walk of the tree so the two readers cannot see
-    different file sets, and the text is kept whole rather than reduced to a
-    token regex because the question "does this set ever write this string" has
-    to be answerable for ids of any shape.
+    different file sets, and the text is kept as text - with its comments
+    stripped, but not reduced to a token regex - because the question "does
+    this set ever write this string" has to be answerable for ids of any shape.
+
+    An id reaches the `hids` bucket from a models line or an `ExcludeFromSelect`
+    and from nowhere else, because those are the two places a driver says which
+    ids it answers to. A `[Strings]` key name wearing an `ACPI\\` token is not
+    one of them: see `inf_claim_shapes` for the five ids in a Windows image that
+    were counted as claims on that basis alone.
     """
     inffiles = []
     for root, _dirs, names in os.walk(directory):
         inffiles += [os.path.join(root, n)
                      for n in names if n.lower().endswith(".inf")]
     hids, encodings = {}, {}
-    notes = {"bus": {}, "text": {}}
+    notes = {"bus": {}, "text": {}, "shape": {}, "keyonly": {}}
     for inf in inffiles:
         try:
             raw = open(inf, "rb").read()
@@ -286,10 +414,16 @@ def load_driver_set(directory):
         else:
             enc = "utf-8"
         encodings[enc] = encodings.get(enc, 0) + 1
-        text = read_win_text(inf)
+        # Stripped once, here, rather than in each of the three walks below:
+        # an `.inf`'s comments are the disabled half of it, and a claim read
+        # off a commented-out models line is a name reported in use that
+        # nothing binds. See `strip_inf_comments` for the three ids that
+        # made this a correction rather than a precaution.
+        text = strip_inf_comments(read_win_text(inf))
         rel = os.path.relpath(inf, directory)
         notes["text"][rel] = text.upper()
-        for m in INF_ACPI.finditer(text):
+        hw, compat, exclude, keyonly = inf_claim_shapes(text)
+        for hid in hw | compat | exclude:
             # Once per *file*, not once per mention: an `.inf` names the id it
             # binds in `[Manufacturer]`, in `[ControlFlags]`'s
             # `ExcludeFromSelect`, again under the manufacturer's section and
@@ -297,9 +431,23 @@ def load_driver_set(directory):
             # exactly that with `ACPI\QCOM24A5`, and the report read
             # "claimed by <same file> x3 +1", which is one file claiming one id
             # printed as a crowd.
-            bucket = hids.setdefault(m.group(1).upper(), [])
+            #
+            # Which position named it is kept too, and the strongest wins when
+            # one file writes the id twice: a models line is a bind and an
+            # `ExcludeFromSelect` entry is not, and only the first is a driver
+            # attaching to the node.
+            if hid in hw:
+                shape = "hardware"
+            elif hid in compat:
+                shape = "compatible"
+            else:
+                shape = "exclude"
+            notes["shape"].setdefault(hid, set()).add(shape)
+            bucket = hids.setdefault(hid, [])
             if rel not in bucket:
                 bucket.append(rel)
+        for hid in keyonly - hw - compat - exclude:
+            notes["keyonly"].setdefault(hid, set()).add(rel)
         for m in INF_BUS.finditer(text):
             if m.group(1).upper() == "ACPI":
                 continue
@@ -379,6 +527,55 @@ def short(path):
     return path if rel.startswith("..") else rel
 
 
+def print_set_header(inffiles, hids, encodings, notes):
+    """One driver set's size, its encodings, and where its ids were written.
+
+    The second line exists because "distinct `ACPI\\` ids" was counting three
+    different things and the count changed meaning without changing value. Of
+    boot.wim's 85 ids, 76 are the hardware id of a models line, 1 (`WACF006`)
+    is a compatible id, 3 (`NVDA0112`, `NVDA0212`, `TXNW0073`) are named only
+    by `ExcludeFromSelect`, and 5 are `[Strings]` key names that name no
+    device at all. Read as one number, the count answers a question nobody
+    asked: whether the *string* is present, rather than whether a driver
+    answers to the id.
+    """
+    print(f"{len(inffiles)} .inf files, {len(hids)} distinct `ACPI\\` ids claimed")
+    print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}")
+    hw = sum(1 for s in notes["shape"].values() if "hardware" in s)
+    compat = sum(1 for s in notes["shape"].values()
+                 if "hardware" not in s and "compatible" in s)
+    print(f"  positions: {hw} hardware, {compat} compatible-only, "
+          f"{len(hids) - hw - compat} ExcludeFromSelect-only")
+    keyonly = sorted(notes["keyonly"])
+    if keyonly:
+        shown = ", ".join(keyonly[:6]) + (f" +{len(keyonly) - 6}" if len(keyonly) > 6 else "")
+        print(f"  and {len(keyonly)} other name(s) spelled `ACPI\\...` that are "
+              f"*not* claimed - string-key names, which bind nothing: {shown}")
+    print()
+
+
+def shape_note(hid, notes):
+    """How the set named this id, when that is not the plain case.
+
+    `None` when a models line binds it in the hardware position, which needs no
+    remark. The two remarks below are the readings a bare "claimed by <file>"
+    hides: `PNP0CA1` is bound only through the compatible position, and a
+    reader who took that for a hardware-id match would expect the node's `_HID`
+    to be `PNP0CA1` rather than its `_CID`.
+    """
+    shapes = notes["shape"].get(hid, set())
+    if "hardware" in shapes:
+        return None
+    if "compatible" in shapes:
+        return ("compatible id - bound in the position a node is matched on "
+                "when nothing claims its hardware id, not as a hardware id")
+    if shapes:
+        return ("named only by `[ControlFlags] ExcludeFromSelect` - listed so "
+                "the id stays out of a device-selection list, and no models "
+                "line in this set binds it")
+    return None
+
+
 def cmd_bind(args):
     """Which driver claims a name - the check that the name is not a guess.
 
@@ -398,14 +595,17 @@ def cmd_bind(args):
     the ones Microsoft ships a driver for. Measured 2026-09-27: of the 34 ids
     written in `gauguin.asl`, `~/work/woa-ref/inf-7280` claims 32 and leaves
     `QCOM0A8B`/`QCOM24A5`, while a Windows 25H2 x64 `boot.wim`'s DriverStore
-    (339 INFs, 85 ids, via `tools/os-driver-store.sh`) claims exactly one of
+    (339 INFs, 80 ids, via `tools/os-driver-store.sh`) claims exactly one of
     them - `QCOM24A5`, in `storufs.inf` - and 33 the vendor set does. Neither
     number is the coverage; the union is, and running one and reporting it as
     the other is the same defect as the encoding bug above.
+
+    The counts in the header are claims and not string occurrences: `--bind`
+    prints the position each id was found in, because a compatible id is bound
+    without being a hardware id and an `ExcludeFromSelect` entry binds nothing.
     """
     hids, encodings, inffiles, notes = load_driver_set(args.drivers)
-    print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids")
-    print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}\n")
+    print_set_header(inffiles, hids, encodings, notes)
 
     if args.asl:
         return bind_asl(args, hids, notes)
@@ -440,6 +640,12 @@ def mention_lines(hid, notes):
     if bus:
         forms = ", ".join(f"`{f}` ({p})" for f, p in sorted(bus.items()))
         return [f"but named by this set on another bus: {forms}"]
+    key = notes["keyonly"].get(hid)
+    if key:
+        return [f"written in {len(key)} of this set's .inf files, as the name of "
+                f"a `[Strings]` key rather than as a device id - a key name binds "
+                f"nothing: {', '.join(sorted(key)[:3])}"
+                + (f" +{len(key) - 3}" if len(key) > 3 else "")]
     seen = sorted(p for p, text in notes["text"].items() if hid in text)
     if seen:
         return [f"named in {len(seen)} of this set's .inf files, but never after "
@@ -520,6 +726,9 @@ def bind_asl(args, hids, notes):
             verdict = "NOT CLAIMED by any .inf in this set"
         print(f"    {hid:<12} {len(where)}x  {verdict}")
         print(f"                 {', '.join(sorted(where)[:4])}")
+        note = shape_note(hid, notes)
+        if note:
+            print(f"                 {note}")
         if hid in unclaimed:
             for line in mention_lines(hid, notes):
                 print(f"                 {line}")
@@ -537,8 +746,10 @@ def bind_asl(args, hids, notes):
         print("  it is.")
         print("  Where a line under the id says the set names it on another bus, the")
         print("  id is the set's and only the attach is missing; where that line says")
-        print("  nowhere, the set does not carry a driver for the block at all. The")
-        print("  two are worth reading separately before acting on either.")
+        print("  it is only the name of a `[Strings]` key, nothing binds it and the")
+        print("  name is free to take; where it says nowhere, the set does not carry")
+        print("  a driver for the block at all. The three are worth reading")
+        print("  separately before acting on any of them.")
         print("  (This used to name UFS and the UART as the pair. Step 4.70 wrote a")
         print("  UART node and the set claims its id, so the examples are the list")
         print("  above and are no longer repeated here - a hardcoded example goes")
@@ -562,6 +773,9 @@ def bind_lookup(args, hids, notes):
             if who:
                 print(f"  {hid:<12} claimed by {', '.join(sorted(who)[:4])}"
                       f"{f' +{len(who) - 4}' if len(who) > 4 else ''}")
+                note = shape_note(hid, notes)
+                if note:
+                    print(f"  {'':<12} - {note}")
             else:
                 print(f"  {hid:<12} NOT CLAIMED by any .inf in this set")
                 for line in mention_lines(hid, notes):
@@ -1114,12 +1328,11 @@ def cmd_drivers(args):
     them the set answers to. A set that covers all of them names the family, and
     names every block in the same breath.
     """
-    hids, encodings, inffiles, _notes = load_driver_set(args.drivers)
+    hids, encodings, inffiles, notes = load_driver_set(args.drivers)
     if not inffiles:
         print(f"no .inf files under {args.drivers}")
         return 1
-    print(f"{len(inffiles)} .inf files, {len(hids)} distinct ACPI hardware ids")
-    print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}\n")
+    print_set_header(inffiles, hids, encodings, notes)
 
     qcom = sorted(h for h in hids if QCOM_ID.match(h))
     print(f"  {len(qcom)} of them are QCOM ids: "
@@ -1205,7 +1418,10 @@ def main():
                     help="with --drivers: which driver claims these ids, or with "
                          "none named, the pool of ids the set offers per block; "
                          "an id nothing claims is also reported as named "
-                         "elsewhere (another bus, a written value, or nowhere)")
+                         "elsewhere (another bus, a written value, or nowhere), "
+                         "and a claimed one is marked when the claim is a "
+                         "compatible id or an ExcludeFromSelect entry rather "
+                         "than a models line")
     ap.add_argument("--asl", metavar="FILE",
                     help="with --drivers --bind: every _HID/_CID in this ASL file "
                          "against the set, and for each id nothing claims, how "
