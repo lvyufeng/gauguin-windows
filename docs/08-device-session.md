@@ -34367,3 +34367,164 @@ all, and the shipped binary's `E722B03F` locate is Qualcomm's addition to it.
   unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.169 — the volume's unexplained FREEFORM file is the stock firmware's own a-priori array: 74 entries, every one naming a `.ffs` the XBL extraction already holds, and our build's 70 align with it entry for entry except where the two boards differ — which puts P3's display and BDS items at two named positions in the stock order
+
+Step 4.166 closed on a note it could not finish: one FREEFORM file in the volume,
+`6A69BA33-B140-5742-ABC9-0C5D03920B42` at `0x4f8f40`, carries a UI section whose text is the a-priori
+GUID string `fc510ee7-ffdc-11d4-bd41-0080c73c8881`, and its 1,188-byte RAW section is "not a second
+copy of the array", with the closing sentence *"what names what there is not established here."*
+This step establishes it, and the file turns out to be the most useful thing in the volume: it is
+the **stock firmware's own a-priori array** — the promotion order this handset actually ran — and it
+has been sitting in the repository, unread as such, since the XBL extraction.
+
+### The file is an a-priori array, and the reason the match failed is one entry
+
+Three measurements, none of which needs a device:
+
+| file in the volume | FFS size | sections | payload |
+|---|---|---|---|
+| `FC510EE7-FFDC-11D4-BD41-0080C73C8881` | 1,148 B | `RAW` (0x19) 1,120 B | **70** GUIDs, sha256 `c25c6d1675307959…` |
+| `6A69BA33-B140-5742-ABC9-0C5D03920B42` | 1,292 B | `UI` (0x15) 74 B, `RAW` (0x19) 1,184 B | **74** GUIDs, sha256 `c98782f81c7deade…` |
+
+The second payload is byte-identical to `Binaries/gauguin/RawFiles/fc510ee7-ffdc-11d4-bd41-0080c73c8881`,
+and its UI section is the UTF-16LE encoding of the XBL *filename* — 36 characters, two bytes each,
+plus the terminator, which is the whole 74 bytes. So the chain is: Qualcomm's XBL delivers its
+a-priori list as a raw file named after the a-priori file GUID; `tools/make_uefi_platform.py`
+recovers that raw file and re-emits it in `RAW.inc` as a FREEFORM file whose `SECTION UI` is the XBL
+name and whose file GUID is a generated one. `device/dxe-inventory.txt:7` shows the original on the
+device side — `FREEFORM size=0x000004bc fc510ee7-ffdc-11d4-bd41-0080c73c8881 raw 1184B` — so both
+ends of the copy are in the repository.
+
+Two checks make it an a-priori array rather than a file that merely looks like one:
+
+- **1,184 is 74 × 16 exactly**, with no header, so the payload is a GUID array and nothing else —
+  the same shape as the array `FC510EE7-…` carries, which is 1,120 = 70 × 16.
+- **all 74 entries name a `.ffs` in `device/dxe`**, checked one by one, and the extraction there
+  holds 118 name GUIDs. A GUID that names no file in the volume it belongs to would mean the file
+  being read is not an a-priori array; there is no such GUID, and the one entry the tree could not
+  name — `7A1BD660-A185-4F92-9003-CC71D22AD121` — is `device/dxe/ADSPDxe.ffs`, a driver this tree
+  simply does not carry.
+
+And the earlier note's failed match has a plain explanation rather than a subtle one. The
+comparison was made against **our** array, whose first two entries are `DxeCore, PcdDxe`, while the
+stock payload's first two are `DxeCore, EnvDxe`; the first 32 bytes therefore differ, and a
+32-byte comparison is not long enough to see that the two lists agree from the second entry on. The
+`PcdDxe` at our index 1 is a Mu/EDK2 addition the stock list does not have — the tool's alignment
+shows it as the only insertion before entry 17.
+
+For the a-priori read itself the second file is **inert**, and this is worth stating because it is
+the kind of thing that would otherwise be suspected in a boot failure: `Dispatcher.c:2062` calls
+`Fv->ReadSection (Fv, &gAprioriGuid, EFI_SECTION_RAW, 0, …)`, which selects a file by its **file
+GUID**, and `6A69BA33-…` is not `gAprioriGuid`. The volume therefore makes the stock order readable
+without the stock order being read by anything.
+
+### The two orders are the same sequence with the two boards spliced into it
+
+`tools/apriori-stock-diff.py`, new here, resolves both arrays' GUIDs to names — the stock build
+names its files with the module's own id (`RpmhDxe` is `CB29F4D1-7F37-4692-A416-93E82E219766` on the
+stock side and `60F4DF83-C758-52B5-9AA0-92EA560EDB8F` on ours) and only a name-level comparison is
+usable — and aligns them. **54 of the 74 entries are the same sequence on both sides in the same
+order**, and the differences are not scatter:
+
+    =  DxeCore
+    +  PcdDxe                                    (Mu/EDK2 addition, ours only)
+    =  EnvDxe … CmdDbDxe                         16 entries, identical order
+    -  PwrUtilsDxe                               (stock only)
+    =  NpaDxe, RpmhDxe, PdcDxe                   aligned at 18..20 on both sides
+    -  VcsDxe                                     (stock only)
+    =  ClockDxe, ShmBridgeDxe, ScmDxe, DiskIoDxe, PartitionDxe, EnglishDxe
+    -  FvSimpleFileSystem                        (stock only)
+    =  SdccDxe, UFSDxe, Fat, TzDxe
+    ~  stock VariableDxe, FeatureEnablerDxe, QcomWDogDxe   ->  ours VariableRuntimeDxe
+    =  DALTLMM, SPMI
+    ~  stock DDRInfoDxe, ResetRuntimeDxe                    ->  ours ResetSystemRuntimeDxe
+    =  PmicDxe
+    -  stock only: DisplayDxe, FvDxe, ADSPDxe, PILProxyDxe, PILDxe, CPRDxe
+    =  WatchdogTimer
+    ~  stock ASN1X509Dxe, SecRSADxe, VerifiedBootDxe        ->  ours SecurityStubDxe
+    =  EmbeddedMonotonicCounter, RealTimeClock, PrintDxe, DevicePathDxe, CapsuleRuntimeDxe, HiiDatabase
+    ~  stock FontDxe, QcomBds                               ->  ours BdsDxe, GpiDxe
+    =  I2C, AdcDxe, UsbPwrCtrlDxe, QcomChargerDxeLA, ChargerExDxe, UsbfnDwc3Dxe
+    +  UsbBusDxe, UsbKbDxe, UsbMassStorageDxe, UsbMsdDxe, UsbDeviceDxe   (ours only)
+    =  UsbConfigDxe, ButtonsDxe, TsensDxe
+    +  SimpleFbDxe                               (ours only)
+    =  LimitsDxe
+    ~  stock GpiDxe                                          ->  ours HashDxe, CipherDxe, RngDxe, DDRInfoDxe
+    =  SimpleTextInOutSerial, ConPlatformDxe, ConSplitterDxe, GraphicsConsoleDxe
+
+    by position: 9 stock-only, 7 ours-only, 11 substituted against 9
+    by name:     18 names only the stock list carries, 14 only ours
+
+The two counts differ on purpose and the tool prints both, because a name can be promoted at a
+different position on each side: `DDRInfoDxe` and `GpiDxe` are stock-only *by position* and present
+on both sides by name, at our indices 65 and 45. The front of the order — the architectural
+protocols, the SMEM/DAL/NPA/RPMH band, and then `ClockDxe, ShmBridgeDxe, ScmDxe` into the storage
+and TZ band — is **the device's own order, unchanged**, which is not a coincidence to be relied on:
+our array is generated from the `suryaPkg` *reference package*, another Qualcomm board, and the
+agreement is the two boards sharing a core. Where the boards differ the differences are wholesale —
+the whole Qualcomm power/secure-boot family on the stock side (`PwrUtilsDxe`, `VcsDxe`,
+`FeatureEnablerDxe`, `QcomWDogDxe`, `PILProxyDxe`, `PILDxe`, `CPRDxe`, `ASN1X509Dxe`, `SecRSADxe`,
+`VerifiedBootDxe`) against Mu's own (`VariableRuntimeDxe`, `ResetSystemRuntimeDxe`,
+`SecurityStubDxe`, the `HashDxe`/`CipherDxe`/`RngDxe` trio).
+
+### Two positions in the stock order are the two P3 items this plan is still holding
+
+The one thing this alignment does that a count could not is name **where** the stock firmware put
+the two drivers P3 items 2 and 4 are about:
+
+- **`DisplayDxe` is stock entry 41**, inside the power/TZ band between `PmicDxe` and
+  `WatchdogTimer`. Our build promotes `SimpleFbDxe` instead, and does so at entry **60**, in the
+  console tail. So the two display strategies are not merely different drivers in the same slot;
+  the stock firmware promoted its display driver early, in the band whose drivers install or fail
+  before the console exists, and the build switch that selects it (`USE_CUSTOM_DISPLAY_DRIVER`, whose
+  `= 1` branch promotes `Binaries/gauguin/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf`) moves nine
+  entries when it is taken. Item 2 is therefore a build flag with a known position in the stock
+  reference order, and its absence from the current payload is a choice the `= 0` branch makes.
+- **`QcomBds` is stock entry 58**, immediately after `FontDxe`, in the block that in ours is
+  `BdsDxe, GpiDxe` at 44–45 — and `FontDxe` is absent from our list, while the stock order carries
+  it right before the BDS. So the stock firmware promotes Qualcomm's BDS *and* the font driver the
+  console needs, in adjacent entries; ours promotes `BdsDxe` and no font driver at all. Item 4's
+  "way to choose boot entries" is a BDS, and the stock order says which two entries of the reference
+  order it was reached by.
+
+Neither observation says these drivers would work if promoted — 4.95's nine architectural protocols
+are providers that install late, and whether a driver installs is a separate question from where it
+sits — but they do say that P3 items 2 and 4 have a *stock precedent with a position*, and that the
+position is not the one our build puts the substitutes in.
+
+### Rows:
+
+- **instrument**: the same two inflated volumes as 4.168 (`/tmp/fv-old.bin` `c8f57e46046c86c5…`,
+  7,348,224 B, and `/tmp/fv-usb.bin` `ca60789d47e263d4…`, 7,536,640 B), both of which carry the two
+  FREEFORM files above; the built payload `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+  (`f1a7106b76f98e11…`, 1,171,456 B) read by `tools/apriori-order.py`; `device/dxe/*.ffs` (118 name
+  GUIDs) and `device/dxe-inventory.txt` for the stock side; and `tools/apriori-stock-diff.py`,
+  written here. No device was touched.
+- **shows**: that the `6A69BA33-…` FREEFORM file is the stock firmware's a-priori array — 74
+  entries, every one naming a `.ffs` present in the XBL extraction, byte-identical RAW to the XBL
+  file `device/dxe-inventory.txt:7` records; that it is inert for the a-priori read because
+  `ReadSection` selects by file GUID; that our 70-entry array and it are the same sequence in 54
+  places; and that the stock firmware promoted `DisplayDxe` at 41 and `QcomBds` — with `FontDxe`
+  immediately before it — at 58, where our build promotes `SimpleFbDxe` at 60 and `BdsDxe` at 44.
+- **adds**: `tools/apriori-stock-diff.py`, which makes the device's own promotion order a
+  first-class input to every later ordering question, and `--device`, which validates any candidate
+  a-priori array against the extraction by requiring every entry to name a file; the entry-for-entry
+  alignment of the two orders; and the position of the display and BDS entries in the stock
+  reference order, which is what P3 items 2 and 4 are about.
+- **corrects**: the note this step closes. 4.166 recorded the `6A69BA33-…` RAW as "**not** a second
+  copy of the array" and left naming it open. It *is* an a-priori array — the stock one — and the
+  match failed because it was tested against ours, whose second entry is `PcdDxe` where the stock
+  array's is `EnvDxe`. The byte-level observation was right and the conclusion drawn from it was
+  not, and the conclusion is the part that would have been quoted later.
+- **does not close**: the `entries=70` versus `entries=47` fork, and the phone payload's own
+  `P2 APRI entries=` and `P2 WALK seen=`, which remain the readings that would decide it — this step
+  adds no device reading and changes no count; whether promoting `DisplayDxe` or `QcomBds` would
+  install, which needs a run; which payload `boot` currently holds; and every item 4.163–4.168 left
+  open.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and nothing was rebuilt. `userdata`
+  (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The porting goal is
+  unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.

@@ -3207,6 +3207,36 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `tools/guid-refs.py`, new here — it extracts each `EFI_SECTION_PE32` (0x10) carrying the GUID,
 > disassembles it, resolves the `ADRP`+`ADD` pair that materialises the GUID's address and reads the
 > `EFI_BOOT_SERVICES` slot the register is handed to. See `docs/08` step 4.168.
+>
+> **Named and read 2026-09-27 by step 4.169 — the second FREEFORM file that carries the a-priori
+> GUID is the stock firmware's own a-priori array.** `6A69BA33-B140-5742-ABC9-0C5D03920B42`, which
+> 4.166 could only describe, is a FREEFORM file of 1,292 bytes whose `UI` section (0x15) is the
+> UTF-16LE of the *string* `fc510ee7-ffdc-11d4-bd41-0080c73c8881` — 74 bytes, because the XBL raw
+> file is named that and `tools/make_uefi_platform.py` re-emits the name as the UI — and whose `RAW`
+> section (0x19) is **1,184 bytes = 74 × 16 GUIDs**, byte-identical to
+> `Binaries/gauguin/RawFiles/fc510ee7-ffdc-11d4-bd41-0080c73c8881` and to the XBL file
+> `device/dxe-inventory.txt:7` records. All 74 entries name a `.ffs` in `device/dxe` — 118 name
+> GUIDs are there — which is the check that makes it an a-priori array rather than a file that
+> merely has the shape of one; the single entry no INF in this tree names,
+> `7A1BD660-A185-4F92-9003-CC71D22AD121`, is `device/dxe/ADSPDxe.ffs`. The file is **inert** for the
+> read it is named after: `Dispatcher.c:2062` calls
+> `Fv->ReadSection (Fv, &gAprioriGuid, EFI_SECTION_RAW, 0, …)`, which selects by file GUID, and
+> `6A69BA33-…` is not `gAprioriGuid`. `tools/apriori-stock-diff.py`, new here, aligns the stock
+> order against the built one by name — a GUID-level comparison is unusable, because the stock build
+> names its files with the module's id (`RpmhDxe` is `CB29F4D1-7F37-4692-A416-93E82E219766` there and
+> `60F4DF83-C758-52B5-9AA0-92EA560EDB8F` here) while ours names them with the INF's `FILE_GUID` —
+> and finds **54 of 74 entries identical in sequence and order**, including `ClockDxe, ShmBridgeDxe,
+> ScmDxe, DiskIoDxe, PartitionDxe, EnglishDxe` as one unbroken run on both sides, the only insertion
+> before entry 17 being our `PcdDxe` at index 1. The differences are the two boards' driver
+> families rather than reorderings: stock `VariableDxe, FeatureEnablerDxe, QcomWDogDxe` against our
+> `VariableRuntimeDxe`; stock `DDRInfoDxe, ResetRuntimeDxe` against our `ResetSystemRuntimeDxe`;
+> stock `ASN1X509Dxe, SecRSADxe, VerifiedBootDxe` against our `SecurityStubDxe`; stock `FontDxe,
+> QcomBds` against our `BdsDxe, GpiDxe`; and stock `DisplayDxe, FvDxe, ADSPDxe, PILProxyDxe, PILDxe,
+> CPRDxe` with no counterpart here. Two of those positions are this file's own open items —
+> `DisplayDxe` at stock 41 against `SimpleFbDxe` at our 60, and `QcomBds` at stock 58 with `FontDxe`
+> beside it against `BdsDxe` at our 44. This does not say any of them installs; it says where the
+> stock firmware put the display and BDS drivers, which is in the early bands and not in the console
+> tail this build puts the substitutes in. See `docs/08` step 4.169.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

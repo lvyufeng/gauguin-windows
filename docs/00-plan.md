@@ -817,6 +817,35 @@ Work:
 > consumer. A call site is a fact about the binary, not about the run: nothing here says any of these
 > paths is reached on the device, and the phone payload's park inside `ClockDxe`'s `CpuDeadLoop`
 > (4.164) sits upstream of all of them. See `docs/08` step 4.168.
+>
+> **Step 4.169 (2026-09-27) found the device's own promotion order already in the repository, and it
+> is the reference for every later ordering question.** The FREEFORM file 4.166 could not name
+> (`6A69BA33-B140-5742-ABC9-0C5D03920B42`, at `0x4f8f40`) is the **stock firmware's a-priori
+> array** — 74 entries, 1,184 bytes = 74 × 16 with no header, RAW-identical to the XBL file
+> `device/dxe-inventory.txt:7` records as `fc510ee7-… raw 1184B`, and every one of its 74 entries
+> names a `.ffs` present in `device/dxe`. Its UI section is the UTF-16LE of the a-priori GUID
+> *string*, because that is the name the XBL raw file has and `tools/make_uefi_platform.py` re-emits
+> it verbatim under a generated file GUID. It is **inert** for the a-priori read — `Dispatcher.c:2062`
+> calls `Fv->ReadSection (Fv, &gAprioriGuid, …)`, which selects by file GUID — so the volume can
+> carry the stock order without anything reading it, which is why it went unnoticed. 4.166's "not a
+> second copy of the array" was a match against **our** array, whose second entry is `PcdDxe` where
+> the stock array's is `EnvDxe`. `tools/apriori-stock-diff.py`, new here, aligns the two by name
+> (the stock build names files with the module's own id, so a GUID comparison would call every
+> driver different): **54 of the 74 entries are the same sequence in the same order**, including the
+> whole architectural-protocol front and `ClockDxe, ShmBridgeDxe, ScmDxe` into the storage band, and
+> the differences are the boards' own families — Qualcomm's `PwrUtilsDxe`, `VcsDxe`,
+> `FeatureEnablerDxe`, `QcomWDogDxe`, `DisplayDxe`, `FvDxe`, `ADSPDxe`, `PILProxyDxe`, `PILDxe`,
+> `CPRDxe`, `ASN1X509Dxe`, `SecRSADxe`, `VerifiedBootDxe`, `FontDxe`, `QcomBds`, `FvSimpleFileSystem`
+> against Mu's `PcdDxe`, `VariableRuntimeDxe`, `ResetSystemRuntimeDxe`, `SecurityStubDxe`,
+> `HashDxe`/`CipherDxe`/`RngDxe`, `BdsDxe`, `SimpleFbDxe` and the five USB device-mode drivers. The
+> part that bears on the plan is that the two P3 items still open now have **positions in the stock
+> order**: `DisplayDxe` is stock entry **41**, in the power/TZ band between `PmicDxe` and
+> `WatchdogTimer`, where our build promotes `SimpleFbDxe` at entry **60** in the console tail; and
+> `QcomBds` is stock entry **58** with `FontDxe` immediately before it, where ours promotes `BdsDxe`
+> at 44 and carries no font driver at all. Item 2's driver is a build flag with a stock precedent
+> and a known position (`USE_CUSTOM_DISPLAY_DRIVER`'s `= 1` branch, which moves nine entries), and
+> item 4's boot-entry machinery is two adjacent stock entries rather than an unnamed wall — though
+> neither says either driver would install if promoted. See `docs/08` step 4.169.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
