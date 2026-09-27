@@ -2746,6 +2746,37 @@ reproducible — two builds agreeing in every field `info` reports and in `dir`'
 listing still differ in sha256 because the WIM GUID is regenerated, so a hash of `boot.wim`
 fingerprints the build and not the content.
 
+**Step 4.156 turned to the firmware's own failure letter instead, and the volume says the 27
+`L`s are not 27 refusals.** `RelocationsStripped` — the flag `Image.c:700-741` branches on — is
+set by `BasePeCoff.c:659-667` from COFF Characteristics bit 0 alone, and all 46 promoted images
+have it clear and are linked at `ImageBase 0x0`, so the `AllocateAddress` arm at `:711` is dead
+code for the batch and every one of the 46 takes exactly one call,
+`CoreAllocatePages (AllocateAnyPages, ImageCodeMemoryType, EFI_SIZE_TO_PAGES (SizeOfImage))` at
+`:722`. No field of an image can therefore separate its letter from another's — and measured,
+none does: 27 of the 46 belong to eight groups of images making a request the loader cannot
+distinguish, and **all eight groups are split by letter, with every success earlier in the
+sequence than every failure**, while the one unsplit group of more than one member
+(`SecurityStubDxe`, `ConSplitterDxe`) is the control. What is left is the moment, and the moment
+breaks the premise `P2 RETRY` re-asks under: if every `L` were the page refusal and nothing ever
+freed, an `L` of *n* pages would forbid a later `s` of *n* or more, and the run violates that
+twice on the cut map — slot 18 PdcDxe refusing 9 pages before slot 21 DiskIoDxe takes 12, and
+slot 20 ScmDxe refusing 12 before the same slot 21 takes 12 — and three times on the identity map
+that `tools/apriori-index.py` and `tools/pe-facts.py` decode with. Both maps fail, so the join
+disagreement carried since Step 4.130 does not decide the 27; both agree on the subsystem
+cross-tabulation, where the `P2 BIN` comment's six runtime `L`s and four runtime `s`es reproduce
+word for word. `CoreLoadImage` has four other reachable failure sites — `:1311` for a PE32
+section that cannot be read out of its FFS file, `:1393` and `:795` for pool, `:782`/`:805` after
+the image has been given its pages, which `:940-948` then frees again — so an `L` covers
+*refused* and *loaded-then-failed* alike, and the two have opposite effects on the next request.
+That is `P2 WHY`/`P2 ERR`, never photographed, and it is where the next device window starts.
+The same step corrected the instrument that re-asks the question: `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY`
+is defined nowhere in this tree, so `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x10000
+(`MdePkg/Include/AArch64/ProcessorBind.h:163-171`), a runtime image's request is its page count
+rounded up to a multiple of 16 at a 64-KiB-aligned address, and `tools/pe-facts.py`'s
+`ceil ((SizeOfImage + SectionAlignment) / 4096)` over-states every runtime image by up to 16
+pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not a factor, that
+`Page.c`'s `P2BRINGUP` comment makes.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

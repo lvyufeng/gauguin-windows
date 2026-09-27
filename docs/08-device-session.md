@@ -31436,3 +31436,177 @@ is a build input, not device state; no stick has been written and the operator w
 porting goal is unchanged and unmet, with P3 unfinished, P4's `userdata`-destroying install
 and P5's peripherals not begun, and the end state still a Windows tablet whose modem and
 cameras are undrivable.
+
+## Step 4.156 — the 27 `L`s are not 27 refusals: eight groups of identically-requesting images are each split by letter with every success earlier than every failure, and a 9-page refusal sits two slots before a 12-page success under *both* candidate slot maps — so the premise `P2 RETRY` re-asks under is falsified off the device, and the request model it re-asks with is wrong for runtime images besides
+
+Two questions were open at the end of Step 4.155 and neither of them needs the phone.
+
+**The build discrepancy carried since Step 4.145 is a truncation, and the truncated file is not
+the payload.** `work/uefi/Mu-Silicium/Mu-gauguin.img` is **1,648 bytes**: a complete `ANDROID!`
+header — `kernel_size` 1,079,456, `kernel_addr` 0x10008000, `ramdisk_size` 5, `ramdisk_addr`
+0x11000000, `tags_addr` 0x10000100, `page_size` 0x800, `header_version` **2**, `dtb_size` **0**,
+`dtb_addr` 0x67c00000000 — and no kernel blob at all. The cause is in the configuration and not
+in the build: `Resources/Configs/gauguin.toml` pairs `[boot_image] header_version = 2` with
+`[boot_image_kernel] append_dtb = false`, and `Resources/Scripts/mkbootimg.py:255-256` raises
+only `if args.header_version > 1`, so the v2 header is written and the append that would have
+filled the DTB region never happens. `build_uefi.py`'s `create_android_boot_img` builds its
+`argument_map` by appending an option only when `image_config.get(key)` is truthy, so no `--dtb`
+is ever passed and the empty-DTB check has nothing to accept. The toml already diagnoses this in
+its own comment, citing `DTBImgCheckAndAppendDT` at `QcomModulePkg/Library/BootLib/BootLinux.c:454`:
+"*Gluing it onto the kernel instead — which is what append_dtb does — leaves dtb_size 0 and the
+region empty, and ABL's GetSocDtb() then scans from DtbOffset to the end of the image, finds no
+tree, and returns NULL.*" `surya.toml` is `header_version = 1` and `Mu-surya.img` is complete at
+1,730,560 B, which is the control.
+
+It is not the payload of record. `tools/build-apriori-variant.sh:210-216` already tolerates that
+exact message — it greps for `DTB image must not be empty` — and judges the build by
+`check-payload.py`'s verdict on the artifact instead, which is the right instrument because a
+build log is not an artifact. The payload is built by `tools/make_boot_image.py --profile silicon`
+over the FD, the BootShim and a separately-built `sm7225-xiaomi-gauguin.dtb`, and
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` is 1,171,456 B, sha256 `f1a7106b…3f1c84`,
+`shape: silicon`, DTB 87,594 B at file offset 0x108086 (`check-payload-xhci-host.log`). The nag is
+benign and the tool already treats it as benign; the stub is recorded here only so that a later
+reader does not mistake 1,648 bytes of header for the firmware in `boot`.
+
+**Then the mechanism, off the volume, and the first result is that the per-image search is over
+before it starts.** The flag `Image.c:700-741` branches on is `RelocationsStripped`, and
+`BasePeCoff.c:659-667` sets it from `EFI_IMAGE_FILE_RELOCS_STRIPPED` — COFF Characteristics bit 0
+— and from nothing else. The BaseReloc directory's size plays no part in it; an image with no
+relocation data and the bit clear is that function's third case, "relocatable but has no base
+relocs to apply", and the loader cannot tell it from any other relocatable image. All 46 promoted
+images have Characteristics `0x2022` or `0x002e`, so bit 0 is clear on all 46, and every one of
+them is linked at `ImageBase 0x0`. With `PcdImageLargeAddressLoad` TRUE (the MdeModulePkg DEC
+default, not overridden in `gauguin.dsc`/`gauguin.fdf`) and `PcdLoadModuleAtFixAddressEnable` 0,
+the condition guarding the `AllocateAddress` arm reduces to `ImageAddress >= 0x100000 ||
+RelocationsStripped` — false for all 46. **So all 46 take exactly one call,
+`CoreAllocatePages (AllocateAnyPages, ImageCodeMemoryType, EFI_SIZE_TO_PAGES (SizeOfImage))` at
+`Image.c:722`, and the `AllocateAddress` arm at `:711` is dead code for this batch.** That
+retires the whole class of per-image mechanisms this survey was built to test, including the one
+that would have explained a lone `s` inside a 25-long `L` run: an image whose preferred base is
+taken cannot demand a specific address if it never names one.
+
+What is left is the moment, and the volume measures that too, because identical requests can be
+grouped. **27 of the 46 belong to a group of two or more images that make a request the loader
+cannot distinguish in any field — same `SizeOfImage`, same `SectionAlignment`, same
+Characteristics, same DllCharacteristics, same subsystem — and every one of those eight groups is
+split by letter**, with the successes always earlier in the sequence than the failures:
+
+| request | images (`slot`, letter) |
+|---|---|
+| 36,864 B, sa 0x1000, chars 0x2022, sub 11 | MetronomeDxe (7, `s`), ArmTimerDxe (8, `s`), EnglishDxe (23, `L`), WatchdogTimer (32, `L`), SimpleTextInOutSerial (42, `L`) |
+| 327,680 B, sa 0x10000, chars 0x2022, sub 12 | StatusCodeHandlerRuntimeDxe (3, `s`), EmbeddedMonotonicCounter (34, `L`), RealTimeClock (35, `L`), CapsuleRuntimeDxe (38, `L`) |
+| 393,216 B, sa 0x10000, chars 0x2022, sub 12 | ReportStatusCodeRouterRuntimeDxe (2, `s`), RuntimeDxe (4, `s`), VariableRuntimeDxe (28, `L`), ResetSystemRuntimeDxe (31, `L`) |
+| 36,864 B, sa 0x1000, chars 0x002e, sub 11 | HWIODxeDriver (11, `s`), PdcDxe (18, `L`), DALTLMM (29, `L`) |
+| 45,056 B, sa 0x1000, chars 0x002e, sub 11 | ChipInfo (12, `s`), HALIOMMU (13, `s`), SPMI (30, `L`) |
+| 49,152 B, sa 0x1000, chars 0x2022, sub 11 | ArmGicDxe (6, `s`), DiskIoDxe (21, `s`), ConPlatformDxe (43, `L`) |
+| 53,248 B, sa 0x1000, chars 0x2022, sub 11 | PcdDxe (0, `s`), PartitionDxe (22, `L`), GraphicsConsoleDxe (45, `L`) |
+| 40,960 B, sa 0x1000, chars 0x002e, sub 11 | SmemDxe (9, `s`), I2C (41, `L`) |
+
+Twelve of those 27 carry `s` and fifteen carry `L`, and in no group does a failure precede a
+success. Nothing about the image decides; only the position in the sequence does. The ninth group
+that has more than one member is the control and it is not split — `SecurityStubDxe` (33) and
+`ConSplitterDxe` (44) both ask for 57,344 B and both carry `L` — which is what a group that is
+entirely on the far side of the boundary should look like.
+
+**And then the run violates the premise anyway, under either slot map.** If every `L` is the page
+call at `Image.c:740` and nothing in the run ever frees memory, then an `L` of *n* pages at slot
+*k* forbids an `s` of *n* pages or more at any slot after *k*. On the cut map — slot *k* is the
+*k*-th Apriori entry that matched, `tools/apriori-prefix.py`'s `--seen 49` batch — there are two
+violations, both involving the same late `s`: **slot 18 PdcDxe refuses 9 pages and slot 21
+DiskIoDxe takes 12**, and **slot 20 ScmDxe refuses 12 pages and slot 21 DiskIoDxe takes 12**. The
+second is an exact-size inversion, which is the strongest form the test can take: one 12-page
+request refused and the next one granted, with the same memory type (`EfiBootServicesCode`), the
+same alignment (one page) and no allocation in between.
+
+That the map choice does not decide it is worth stating because it retires an open item rather
+than adding one. `tools/apriori-index.py` decodes the SEQ against the *identity* map, `slot k =
+ap(k+1)`, and `tools/pe-facts.py` uses the same join at `:391` and `:549`; `docs/08` Steps 4.130
+and 4.142 establish that the device's 46-character SEQ is a *stopped* walk whose batch is
+`apriori-prefix.py`'s cut. Running the census both ways: the identity map gives **three**
+violations, all against ClockDxe's 47-page success at slot 21 (NpaDxe refusing 20 before it,
+RpmhDxe 16, PdcDxe 9). Neither map is consistent, so the conflict between the two joins is not
+what decides the 27, and the conclusion does not depend on resolving it. What both maps agree on
+is the subsystem cross-tabulation, and there the firmware's own numbers reproduce exactly: six
+`L`s are runtime-typed — SdccDxe, VariableRuntimeDxe, ResetSystemRuntimeDxe,
+EmbeddedMonotonicCounter, RealTimeClock, CapsuleRuntimeDxe — and four `s`es are —
+EnvDxe, ReportStatusCodeRouterRuntimeDxe, StatusCodeHandlerRuntimeDxe, RuntimeDxe — against 21
+and 15 boot-services ones, which is the `P2 BIN` comment's "21 of the 27 … against 6 that are
+subsystem-12" and its four-name success list, word for word.
+
+So the `L` cannot be read as "the heap refused this" for all 27. `CoreLoadImage`'s failure letter
+is set in `Dispatcher.c`'s drain on any error from `CoreLoadImage`, and there are four reachable
+failure sites that are not the page call: `:1311 EFI_NOT_FOUND` when
+`GetFileBufferByFilePath` cannot read the PE32 section out of the FFS file, `:1393` and `:795`
+which are *pool* allocations, and `:782`/`:805` where the image has already been given its pages
+— and `CoreLoadPeImage`'s `Done:` at `:940-948` **frees those pages again** whenever
+`DstBufAlocated` is set, which in this path it always is. An `L` therefore covers two opposite
+events for the heap: *refused*, where nothing was taken, and *loaded then failed*, where the
+pages came back. The first makes the next request harder and the second makes it easier, and the
+letter does not distinguish them. That is what `P2 WHY` is for, and it is also why a run with one
+recovered `s` in it is not evidence of anything unusual — it is evidence that at least one of the
+`L`s before it returned what it took.
+
+**Which is also where the instrument that re-asks the question turns out to be mis-calibrated.**
+`P2 RETRY` re-issues the recorded requests after the run and prints the largest free run beside
+each answer, and `tools/pe-facts.py` is the host-side model of those requests. Both compute the
+runtime request wrongly. On AArch64 `RUNTIME_PAGE_ALLOCATION_GRANULARITY` is 0x10000 unless
+`__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is defined (`MdePkg/Include/AArch64/ProcessorBind.h:163-171`),
+and a grep of every `.dsc`, `.fdf`, `.inf`, `.dec`, `.h`, `.c` and `.py` in the tree finds that
+macro nowhere except the `#ifdef` that tests it. So `CoreInternalAllocatePages`'s memory-type
+switch gives `Alignment = 0x10000` for the ten runtime-typed images, rounds their page count up to
+a multiple of 16, and searches for a 64-KiB-aligned run — where `pe-facts.py` computes
+`ceil ((SizeOfImage + SectionAlignment) / 4096)`, which adds 16 pages to each of the eight
+runtime images whose `SectionAlignment` is 0x10000 and is neither the same request nor a bound on
+it. For StatusCodeHandlerRuntimeDxe, EmbeddedMonotonicCounter, RealTimeClock and CapsuleRuntimeDxe
+the true request is 80 pages where the tool says 96; for ReportStatusCodeRouterRuntimeDxe,
+RuntimeDxe, VariableRuntimeDxe and ResetSystemRuntimeDxe it is 96 where the tool says 112; for
+SdccDxe it is 32 where the tool says 42, and for EnvDxe 16 where the tool says 15.
+
+That correction reaches into the firmware's own comment. `Page.c`'s `P2BRINGUP` block above
+`FindFreePages` states that "RUNTIME_PAGE_ALLOCATION_GRANULARITY is 0x1000 here … which is the
+`#else` arm of `ProcessorBind.h:163-170` and is not compiled", keeps the `raw` field "because it is
+what would make `raw > big` readable the day the granularity changes, and because `raw == big` on
+every line is itself the evidence that alignment is not the factor". 0x1000 is the `#ifdef` arm
+and 0x10000 is the `#else` arm — the two are swapped in that sentence — and since the macro is
+undefined the compiled value is 0x10000, so `raw > big` is not a hypothetical for the ten runtime
+images but the ordinary case, which is exactly what the field was kept for. The same comment's
+arithmetic for the four early runtime successes — "335 pages between them — 15, 112, 96 and 112" —
+reproduces exactly from `pe-facts.py`'s formula (EnvDxe 15, ReportStatusCodeRouterRuntimeDxe 112,
+StatusCodeHandlerRuntimeDxe 96, RuntimeDxe 112) and not from `SizeOfImage`, so those four numbers
+are that tool's arithmetic rather than a device reading; the true sum is 288 pages. The conclusion
+the comment draws from it — that the runtime bin is empty by slot 5, fourteen slots before the
+first failure — survives the correction, because 288 is still larger than the bin.
+
+**Where that leaves the next device window.** `P2 FREE largest=` and `P2 FWHY`'s `free`/`big`/`c`
+now have a sharper reading than they had: `P2FreeWhy` is called only where `PromoteMemoryResource`
+has already failed (`Page.c:1386` on the `CoreFindFreePagesI` rung, `:1598` on the `FindFreePages`
+rung), so those numbers describe a map that promotion could not enlarge, not merely a small one.
+But they cannot decide the question the volume has now sharpened, because the question is no
+longer "how big was the largest free run" but "which of the five failure sites produced this
+letter". That is `P2 WHY` and `P2 ERR`, neither of which has ever been photographed, and the
+prediction this step makes is testable against them: at least one of the letters in the pairs
+above is not `Out Of Resources`, or the run is not a page story at all. `P2 SEQ` — read three
+times — is now the least informative of the three lines and the one that has been read most.
+
+The tool behind all of this is `tools/load-failure-census.py`, new in this step: it reads the
+loaded/failed split off the *volume*, grouping the batch by request identity, cross-tabulating the
+letters against the memory type and against `RelocationsStripped`, and running the monotone test
+under either slot map. Verified: `--help` exits 0, the cut map prints 107 lines, `--map identity`
+106, `--all` 135 over all 126 files, and the run is deterministic across the three.
+
+Left open: whether the `L`s are the page call, the pool allocations or the lookup — which is
+`P2 WHY`/`P2 ERR` and nothing else; the identity/cut join disagreement, now shown not to decide
+this question but still unresolved for `tools/apriori-index.py` and `tools/pe-facts.py`, whose
+`req`/`pg` formula should be changed to the per-type rounding this step measured; the Step 4.155
+items — whether the stock Setup-Media BCD boots a *substituted* `boot.wim` unchanged,
+`winpeshl.ini`, the 1 GB stick — and `UrsSynopsys.sys`'s child naming, `ExcludeFromSelect` and the
+`*<PNP-id>` position carried from 4.153.
+
+Not an action: no device was touched, nothing was flashed, no partition was written, no stub,
+firmware source or Microsoft image was changed or patched. No QEMU run, no probe and no panel
+reading — `adb devices -l` and `fastboot devices` are both empty and no Qualcomm USB device is
+present. `userdata`, the partition table and the firmware LUN remain untouched. The one file
+written is `tools/load-failure-census.py`, which is a reader; the payload it reads is the same
+1,171,456 B artifact Step 4.155 leaves in `work/out/usb-host/`. The porting goal is unchanged and
+unmet, with P3 unfinished, P4's `userdata`-destroying install and P5's peripherals not begun, and
+the end state still a Windows tablet whose modem and cameras are undrivable.

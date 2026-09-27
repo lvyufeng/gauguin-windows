@@ -391,6 +391,26 @@ under `Platforms/`. A gate the reference for this same `msm-id` cannot meet is n
 The shell is a decision to revisit after the first execution; what the volume does
 provide, and what the gate now asks for, is `BootManagerMenuApp` drawing on the panel.
 
+Step 4.156 then took the 27 `CoreLoadImage` failures off the device for the first time. The flag
+`Image.c:700-741` branches on, `RelocationsStripped`, is set by `BasePeCoff.c:659-667` from COFF
+Characteristics bit 0 and from nothing else; all 46 promoted images have that bit clear and are
+linked at `ImageBase 0x0`, so the `AllocateAddress` arm is dead code and every one of the 46 makes
+exactly one `AllocateAnyPages` call. Measured against the volume, no per-image property can
+therefore separate the letters, and none does: 27 of the 46 belong to eight groups of images
+making a request the loader cannot distinguish, and every one of the eight is split by letter with
+the successes always earlier than the failures. The run then breaks the premise `P2 RETRY` re-asks
+under — a 9-page refusal two slots before a 12-page success, and an exact 12-page refusal
+immediately before a 12-page success — and it breaks it under *both* candidate slot maps, so the
+identity/cut join disagreement does not decide the 27. `CoreLoadImage` has four other reachable
+failure sites, two of them pool and two after the image already holds its pages, which
+`Image.c:940-948` gives back on the way out; an `L` covers *refused* and *loaded-then-failed*
+alike and the letter does not say which. That is `P2 WHY` and `P2 ERR`, neither ever photographed,
+and they are what the next device window reads. The same step corrected the model `P2 RETRY`
+re-asks with: `__DEPRECATED_AARCH64_4K_RUNTIME_GRANULARITY` is defined nowhere in this tree, so a
+runtime image's request is 64-KiB-aligned and rounded up to a multiple of 16 pages, where
+`tools/pe-facts.py` and the firmware's own `P2BRINGUP` comment both model it as one page.
+
+
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first
 attempt; expect a long debugging loop, and serial output is essential (the device has no
