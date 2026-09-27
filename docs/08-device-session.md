@@ -32821,3 +32821,239 @@ Rows:
   untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
   unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
   state remains a Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.162 — the wild pointer is a use-after-unload and the DXE core's own unload is what wrote the `0xAF`: the record 4.161 found cleared at `DALSys + 0x346c` is `PmicDxe`'s own static DAL module record at its `.data + 0x1F278`, registered at 9.9 s from `PmicDxe + 0x1580` through the wrapper at `+0x6788`; `PmicDxe`'s entry point returns `EFI_DEVICE_ERROR` (`PMIC was not detected`), `CoreStartImage` (`Image.c:1842`) therefore calls `CoreUnloadAndCloseImage`, whose `CoreFreePages` (`Image.c:1130`) converts the image's pages to `EfiConventionalMemory` in `CoreConvertPagesEx` (`Page.c:615`) and clears them at `Page.c:813` with `PcdDebugClearMemoryValue` `0xAF` (`SiliciumPkg.dsc.inc:70`) — and DALSys's 32-slot registry has no unload hook, so its slot still points into the freed page; the lookup's own entry test is that cleared word `[+16] = 0xAFAFAFAF`, an unsigned count so large the loop body *must* run, so a cleared record is a crash and not a miss; and the same run is the first of the tree's 22 panels to load `BdsDxe`
+
+4.161 closed with the fault's owner as an inference and its cause as an open question: "why the DAL
+device entry's `+24` is unset". It was not unset. This step registers at the registry's own bodies
+instead of reading around them, and what it finds is that the record was **registered, populated, and
+then freed underneath the registry** — the `0xAF` is the DXE core's debug clear on the page-free path,
+the driver that owned the record is `PmicDxe`, and the reason its pages were freed is that its entry
+point returned an error and `CoreStartImage` unloads an image whose entry point fails. Three
+breakpoints settle it: two on the registry's own bodies, one on the instruction the treatment run
+died on.
+
+### The instrument, and what it caught
+
+`work/out/qemu-probe-4.161/gdbprobe24.py` runs the 4.161 treatment guest — the panels' own stub
+`/tmp/qemu-el3-d_4vi24e/el3.bin` (`a082b796…`), `/tmp/phone-payload.raw`, and the four seeds
+`rsc-word`, `rsc-enable`, `pdc-cap`, `apcs-clk` — with three `Z0` breakpoints, at `DALSys + 0x335c`
+(the registry's register body), `+0x33b0` (its deregister body) and `+0x346c` (the load that faulted
+in the panel run). Each hit is stepped over rather than continued from, because `c` from a `Z0` site
+returns to that site. `gdb24-run.log`, verbatim:
+
+```
+@9.9s REG    x0=0x9c206278  [+16]=0x0 [+24]=0x9c205278  entry0.name='/pmic/target'  lr=0x9c1e8580
+@12.0s REG    x0=0x9c0bc838  [+16]=0x0 [+24]=0x9c0bc0c8  entry0.name='/core/hwengines/adc/pmic_0/vadc'  lr=0x9c0b53fc
+@12.0s *** FAULT REACHED at 0x9c49c46c: x20(name)=0x9c4a17e0 '/vadc/pm7xxxB'  x21(record)=0x9c206278 [+16]=0xafafafaf [+24]=0xafafafafafafafaf  x26=0x0
+hits: 3
+```
+
+Read against the treatment panel's own load map — `PmicDxe` at `0x9C1E7000` (row 608), `AdcDxe` at
+`0x9C0B4000` (row 666) — the first row says the registry's first free slot took a pointer **inside
+`PmicDxe`'s image**: `0x9c206278 = PmicDxe + 0x1F278`, in its `.data` (`0x1e000..0x21000`), with the
+table it names at `PmicDxe + 0x1E278` and that table's entry 0 naming `/pmic/target`. The second says
+`AdcDxe` registered its own record at `AdcDxe + 0x8838`, `.data` again, entry 0
+`/core/hwengines/adc/pmic_0/vadc`. The third is the panel's fault, reached 2.1 s later, walking the
+**first** of those two records — the same address the first row registered — with both of its
+pointer-bearing fields now uniform `0xAF`. `lr` on the first row is `0x9c1e8580 = PmicDxe + 0x1580`;
+on the second, `0x9c0b53fc = AdcDxe + 0x13FC`. Neither `Z0` at `+0x33b0` ever fired: **nothing
+deregistered either record**, and the slot the fault walked was still occupied.
+
+The name being searched is DALSys's, not `AdcDxe`'s: the fault's `X20 = 0x9c4a17e0 = DALSys + 0x87E0`,
+which is exactly where `/vadc/pm7xxxB` sits in `DALSys.efi`'s `.data` (`AdcDxe.efi` carries its own
+copy of that string at `0x5f7d` and of `/core/hwengines/adc/pmic_0/vadc` at `0x5f5d`, so both images
+spell the device; DALSys also carries `/pmic/target` at `.data 0x87ae`, and `PmicDxe` carries its own
+at file `0x1a52a`). `X22 = 0xD` and the strlen's `X0 = 0xD` are the 13 characters of
+`/vadc/pm7xxxB`, which is what fixes the reading of `0x346c` as a name-table load rather than data.
+
+### The registry, read from its own bodies
+
+`DALSys.efi` keeps the list at `.data 0x44f88` — 32 pointers, all zero in the file, populated at run
+time. The two bodies the probe broke on are short and inspect nothing:
+
+```
+    335c: adrp x9, 0x44000            ; register: x0 = the record
+    3364: add  x9, x9, #0xf88         ;   walk slots 0..31
+    3370: ldr  x10, [x9], #8          ;   first NULL slot
+    3378: cbnz x10, 0x3368            ;   <- keep looking while non-NULL
+    3380: stur x0, [x9, #-8]          ;   store the pointer, unexamined
+    3384: b    0x33a8                 ;   return 0
+    3388: ... bl 0x151c (0x6af3) ...  ;   exhausted: log, return -1
+
+    33b0: adrp x9, 0x44000            ; deregister: x0 = the record
+    33c8: ldr  x11, [x9], #8          ;   walk slots 0..31
+    33d0: cmp  x11, x8                ;   pointer equality
+    33dc: stur xzr, [x9, #-8]         ;   zero the slot, return 0
+    33fc: ... bl 0x151c (0x6b24) ...  ;   not found: log the pointer, return -1
+```
+
+Neither one validates the record, and neither is reached from an image unload — `0x148c: b 0x335c` and
+`0x14c0: b 0x33b0` are their exported tail branches, called by drivers only.
+
+The lookup that faulted is `0x340c`, and its loop control is the whole of 4.161's remaining mystery:
+
+```
+    3448: ldr  x21, [x25], #8         ; next slot
+    344c: cbz  x21, 0x34c0            ; NULL slot -> skip it
+    3450: mov  w26, wzr               ; entry index = 0
+    34b4: ldr  w8, [x21, #16]         ; <- the record's COUNT
+    34b8: cmp  w26, w8                ;    UNSIGNED
+    34bc: b.cc 0x3458                 ;    loop while w26 < count
+    3458: mov  x0, x20 ; bl 0x1740    ; strlen(search name)
+    3460: ldr  x8, [x21, #24]         ; <- the record's TABLE base
+    3464: umull x9, w26, w24          ;    w24 = 0x28
+    346c: ldr  x8, [x8, x9]           ; <- the fault: entry w26's first qword
+    3470: bl   0x1740                 ; strlen(entry name)
+    3478: cmp  x22, x0 ; b.ne 0x34b0  ; lengths differ -> next entry
+    34a8: bl   0x17bc                 ; compare; 0 -> x21 is the match (0x34e4)
+    34cc: ... bl 0x151c (0x6f4b) ...  ; no slot matched: "DAL device (0x%s) not found"
+    34e0: mov  x21, xzr
+    34f0: bl   0x3538                 ; x21 == NULL here -> returns -41 at its 0x355c
+```
+
+That reframes 4.161's finding. A record whose count field is `0xAFAFAFAF` is not skipped — it is a
+**very large unsigned count**, so `cmp w26, w8` sends the body through and `ldr x8, [x8, x9]`
+dereferences `0xAFAFAFAFAFAFAFAF + 0`. A cleared record cannot be a miss. It also says why the two
+registrations were harmless at the moment they happened: `[+16] = 0` at both, and a zero count is the
+one value that makes the walk skip the record entirely, so the count is written *after* registration —
+by the DALSys-side entry or by the driver, which of the two is not decided here. And the value at the
+fault could not have been written by any driver: `0xAFAFAFAF` is nobody's device count.
+
+### Who wrote the `0xAF`, out of this tree's own source
+
+Four steps, all in the checkout under `work/uefi/Mu-Silicium/`, none of them inferred from the dump:
+
+1. `Mu_Basecore/MdeModulePkg/Core/Dxe/Image/Image.c:1842`, in `CoreStartImage`, after the entry point
+   has returned and `CoreExit` has long-jumped back:
+
+   ```c
+   if (EFI_ERROR (Image->Status) || (Image->Type == EFI_IMAGE_SUBSYSTEM_EFI_APPLICATION)) {
+     CoreUnloadAndCloseImage (Image, TRUE);
+   ```
+
+2. `Image.c:1130`, in `CoreUnloadAndCloseImage`: `CoreFreePages (Image->ImageBasePage,
+   Image->NumberOfPages);` — the image's own pages, the pages the record sits in.
+
+3. `Mu_Basecore/MdeModulePkg/Core/Dxe/Mem/Page.c:813`, in `CoreConvertPagesEx` (entry `Page.c:615`),
+   on the conversion to `EfiConventionalMemory`:
+
+   ```c
+   DEBUG_CLEAR_MEMORY ((VOID *)(UINTN)Start, (UINTN)(RangeEnd - Start + 1));
+   ```
+
+4. `Silicon/Silicium/SiliciumPkg/SiliciumPkg.dsc.inc:70`:
+   `gEfiMdePkgTokenSpaceGuid.PcdDebugClearMemoryValue|0xAF` — with `:74` the `0x00` variant this build
+   does not use, and `MdePkg.dec:2440` the token's declaration. `0xAF` is what the whole range gets.
+
+The panel run shows the unload happening, three times, in its own rows: `PmicDxe` loads at
+`0x0009C1E7000` at rows 608, 628 and 650, each followed by `PmicDxe: PMIC was not detected` and
+`Error: Image at 0009C1E7000 start failed: Device Error`. The second and third loads can only be at the
+same address if the first and second extents were **given back** to the page allocator, and the
+`Error: Image at %11p start failed` text is `CoreExit`'s own (`Image.c:1925`) — the DXE core reporting
+the unload it is about to do. `PmicDxe`'s `.data` is where the record lives, so the freed pages are
+the record's pages.
+
+### The registration itself, from `PmicDxe`'s image
+
+`lr = PmicDxe + 0x1580` means the call into the registry was made from `PmicDxe + 0x157C`, and the
+image there is a one-page wrapper, not a direct call:
+
+```
+    1570: adrp x0, 0x1e000 ; add x0, x0, #0x258   ; x0 = &PmicDxe .data 0x1E258
+    157c: bl   0x6788                             ; -> lr = 0x1580, the lr the registry reports
+    6788: ... ldrb w8, [x20, #592]                ; one-shot flag at .data 0x1F250
+    67c8: add  x20, x20, #0x260                   ; x20 = .data 0x1F260, a static struct
+    67d0: str  w9, [x20, #40]                     ; copies four bytes of the argument
+    67e0: str  x9, [x20]                          ; &arg+0x10
+    67e4: str  x8, [x20, #48]                     ; arg+8
+    67e8: bl   0x6848                             ; attach/init
+    67ec: ldp  x0, x8, [x20]                      ; x0 = [0x1F260], x8 = the handle
+    67f8: ldr  x3, [x8, #8]                       ; the handle's second qword
+    67fc: mov  x1, x19                            ; x1 = .data 0x1F278
+    6804: br   x3                                 ; tail call: lr stays PmicDxe+0x1580
+```
+
+`0x6848` calls an imported service with the name string at `.data 0x1E218`, `x1 = 0` and
+`x2 = .data 0x1F268` as an out-handle, and asserts (`0x1C004`, line 117) when the handle comes back
+NULL — a device attach. The wrapper's tail call then carries `x0 = [.data 0x1F260]`,
+`x1 = .data 0x1F278`, `x2 = .data 0x1F270`, and the pointer the registry stored is **`PmicDxe +
+0x1F278`** — the second of those. That address is the record: its `+24` at the moment of registration
+is `PmicDxe + 0x1E278`, whose entry-0 name is `PmicDxe`'s own `/pmic/target`. So the record that
+outlived its image is `PmicDxe`'s own static DAL module record, in the image's `.data`, registered
+through a DALSys-side entry that took it from the wrapper's second argument. One step of this is
+inference and is labelled as such: the DALSys-side callee of `br x3` was not disassembled to the point
+of naming which of the three pointers it stores, and the identification rests on the stored pointer
+equalling `x1` exactly, on `lr` being preserved by the tail branch, and on the record's own table
+naming a string `PmicDxe` alone carries.
+
+### The defect, and the first `BdsDxe` in this tree
+
+What 4.161 called a wild pointer is a **use-after-unload**: DALSys's registry is a bare 32-pointer
+list with no unload hook, and DxeCore's `CoreUnloadAndCloseImage` knows nothing about it. Any driver
+that registers a DAL module record and then has its entry point return an error leaves a dangling
+pointer into memory the core has just cleared, and the next `DAL_DeviceAttach` walk that reaches that
+slot aborts — not because the walk is unsound, but because the count it reads is the fill. In this
+environment the poisoner is guaranteed: QEMU's `virt` has no PMIC, so `PmicDxe` can never succeed, and
+the same record is registered, freed and walked every run.
+
+And this is the run where that happens furthest in: of the 22 panels under `work/out/`, only
+`qemu-panel-4.161-apcs-clk.txt` loads `BdsDxe.efi` (row 662) — and `GpiDxe` (663), `I2C` (665) and
+`AdcDxe` (666) after it. BDS starts, its connect phase begins starting drivers, and the crash lands
+inside the one of them whose attach reaches the poisoned slot. The control panel dies 130 driver loads
+earlier at `ClockDriver.c +260` and reaches none of the four.
+
+### What this buys, and what is still wall
+
+It converts 4.161's open question into a named, sourced mechanism — record, registrar, freer and fill
+— and it puts a specific, checkable hypothesis on the table for the next wall: with `PmicDxe` present
+(as on the phone) the record would not be freed, and the collision at `DALSys + 0x346c` would not
+happen; what remains in that run is the shared-IMEM rows, `UFSDxe`'s IOMMU attach failure and
+`AdcDxe`'s own attach. It buys nothing for the goal yet: the fault is a QEMU-only consequence of an
+absent PMIC, the underlying defect is real but hardware-reachable only through some other failing
+driver, and no Windows 11 image runs on gauguin.
+
+Left open: why `AdcDxe`'s own table holds a DALSys-owned pointer (`DALSys + 0x87E0`) rather than its
+own copy at `AdcDxe + 0x5F7D`; which DALSys-side entry the wrapper's `br x3` reaches, and which of
+`x0`/`x1`/`x2` it stores; whether the entry count is written by the driver after registration or by
+that entry; the panel-versus-probe difference in how many times `PmicDxe` is attempted (three loads
+versus one registration before `AdcDxe`'s) — the panel's provenance header records the stub's own
+seeds but not the four loader lines, so the two runs' seed sets are not provably identical, and
+nothing in the mechanism depends on the count; whether any of the later rows change once a PMIC
+answers; the derivation of `/tmp/apcs-clk.bin`, still owed; `P2 APRI`'s eight fields; the
+R1-versus-R2 question for the phone's 46-character `P2 SEQ`; `ClockDriver.c` line 260 as source; the
+P3 items 2-4 (`DisplayDxe`, `UsbBusDxe`, `ButtonsDxe`); and the step 4.153-4.156 items unchanged.
+
+Rows:
+
+- **instrument**: `work/out/qemu-probe-4.161/gdbprobe24.py` + `gdb24-run.log` (three `Z0` breakpoints
+  — `DALSys + 0x335c`, `+0x33b0`, `+0x346c` — with each hit stepped over, on the 4.161 treatment guest
+  and its four seed files); `aarch64-linux-gnu-objdump` over `PmicDxe.efi`, `AdcDxe.efi` and
+  `DALSys.efi`, all three PE32+ with `ImageBase 0` so raw offset equals VA; and this tree's own DXE
+  core sources, `Mu_Basecore/MdeModulePkg/Core/Dxe/Image/Image.c` and
+  `Mu_Basecore/MdeModulePkg/Core/Dxe/Mem/Page.c`.
+- **shows**: the record 4.161 found cleared is `PmicDxe + 0x1F278`, registered at 9.9 s and never
+  deregistered; `PmicDxe`'s entry point fails and `CoreStartImage` (`Image.c:1842`) unloads the image,
+  freeing and `0xAF`-clearing the page the record sits in (`Image.c:1130` -> `Page.c:615` ->
+  `Page.c:813` -> `PcdDebugClearMemoryValue` at `SiliciumPkg.dsc.inc:70`); the lookup's entry test is
+  that cleared count, `[+16] = 0xAFAFAFAF`, so the walk enters its body and dereferences the fill; and
+  this run reaches `BdsDxe`, the only panel of 22 to do so.
+- **adds**: the registry's register, deregister and lookup bodies with their loop control and the
+  `0x6af3`/`0x6b24`/`0x6f4b` logs; the `0x28`-byte entry stride and the `+16`/`+24` field roles proved
+  at two live registrations; the ownership of the searched name (`DALSys + 0x87E0`, its own copy of
+  `/vadc/pm7xxxB`); `PmicDxe`'s registrar wrapper at `+0x6788` with its one-shot flag, its attach at
+  `+0x6848` and its `lr`-preserving tail call; the three-row `PmicDxe` load history at one address as
+  proof of the extent being handed back; and `CoreExit`'s `Image.c:1925` as the source of the
+  `Error: Image at … start failed` rows.
+- **corrects**: 4.161's "why the DAL device entry's `+24` is unset" — it was not unset, it was
+  overwritten by the core's free-time clear, together with `+16`; and the reading of the `0xAF` as
+  possibly an allocation-time or compiler artifact, which the source rules out for image pages.
+- **does not close**: the seed-set asymmetry between the panel and the probe, the provenance of the
+  DALSys-owned name pointer in `AdcDxe`'s table, which argument the DALSys-side entry registers, the
+  derivation of `/tmp/apcs-clk.bin`, `P2 APRI`, the P3 items 2-4, and every on-device item.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, and no
+  stub, firmware source or Microsoft image was changed or patched. The only writes outside `work/out`
+  are to `docs/`. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
+  untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
+  state remains a Windows tablet whose modem and cameras cannot be driven.

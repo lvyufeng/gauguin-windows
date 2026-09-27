@@ -539,6 +539,29 @@ rather than a clock register. It has not moved onto a clock controller: the read
 index are fabricated by the instrument, and on hardware those registers are the controller's real
 state. See `docs/08` step 4.161.
 
+That uninitialised field is not a driver bug in the ordinary sense: it is a **use-after-unload**.
+Registering at the registry's own two bodies (`DALSys+0x335c` register, `+0x33b0` deregister) shows the
+first free of 32 slots taking a pointer **inside `PmicDxe`'s image** (`0x9c206278 = PmicDxe+0x1F278`,
+its `.data`, entry 0 `/pmic/target`, `lr = PmicDxe+0x1580`) at 9.9 s, `AdcDxe` registering its own
+record at 12.0 s (`AdcDxe+0x8838`, `/core/hwengines/adc/pmic_0/vadc`, `lr = AdcDxe+0x13FC`), and the
+fault 2.1 s later walking the **first** of them, all `0xAF`. No deregister ever fired.
+`PmicDxe`'s entry point returns `EFI_DEVICE_ERROR` (`PMIC was not detected`), so `CoreStartImage`
+(`Image.c:1842`) calls `CoreUnloadAndCloseImage`, whose `CoreFreePages` (`Image.c:1130`) has
+`CoreConvertPagesEx` (`Page.c:615`) convert the image's pages to `EfiConventionalMemory` and clear them
+at `Page.c:813` with `PcdDebugClearMemoryValue` `0xAF` (`SiliciumPkg.dsc.inc:70`) — the panel's own
+rows show `PmicDxe` loading at `0x9C1E7000` three times (rows 608, 628, 650), each followed by its
+failure and `Error: Image at 0009C1E7000 start failed: Device Error` (`CoreExit`, `Image.c:1925`),
+which is only possible if the extent was handed back each time. DALSys's 32-pointer list has no unload
+hook, so the slot kept pointing into the freed page — and because the lookup's loop test is that
+cleared word (`[+16] = 0xAFAFAFAF` is a *count*, `cmp w26, w8; b.cc` on the unsigned compare), a
+cleared record is a crash rather than a miss. So any DAL-registering driver whose entry point returns
+an error poisons the registry. In this environment the poisoner is guaranteed — QEMU `virt` has no
+PMIC, so `PmicDxe` can never succeed — and the same run is the first of the tree's 22 panels to load
+`BdsDxe`, `GpiDxe`, `I2C` and `AdcDxe`, i.e. BDS starts and its connect phase is where the stale
+record is hit. It is a real defect and a QEMU-only *instance* of it: on the phone the PMIC answers, so
+this particular collision would not happen, and what remains in that run is the shared-IMEM rows,
+`UFSDxe`'s IOMMU attach failure and `AdcDxe`'s own attach. See `docs/08` step 4.162.
+
 
 **Risk:** **high, and this is the real wall.** No Bitra-family device has ever had a UEFI
 port. The signed blobs are unlikely to load cleanly into a different DXE core on the first

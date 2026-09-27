@@ -2900,6 +2900,37 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > and 4.160's reading of it as an inert member of the seed set is corrected here. See `docs/08` step
 > 4.161.
 
+> **Extended 2026-09-27 by step 4.162 — the `0xAF` field has an owner, and it is the DXE core's own
+> unload.** Three breakpoints on the registry rather than around it: `DALSys+0x335c` (register, a scan
+> for the first free of 32 slots that inspects nothing), `+0x33b0` (deregister, pointer equality then
+> zero the slot — it never fired) and `+0x346c` (the load that faulted). The trace reads
+> `x0=0x9c206278` at 9.9 s with `entry0.name='/pmic/target'` and `lr=0x9c1e8580`, then
+> `x0=0x9c0bc838` at 12.0 s with `/core/hwengines/adc/pmic_0/vadc` and `lr=0x9c0b53fc`, then the fault
+> on the **first** of those two records with `[+16]=0xafafafaf` and `[+24]=0xafafafafafafafaf`. Against
+> the panel's load map (`PmicDxe` `0x9C1E7000`, `AdcDxe` `0x9C0B4000`) the first record is
+> `PmicDxe+0x1F278` — its `.data` — and the registrar is `PmicDxe+0x157C`'s `bl 0x6788`, a local
+> wrapper with a one-shot flag at `.data 0x1F250`, a device attach at `0x6848` and a tail `br x3` that
+> preserves `lr`; the pointer the registry stored is the wrapper's second argument, `.data 0x1F278`,
+> whose table at `.data 0x1E278` names `PmicDxe`'s own `/pmic/target`. The clear is this tree's:
+> `CoreStartImage` unloads an image whose entry point returned an error (`Image.c:1842`),
+> `CoreUnloadAndCloseImage` frees its pages (`Image.c:1130`), `CoreConvertPagesEx` converts them to
+> `EfiConventionalMemory` (`Page.c:615`) and clears the range (`Page.c:813`) with
+> `PcdDebugClearMemoryValue` `0xAF` (`SiliciumPkg.dsc.inc:70`). The panel's rows show it: `PmicDxe`
+> loads at `0x0009C1E7000` at rows 608, 628 and 650, each followed by `PmicDxe: PMIC was not detected`
+> and `Error: Image at 0009C1E7000 start failed: Device Error` — `CoreExit`'s own message
+> (`Image.c:1925`), and the same address three times means the extent was given back twice. The
+> lookup's `[+16]` is a **count** (`0x34b4: ldr w8,[x21,#16]; cmp w26,w8; b.cc 0x3458`), so a record
+> cleared to `0xAFAFAFAF` is a very large count: the body runs and `ldr x8,[x8,x9]` at `0x346c`
+> dereferences the fill. That is why a cleared record crashes instead of missing, and it is why the
+> two registrations were harmless when they happened (`[+16] = 0` there, and a zero count is the one
+> value that skips the record). So DALSys's registry has no unload hook and DxeCore's unload knows
+> nothing about it: any driver that registers a DAL module and then fails leaves a dangling pointer
+> into cleared memory, and the next attach that reaches the slot aborts. This panel is also the only
+> one of the tree's 22 to load `BdsDxe` — with `GpiDxe`, `I2C` and `AdcDxe` after it — so BDS starts
+> and the connect phase is where the stale record is hit. The defect is real; this instance is a
+> QEMU consequence of the absent PMIC, and on hardware the same class needs some other driver to fail.
+> See `docs/08` step 4.162.
+
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform
