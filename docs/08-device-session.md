@@ -35196,3 +35196,181 @@ open one.
   untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin,
   P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun,
   and the end state remains a Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.173 — the payload that would be flashed next has no dependency term this volume cannot satisfy: the census's two unjudgeable rows resolve to carriers that are themselves in the volume, the three sibling blobs take their depexes from a binary `.depex` beside the `.efi` and not from the `[Depex] TRUE` their INFs claim, and the ordering that matters is settled by `BdsEntry.c`'s own header rather than by the a-priori array
+
+### The measurement
+
+`tools/depex-census.py` against the payload of record's successor,
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (`34360470b8a7aafad…`, 1,171,456 B) — the
+image that carries the USB host stack and is the one thing left to flash for the P3 gate's
+USB half:
+
+```
+inner FV 0x730000, 126 FFS files, a-priori file names 70 GUIDs
+  dispatcher-visible files (DRIVER=83): 83  <-- `P2 WALK seen=` is this same number
+
+66 of them carry a depex, 17 do not
+  of the 66 with a depex: 56 are promoted by the a-priori file (depex inert), 10 are gated
+  of the 17 without one: 13 are a-priori, 4 are not
+
+== non-a-priori, gated on a protocol that is not installed (1) — satisfiable, ...
+  XhciPciEmulation
+      needs Bds arch protocol  (665E3FF6-46CC-11D4-9A38-0090273FC14D), installed by BdsDxe at a-priori 45
+      needs Monotonic Counter arch protocol  (1DA97072-…), installed by EmbeddedMonotonicCounter at a-priori 39
+      ... six more, each with a named a-priori producer
+
+== gated, and the depex names a protocol no header defines (2) — cannot be ruled in or out from the image
+  UsbInitDxe
+      needs E722B03F-B250-42CE-8EBD-5BD51812D037
+  VcsDxe
+      needs AE37B942-457F-4C91-A196-D9669FD347A3
+      needs B0760469-970C-487A-A4B5-28DB7B45CEF1
+
+== no depex section, not a-priori (4) — the UEFI 2.0 rule, so they need all thirteen architectural protocols
+  BootGraphicsResourceTableDxe
+  FeatureEnablerDxe
+  MacDxe
+  XhciDxe
+
+0 are gated on any protocol this volume has no producer for.
+```
+
+The headline is the last line: **nothing in the payload waits on a protocol that no file in
+the payload produces**, and the one row that is gated and *not* satisfied is waiting on
+producers it names, every one of them an a-priori driver. This tool had already been run
+against an earlier payload and reached the same conclusion; what this run adds is that the
+conclusion survives the three drivers the `xhci-host` variant adds, which is the payload
+whose dependency structure had never been read.
+
+### The two rows the census cannot judge
+
+`E722B03F-B250-42CE-8EBD-5BD51812D037` and `VcsDxe`'s two GUIDs cannot be judged *from the
+image* because no header in the tree defines them, so the tool has no name to print and no
+way to know whether anything carries them. A carrier scan of the 86 extracted `.efi` answers
+the first one:
+
+```
+UsbInitDxe waits on    UsbConfigDxe, UsbfnDwc3Dxe
+VcsDxe waits on (a)    AdcDxe, CPRDxe, ChipInfo, ClockDxe, DALSys, DALTLMM, DisplayDxe,
+                       GpiDxe, HALIOMMU, HWIODxeDriver, I2C, NpaDxe, PdcDxe,
+                       PlatformInfoDxeDriver, PmicDxe, RpmhDxe, TsensDxe, ULogDxe,
+                       UsbConfigDxe, VcsDxe          (20)
+VcsDxe waits on (b)    ChipInfo, DisplayDxe, FeatureEnablerDxe, LimitsDxe, MiTokenDxe,
+                       PdcDxe, PmicDxe, QcomBds, UsbConfigDxe    (9)
+```
+
+A carrier is not a producer — the same 16 bytes sit in an image whether the driver installs
+the protocol or looks it up, which is the whole reason `tools/pci-guid-census.py` exists —
+so this scan can only narrow the question, not answer it. It narrows it usefully all the
+same:
+
+- `UsbInitDxe`'s only term is carried by `UsbConfigDxe` and `UsbfnDwc3Dxe`, and **both are
+  a-priori in this volume** (`APRIORI.inc:96` and `:88`), so both run before `UsbInitDxe`
+  is ever considered; 4.168's disassembly had already identified `UsbConfigDxe` as the
+  publisher by its call sites. The single term is therefore satisfied by a driver that is
+  guaranteed to have run.
+- `AE37B942-…` is carried by 20 of the 86, which is the shape of a protocol most of the
+  Qualcomm stack consumes rather than one a single driver publishes, and it is `VcsDxe`'s
+  own depex term — the one 4.170 already recorded as `AE37B942 AND gEfiChipInfoProtocolGuid`.
+  Nothing here changes that reading; `VcsDxe` is unpromoted by default, so its depex is
+  live, and the question of who publishes `AE37B942` is still open and still unread.
+
+### Where the three sibling blobs' depexes come from, and why 4.170's repair cannot reach them
+
+This volume has two provenances for a driver's depex and only one of them is reachable by
+the repair 4.170 made. For the 55 blobs packaged out of this phone's own XBL the depex is
+the stock `DXE_DEPEX` section lifted out of the `.ffs` in `device/dxe` — 4.170's change. For
+the three staged from bitra there is no `.ffs` to lift anything out of:
+
+```
+Binaries/bitra/QcomPkg/Drivers/XhciDxe/            XhciDxe.efi, XhciDxe.inf
+Binaries/bitra/QcomPkg/Drivers/XhciPciEmulationDxe/ …depex (234 B), .efi, .inf
+Binaries/bitra/QcomPkg/Drivers/UsbInitDxe/          UsbInitDxe.depex (18 B), .efi, .inf
+```
+
+Their depexes come from the binary `.depex` file beside the `.efi`:
+
+```
+XhciPciEmulationDxe.depex  02 ab31a018… 02 f63f5e66… … 03 x12 08
+    13 PUSHes ANDed — the architectural protocol set
+UsbInitDxe.depex           02 3fb022e750b2ce428ebd5bd51812d037 08
+    PUSH E722B03F-B250-42CE-8EBD-5BD51812D037; END
+```
+
+Both INFs also carry a `[Depex]` section reading `TRUE`, and that is the answer that would
+have been wrong: for a binary module the `DXE_DEPEX` named under `[Binaries.AARCH64]` is what
+becomes the section, and the census decoding the volume reads back 13 terms and one term
+rather than the 2-byte `TRUE` that 15 other files in the volume actually have. So the two
+mechanisms are distinct — 4.170's restore-then-read applies to one sourcing path and there is
+nothing analogous for the other, because bitra ships no `.ffs`. Anyone extending the repair
+should not expect it to cover the sibling blobs.
+
+`XhciDxe` is the fourth name in the census's last band and the only file in the volume whose
+dependency does not exist anywhere: bitra's `XhciDxe.inf` declares `MODULE_TYPE = UEFI_DRIVER`
+with no `[Depex]` and no `.depex` file sits beside the `.efi`, so it is dispatched under the
+UEFI 2.0 rule the moment all EFI services are available. That is bitra's own condition rather
+than anything this port produced, and it is not a defect for a driver-binding driver, whose
+binding is event-driven: `XhciDxe` installs `EFI_DRIVER_BINDING_PROTOCOL` at entry and is
+connected later, when a `PciIo` handle exists to bind. It is recorded because the count of
+four in that band is otherwise easy to read as four mistakes.
+
+### The ordering, and why the a-priori array must not be used to help
+
+The one question a static reading *can* settle here is whether the emulated host controller
+appears before BDS looks for something to boot. It does, and the mechanism is stated by the
+firmware's own header rather than inferred:
+
+```
+work/uefi/Mu-Silicium/Mu_Basecore/MdeModulePkg/Universal/BdsDxe/BdsEntry.c:3-5
+  When this module was dispatched by DxeCore, gEfiBdsArchProtocolGuid will be installed
+  which contains interface of BdsEntry.
+  After DxeCore finish DXE phase, gEfiBdsArchProtocolGuid->BdsEntry will be invoked
+  to enter BDS phase.
+```
+
+`XhciPciEmulation`'s depex names `gEfiBdsArchProtocolGuid`, and that protocol is installed by
+`BdsDxe`'s *dispatch*, not by `BdsEntry`. So the dispatcher keeps running after `BdsDxe` is
+dispatched, `XhciPciEmulation` becomes schedulable and runs during that same dispatch phase,
+`XhciDxe` follows it, and only then does DxeCore invoke `BdsEntry`, whose connect-all sweep
+is the first thing that would look for the USB controller. The ordering is the intended one
+and it does not depend on the a-priori array at all.
+
+Which is also the warning: **the array must not be used to "help" here.** Promotion sets
+`Dependent = FALSE` (4.170, 4.171), and `XhciPciEmulation`'s depex — thirteen terms, the
+whole architectural set — is load-bearing. Promoted, it would be inserted into the scheduled
+queue with its dependencies unread and would run before the protocols it needs exist. The
+`apriori-extras` switch exists to make order changes possible; this is a driver where the
+correct answer is that its depex already does the ordering job.
+
+### Rows:
+
+- **instrument**: `tools/depex-census.py`, already present, run this time against
+  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` rather than the earlier payload — plus a
+  carrier scan for the three GUIDs the census could not name.
+- **shows**: 83 dispatcher-visible files, 66 with a depex of which 56 are promoted (depex
+  inert) and 10 gated, 4 on the UEFI 2.0 rule, and **0 gated on a protocol this volume has no
+  producer for**; `XhciPciEmulation` gated on eight architectural protocols that all have
+  named a-priori producers; `UsbInitDxe`'s single term carried by `UsbConfigDxe` and
+  `UsbfnDwc3Dxe`, both a-priori (`APRIORI.inc:96`, `:88`); the three sibling blobs' depexes
+  sourced from binary `.depex` files and not from their INFs' `TRUE`; `XhciDxe` with no depex
+  anywhere; and the ordering, which `BdsEntry.c:3-5` states outright.
+- **adds**: nothing to the firmware. No volume, no include and no switch was changed; this is
+  a reading of an image that already exists.
+- **corrects**: nothing that was written down as a finding. Two things it does not do: it does
+  not claim `UsbConfigDxe` publishes `E722B03F-…` on the strength of a carrier count (4.168
+  established that by disassembly, and this scan only shows the GUID is present in the
+  binary), and it does not claim the census's "0 with no producer" covers the three GUIDs no
+  header defines — the tool excludes them from that count by construction, which is why they
+  are reported separately.
+- **does not close**: the USB half of the P3 gate. A payload that cannot deadlock is not a
+  payload that enumerates a stick, and the three drivers still have to be seen to run on the
+  glass. `VcsDxe`'s `AE37B942` has no identified publisher, 4.164's
+  `HAL_clk_FabiaPLLEnableVote` park is unexplained, and which payload `boot` currently holds
+  remains the first question whenever a device is present.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no
+  stub, firmware source or Microsoft image was changed or patched, and no firmware was built.
+  `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched.
+  The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the
+  end state remains a Windows tablet whose modem and cameras cannot be driven.

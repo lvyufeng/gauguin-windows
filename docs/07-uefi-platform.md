@@ -3317,6 +3317,25 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > no `ScsiDisk*`, because `UFSDxe.ffs`'s `DXE_DEPEX` is one `PUSH` on
 > `gEfiSMEMProtocolGuid` and the `BlockIo` GUID is in its `PE32` and not its depex: the
 > UFS is the block device and no SCSI layer sits above it. See `docs/08` step 4.172.
+>
+> **The payload that would be flashed next has no unsatisfiable dependency term — measured
+> 2026-09-28 by step 4.173.** `tools/depex-census.py` against
+> `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`: 83 dispatcher-visible files, 66 with a
+> depex (56 promoted, so inert; 10 gated), 4 on the UEFI 2.0 rule, and **0 gated on a
+> protocol no file in the payload produces**. `XhciPciEmulation` is gated on eight
+> architectural protocols, each with a named a-priori producer; `UsbInitDxe`'s single term
+> `E722B03F-B250-42CE-8EBD-5BD51812D037` is carried by `UsbConfigDxe` and `UsbfnDwc3Dxe`,
+> both a-priori here (`APRIORI.inc:96`, `:88`). The three blobs staged from bitra get their
+> depexes from a binary `.depex` beside the `.efi` — 13 ANDed `PUSH`es for
+> `XhciPciEmulationDxe`, one for `UsbInitDxe` — and not from the `[Depex] TRUE` their binary
+> INFs declare, so 4.170's stock-`DXE_DEPEX` repair has no analogue on that path: bitra ships
+> no `.ffs`. `XhciDxe` alone has no depex anywhere and runs on the UEFI 2.0 rule, which is
+> bitra's condition and harmless for a driver-binding driver. The ordering the USB half needs
+> is stated by `BdsEntry.c:3-5`: `BdsDxe` installs `gEfiBdsArchProtocolGuid` when it is
+> dispatched and `BdsEntry` is invoked only after DxeCore finishes the DXE phase, so
+> `XhciPciEmulation` — gated on that protocol — installs the emulated host controller during
+> dispatch, ahead of BDS's connect-all. Do not promote it: `Dependent = FALSE` would run it
+> with its thirteen-term depex unread. See `docs/08` step 4.173.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

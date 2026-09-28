@@ -938,6 +938,28 @@ Work:
 > the UFS is published as a block device with no SCSI layer above it. The half of the gate
 > that says *sees the internal UFS* has no missing driver; the half that says *boots off a
 > USB stick* is still the `xhci-host` work. See `docs/08` step 4.172.
+>
+> **Step 4.173 (2026-09-28) read the dependency structure of the payload that would be
+> flashed next** — `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, the one carrying the
+> USB host stack — and it has **no term this volume cannot satisfy**: 83 dispatcher-visible
+> files, 66 with a depex of which 56 are promoted (depex inert) and 10 gated, 4 on the UEFI
+> 2.0 rule, and 0 gated on a protocol no file in the payload produces. The three GUIDs the
+> census could not name because no header defines them were narrowed by a carrier scan:
+> `UsbInitDxe`'s single term is carried by `UsbConfigDxe` and `UsbfnDwc3Dxe`, **both
+> a-priori** (`APRIORI.inc:96`, `:88`), and 4.168 had already identified `UsbConfigDxe` as
+> the publisher by its call sites. The three staged sibling blobs take their depexes from a
+> binary `.depex` beside the `.efi` — `XhciPciEmulationDxe.depex` is 13 `PUSH`es ANDed and
+> `UsbInitDxe.depex` is one — and **not** from the `[Depex] TRUE` their INFs carry, which is
+> why 4.170's restore-the-stock-`DXE_DEPEX` repair cannot reach this sourcing path: bitra
+> ships no `.ffs`. `XhciDxe` is the one file whose depex exists nowhere, on the UEFI 2.0
+> rule, and that is bitra's own condition rather than this port's. The ordering the USB half
+> depends on is settled by `BdsEntry.c:3-5` rather than by the a-priori array: `BdsDxe`
+> installs `gEfiBdsArchProtocolGuid` **when it is dispatched**, `BdsEntry` runs only after
+> DxeCore finishes the DXE phase, and `XhciPciEmulation`'s depex names that protocol — so
+> the emulated host controller is installed during dispatch, before BDS's connect-all sweep.
+> The corollary is a warning: promotion sets `Dependent = FALSE`, so the array must **not** be
+> used to "help" `XhciPciEmulation`, whose thirteen-term depex is load-bearing. No firmware
+> was built and nothing was flashed. See `docs/08` step 4.173.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
