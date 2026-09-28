@@ -43425,3 +43425,103 @@ bootloader the P3 `fastboot boot` workflow needs, and the screen photograph. `us
 partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
+
+## Step 4.213 — the display switch is rebuilt and its whole effect is measured on both artifacts: the roster moves four files, the device's a-priori array moves exactly one slot at index 60, and the three places the record prints this switch's numbers are corrected in place
+
+
+**What was run.** P3 item 2 is `DisplayDxe` plus a framebuffer, and in this tree it is one value of one tracked
+line. The generator's `--display qcom` writes `USE_CUSTOM_DISPLAY_DRIVER = 1` into
+`uefi/Platforms/Xiaomi/gauguinPkg/gauguin.dsc` and nothing else: regenerating with the flag the tree already had
+reproduces all twelve package files byte for byte, and the whole tracked diff the switch makes is that one line.
+Both configurations were then built from the same tree with `--xhci-host` on, and both artifacts were measured —
+the firmware volume, and the a-priori array inside it.
+
+**The two builds.** Simple (`=0`, `SimpleFbDxe`) is `EFI_FV_TOTAL_SIZE` `0x731000`, `EFI_FV_TAKEN_SIZE`
+`0x730960`, `FVMAIN.Fv` 7,540,736 bytes, **131** FFS files, `0048 Images Verified`. Qcom (`=1`) is `0x782000` /
+`0x7814a8`, 7,872,512 bytes, **133** FFS files, `0047 Images Verified`. The FFS roster delta between them is
+exactly four files — `+CPRDxe`, `+DisplayDxe`, `+DisplayReEnablerDxe`, `−SimpleFbDxe` — which is `DXE.inc`'s two
+display-gated blocks and nothing else: the `CPRDxe` line at `DXE.inc:71-73`, which has no `!else`, and the
+`DisplayDxe` / `DisplayReEnablerDxe` versus `SimpleFbDxe` block at `DXE.inc:94-99`. Three of the four are
+Qualcomm blobs whose absence from the Simple volume is the ordinary consequence of the flag, and none of them is
+what the switch is *for*.
+
+**The measurement that is new: the a-priori array, from the built volumes.** `FVMAIN.Fv` carries an FFS FREEFORM
+file named `EFI_APRIORI_GUID` at offset `0x78`, right after the `0x48`-byte FV header and the 20-byte extended
+header, and its content is not a bare GUID array — it is one `EFI_SECTION_RAW` section (a 4-byte
+`EFI_COMMON_SECTION_HEADER`, size `0x474`, type `0x19`) wrapping 1,136 bytes, 71 entries of 16. Simple carries
+**70** entries and Qcom **71**, and the difference is one slot: the two arrays agree entry for entry through
+index 59, then Simple has `DCFD1E6D-788D-4FFC-8E1B-CA2F75651A92` (`SimpleFbDxe`) where Qcom has
+`79328CB0-14D8-5DE3-B1E5-7118295FD2C0` (`DisplayDxe`) at 60 and `BB137A47-96F3-4A7B-BFA3-BDBFF9678076`
+(`DisplayReEnablerDxe`) at 61, and the remainder of Qcom's list is Simple's shifted by one. `CPRDxe` is in
+neither array: it is gated in `DXE.inc` and appears nowhere in `APRIORI.inc`.
+
+**The array is `APRIORI.inc` exactly, and the index is the source's own.** `APRIORI.inc:100-104` is the one
+display block it has; `DisplayDxe` is its `:101`, and there are exactly **60** `INF` lines above it. The built
+Simple array has exactly 60 entries before `SimpleFbDxe`, and `APRIORI.inc` holds **72** `INF` lines: the
+Simple array's 70 are those minus the two the `=1` branch contributes, and the Qcom array's 71 are those minus
+the one `!else` line. The count is therefore the active list exactly, with no entry dropped or invented. That also corroborates the record's own earlier reading
+rather than correcting it: `docs/00:60-62` says every build on the disk carries "the same 70-entry array with
+nothing missing and the core file at index 0" and that a completed walk promotes 69, and `docs/00:962` puts
+`SimpleFbDxe` at "entry 60". Both are confirmed here from the shipped volume, and the 70 is now known to be the
+*Simple* array specifically; the `=1` array is 71.
+
+**Why the two unidentified GUIDs in `DisplayDxe`'s depex are not a blocker — and this extends a rule the record
+already has.** `DisplayDxe`'s 162-byte depex is a nine-GUID AND expression, and two of the nine are declared
+nowhere in this tree and published by nothing under `Binaries/gauguin`. That is not new; what is new is that it
+does not matter here, for a reason the record states for a different path. `docs/00:987-995` cites
+`Dispatcher.c:2114-2125` setting `DriverEntry->Dependent = FALSE` before the depex is consulted, and concludes
+that terms with no publisher "are consumed only by promoted drivers". The a-priori path does the same thing at
+its own site — `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:2440-2465` sets `Dependent = FALSE`
+and `Scheduled = TRUE` for each entry of the a-priori file, logs `RESULT = TRUE (Apriori)`, and inserts it in
+the scheduled queue without evaluating anything. `DisplayDxe` and `DisplayReEnablerDxe` are both in that array,
+at 60 and 61; so the depex expression this switch brings in is never evaluated, and the two orphan GUIDs cannot
+hold it back. This also fits the family: of the platforms that share this flag, none stages a publisher for the
+two, and they run the driver.
+
+**A method error caught before it reached the record, and a withdrawn guess.** The first capture of the a-priori
+array read the FFS size from `i + 16` — integrity check, type and attributes — instead of `i + 20`, started the
+payload at `i + 24` instead of after the section header at `i + 28`, and therefore reported 10,924 entries with
+every one of them shifted by four bytes. A second error was narrower and would have been reported as a finding:
+comparing the array against the per-file directories under `Build/…/FV/Ffs/` case-sensitively makes 15 entries
+look like they name no file, because GenFv writes those directory names with inconsistent case. Re-checked
+case-insensitively, **every entry of both arrays names a file that is in the same volume, in both builds** — 0
+dangling, 70 of 70 and 71 of 71. Separately, the earlier working guess in this port's notes that the two
+unidentified GUIDs are `gEfiI2cBusProtocolGuid` and `gEfiI2cIoProtocolGuid` is withdrawn: the tree's actual
+values are `gEfiI2cMasterProtocolGuid` `{0xCD72881F,…}`, `gEfiI2cIoProtocolGuid` `{0xB60A3E6B,0x18C4,0x46E5,…}`
+and `gEfiI2cHostProtocolGuid` `{0xA5AAB9E3,…}`, none of which is either orphan, and no name
+`gEfiI2cBusProtocolGuid` exists in the tree at all. The GUIDs remain unidentified; what is now settled is that
+they do not gate this switch.
+
+**The firmware-volume digest is not an identity and must not be quoted as one.** Rebuilt three times with no
+source change, `FVMAIN.Fv` is byte-identical every time — `f3ba58b9b17602c7…` for the `=1` build,
+`076ead1bd89d665e…` for the `=0` build, the one file being the only one of the two the switch changes.
+`SILICIUM_UEFI.fd` is not: three consecutive `=1` builds gave `2b53605c…`, `3211547e…` and `a31f55c9…`,
+differing in 53 bytes from offset 4326 — LZMA range-coder bytes in `FVMAIN_COMPACT.Fv`. So a digest over the FD
+is a digest over a non-deterministic compression product, and only the FFS roster and `FVMAIN.Fv` are stable
+enough to pin.
+
+**What was built and gated, and what was not touched.** `P2DIR=work/out/p3-display tools/build-p2-payloads.sh`
+produced three images from the `=1` FD: `Mu-gauguin-stock-gzip.img` 1,269,760 bytes `de99c58a41d33fef…`,
+`Mu-gauguin-stock-none.img` 3,248,128 bytes `e2576dddad79295f…`, `Mu-gauguin-silicon-gzip.img` 1,259,520 bytes
+`f593d8bd86660b1b…`. All three pass `tools/check-payload.py`, the replayed ABL path, and the GenFv map
+cross-check at 128 offsets and GUIDs with zero mismatches. `work/out/p2-variants/` was left alone, which is what
+`P2DIR` exists for: the payload that is on the phone stays as the comparison.
+
+**decides**: that P3 item 2 is buildable and gated, that its entire effect on the device's a-priori array is one
+slot at index 60, and that the two unpublished GUIDs in `DisplayDxe`'s depex are inert because the a-priori path
+never evaluates a depex. It corrects three printed numbers — `docs/07`'s Simple/Qcom table, `docs/07`'s
+"decisive measurement" sentence and `docs/00:2415-2418`'s citation of the same build — and withdraws one of this
+port's own guesses about the orphan GUIDs. **does not decide**: whether `DisplayDxe` installs, or whether a
+panel lights. The build is the whole of the offline work; nothing here has been run on hardware, and a driver
+that is present, scheduled and depex-free can still fail at `MDPPanelInit`. The three numbers this step did not
+re-measure — the compressed footprint inside `FVMAIN_COMPACT.Fv`, the `packaged Qcom drivers` row's original
+enumeration, and the `Mu-gauguin.img` row's provenance — are marked stale or non-comparable rather than
+replaced. **Not an action**: two builds, three payloads, and four text edits. No flash, no `fastboot` command,
+no partition written, no seed written, no console read from the device and no device file opened; all build
+output is under `work/`, which is gitignored, and the tracked tree is back at `USE_CUSTOM_DISPLAY_DRIVER = 0`,
+the configuration that has been on the device. **device state**: unchanged and not re-measured, and the three
+physical actions remain outstanding — a reset of the phone, the reboot to the bootloader the P3 `fastboot boot`
+workflow needs, and the screen photograph. `userdata` (107 GB, unbacked), the partition table and the firmware
+LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+

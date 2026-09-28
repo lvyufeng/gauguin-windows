@@ -258,6 +258,21 @@ what is flashed; **Qcom** is `=1` (Qualcomm `DisplayDxe`) and is the goal.
 | FFS files in FVMAIN | 122 | (not on disk any more) |
 | packaged Qcom drivers present | 42 of 55 | 44 of 55 |
 
+**Amended 2026-09-29 by step 4.213:** the volume has grown in both columns since
+these numbers were taken, and only the first row survives. Rebuilt from the same
+tracked tree with `--xhci-host`, **Simple** is `0x731000` / `0x730960` with
+**131** FFS files and 48 images validated, and **Qcom** is `0x782000` /
+`0x7814a8` with **133** and 47 — both totals `0x2F000` (192,512 bytes) higher,
+so `122` and "(not on disk any more)" are stale rather than wrong. The
+`Mu-gauguin.img` row is not comparable rather than wrong: the in-tree payload
+builder is `tools/build-p2-payloads.sh`, whose artifacts are
+`Mu-gauguin-{stock,silicon}-{gzip,none}.img`, and `Mu-Silicium/Mu-gauguin.img`
+is the 1,648-byte `ANDROID!` stub of step 4.156. The packaged-Qcom row was
+measured against a different enumeration from this one: over the 58
+`Binaries/gauguin/QcomPkg/Drivers/*/*.inf` `FILE_GUID`s, Simple carries 45 and
+Qcom 47 — and the two the switch adds are `CPRDxe` and `DisplayDxe`. See
+`docs/08` step 4.213.
+
 **Verified:**
 
 - Both builds complete with `Return Code: 0x00000000`.
@@ -439,6 +454,12 @@ declares `0x9FC00000, 0x00300000, "UEFI FD"`, walled below by `ABOOT FV`
 `0x300000`. The decisive measurement is simpler still: the
 `USE_CUSTOM_DISPLAY_DRIVER=1` build, which contains `DisplayDxe`, was built and
 validated in this same volume at `FVMAIN` `0x753000` with 47 images.
+(**Amended 2026-09-29 by step 4.213:** the conclusion stands and the volume
+figure has moved — rebuilt from today's tree the `=1` build validates at
+`FVMAIN` `0x782000` with the same **47** images and **133** FFS files, and the
+enclosing `FVMAIN_COMPACT.Fv` is still exactly `0x300000`. The switch itself is
+one tracked line, `USE_CUSTOM_DISPLAY_DRIVER` in `gauguin.dsc`; `docs/08` step
+4.213 measures its whole effect on both artifacts.)
 
 **`AcpiTableUpdate` is a deliberate no-op, but that is our choice, not the platform's.**
 All thirteen sibling packages implement `UpdateAcpiTables ()`, and every one of them

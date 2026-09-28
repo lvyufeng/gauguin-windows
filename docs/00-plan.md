@@ -2414,7 +2414,14 @@ equal to `0x300000`.
 
 The refutation needs no arithmetic, though: the `USE_CUSTOM_DISPLAY_DRIVER=1` build —
 the one that contains `DisplayDxe` — **has already been built and validated** in this
-volume (`Mu-gauguin.img` 1,210,368 bytes, `FVMAIN` `0x753000`, 47 images). So P3 items
+volume (`Mu-gauguin.img` 1,210,368 bytes, `FVMAIN` `0x753000`, 47 images).
+(**Amended 2026-09-29 by step 4.213:** two of those three numbers have
+moved and the third is not comparable. Rebuilt from today's tracked tree
+the `=1` build still validates in this volume, at `FVMAIN` `0x782000`
+with the same **47** images and **133** FFS files; `Mu-gauguin.img` is the
+1,648-byte stub of step 4.156, and what this tree builds are
+`tools/build-p2-payloads.sh`'s `Mu-gauguin-{stock,silicon}-{gzip,none}.img`.
+The refutation is unaffected — the display build fits, with room.) So P3 items
 2–4 are gated on P2 reaching BDS unconditionally, which is a statement about when the
 debug instrumentation can be deleted, not about whether their drivers fit.
 
