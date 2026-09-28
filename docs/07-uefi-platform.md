@@ -4271,6 +4271,43 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > literal in that file — `0x6C00`, naming the SGIs 10, 11, 13 and 14 — and not a property of the machine; with
 > `0x6C000000` both legs read the four intended PPIs. The SPMI window stays blank, no `fastboot` command was run,
 > nothing was flashed, and `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.205.
+>
+> **Step 4.206 — the numbers the payload registers for its timer are this phone's own numbers, and the two of the
+> four that nobody gets right are the virtual and hypervisor ones.** 4.204's *"And the timer number is wrong"* and
+> 4.205's *"the interrupt its own physical timer raises at 30 was registered at 18"* are both true of this
+> instrument and both false of gauguin. `work/linux/arch/arm64/boot/dts/qcom/sm6350.dtsi:3373-3380` is the SoC's own
+> `timer` node — `compatible = "arm,armv8-timer"`, `clock-frequency = <19200000>` — and it declares `interrupts =
+> <GIC_PPI 1 …>, <GIC_PPI 2 …>, <GIC_PPI 3 …>, <GIC_PPI 0 …>`; `sm7225.dtsi:6` includes that file and never
+> overrides the node. `arm,arch_timer.yaml:35-42` fixes the binding's order — secure, non-secure, virtual,
+> hypervisor — so the four INTIDs are **17, 18, 19 and 16**, and the same node appears in the tree the payload
+> itself carries (`work/out/gauguin.dts:4313-4317`, `0x01 0x01/0x02/0x03/0x00 0xff08`). The architectural assignment
+> is 13, 14, 11 and 10 and that is what `-M virt` implements; **this SoC routes the four lines to the bottom of the
+> PPI space instead** — `sdm845`, `sm8150` and `sc7180` do the same, `sm8250` and `sm8350` do not — so 4.205's
+> inference from `APSS_GIC600_GICD` being a GICv3 is exactly backwards, and the open item it left (*"architectural
+> and unmeasured on hardware"*) was measurable on this host and had in fact already been read: 4.200's `decides`
+> clause ends *"this board's tree on 1/2/3/0, so no line of the model's is a line the firmware registered"*.
+> **And the phone's own firmware agrees, in its own bytes.** `device/dxe/ArmTimerDxe.efi` holds four `UINT32`s at
+> file offset `0x3af0` — `0x00000011 0x00000012 0x0000001b 0x0000001a`, i.e. 17, 18, 27, 26 — immediately after the
+> `AutoGen.c` `__FILE__` string. The order is what identifies them: `TimerDxe.inf`'s `[Pcd.common]` is
+> `PcdTimerPeriod`, Sec, Int, Virt, Hyp, and the last two words are 27 then 26, which is that order and not
+> `ArmPkg.dec:264-267`'s declaration order (Sec, Int, Hyp, Virt) or token order (`0x35`, `0x36`, `0x40`, `0x41`),
+> both of which would print 26 first. They sit in the image as *data*, which is what a patchable or dynamic-default
+> declaration produces — nothing in the whole 32,768-byte stock file materialises any of the four into a register —
+> while this build's `FixedAtBuild` image bakes
+> `mov w20, #0x11` at `0x11c8` and `mov w19, #0x12` at `0x11c4`. So the
+> phone registers its non-secure EL1 physical timer at **18**, and the identical pair in twelve Mu-Silicium Qualcomm
+> packages (Bitra, Blackbolt, Divar, Hana, Kamorta, Moorea, Napali, Nazgul, Nicobar, Rennell, Starlord, Strait) is
+> Qualcomm's pair copied twelve times, not twelve readings.
+> **The residual defect is in both files.** The tree puts virtual on PPI 3 and hypervisor on PPI 0 — INTIDs 19 and
+> 16 — while the firmware and the payload both say 27 and 26, the `ArmPkg` defaults. Nothing in the phone's tree
+> claims 26 or 27 at all: its complete PPI set is 0/1/2/3 (timer), 5 (`arm,armv8-pmuv3`) and 8 (GICv3 maintenance).
+> That is inert while `USE_PHYSICAL_TIMER = 1`, because only `CNTP` is armed, and it becomes a fault the moment that
+> switch is flipped. `PcdArmArchTimerVirtIntrNum|19`, `PcdArmArchTimerHypIntrNum|16` is **offered and not made** — a
+> vendor's tree is a declaration, not a measurement of the silicon, and whether PPI 10 or 11 carries something
+> unnamed on this phone is unmeasured. The variant the next run tests is now two numbers rather than one: Sec 17 →
+> 29 and Int 18 → 30, which is *not applying the Qualcomm override*, with 27 and 26 already the instrument's own
+> lines. Nothing was flashed, no `fastboot` command was run, the payload of record is unchanged, and
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.206.
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

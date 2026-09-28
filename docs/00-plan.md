@@ -1856,6 +1856,20 @@ Work:
 > carried open item that the delivery guest's PPI enables *"did not land"* is withdrawn — it was a 16-bit-shifted
 > literal (`0x6C00`) in that file, not a property of the machine. SPMI stays blank, nothing was flashed,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.205.
+> **4.206: the number the payload registers at 18 is this phone's own number, not a mistake.** 4.200 had already
+> read this board's tree as putting the four generic-timer lines on PPIs 1/2/3/0; this step turns those into INTIDs
+> (`arm,arch_timer.yaml:35-42`'s fixed secure/non-secure/virtual/hypervisor order → **17, 18, 19, 16**), and
+> corroborates them against the phone itself: `device/dxe/ArmTimerDxe.efi` carries four `UINT32`s at file offset
+> `0x3af0` — 17, 18, 27, 26 — in `TimerDxe.inf`'s `[Pcd.common]` order, present as *data* (a
+> patchable/dynamic-default declaration; this build's `FixedAtBuild` image bakes `mov w20, #0x11` / `mov w19, #0x12`
+> instead). The same pair appears in twelve Mu-Silicium Qualcomm packages because it is Qualcomm's, copied. **So
+> 4.204's *"the timer number is wrong too"* and 4.205's *"the interrupt its own physical timer raises at 30 was
+> registered at 18"* are true of the instrument and false of the phone**, and 4.205's *"architectural and unmeasured
+> on hardware"* is a regression against 4.200. **One defect survives in both files**: the tree puts virtual and
+> hypervisor on 19 and 16 while the firmware and the payload say 27 and 26 (`ArmPkg`'s defaults), inert while
+> `USE_PHYSICAL_TIMER = 1` — the candidate edit `VirtIntrNum|19`, `HypIntrNum|16` is offered and not made. The next
+> run's variant is therefore **two** PCDs, Sec 17 → 29 and Int 18 → 30. Nothing was flashed, the payload of record
+> is unchanged, and `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.206.
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

@@ -42790,3 +42790,132 @@ screencap can be taken from this host at all, and `先读屏，再刷下一次` 
 photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
 firmware LUN are all as they were, nothing was flashed, no partition was written, and
 `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.206 — the number the payload registers at 18 is this phone's own number: the SoC tree puts the four generic-timer lines on PPIs 1, 2, 3 and 0 (INTIDs 17, 18, 19, 16), the phone's own stock `ArmTimerDxe` carries 17, 18, 27 and 26 in its AutoGen block, and the twelve Qualcomm packages in Mu-Silicium carry 17 and 18 because those are Qualcomm's numbers — so 4.205's frozen poll is the instrument's number and not the driver's, and the two of the four that neither the tree nor the firmware gets right are the virtual and hypervisor ones
+
+
+**What 4.205 left open, and what this project had already read.** 4.205's `does not decide` clause closed with
+*"whether the timer PPI numbers on the real gauguin GIC-600 are 26, 27, 29 and 30, which is architectural and
+unmeasured on hardware"*, and the paragraph above it argued the point from `APSS_GIC600_GICD` at `0x17A00000`
+being a GICv3. Both are wrong, and the second is a regression: **4.200 had already read this board's tree and
+found the timer lines on PPIs 1/2/3/0**, in a `decides` clause that ends *"this board's tree on 1/2/3/0, so no
+line of the model's is a line the firmware registered"*. What 4.200 did not do is turn those PPI numbers into
+INTIDs, identify them as the silicon's own numbers rather than a vendor typo, or corroborate them against anything
+but the tree it read. This step does those three things, and they settle the item 4.205 reopened.
+
+
+**The SoC tree names them, and not the architectural four.**
+`work/linux/arch/arm64/boot/dts/qcom/sm6350.dtsi:3373-3380` is a `timer` node with `compatible =
+"arm,armv8-timer"`, `clock-frequency = <19200000>` and `interrupts = <GIC_PPI 1 ...>, <GIC_PPI 2 ...>, <GIC_PPI 3
+...>, <GIC_PPI 0 ...>`; `sm7225.dtsi:6` is `#include "sm6350.dtsi"` and the file never overrides the node, so this
+is the SM7225's too. The binding's order is fixed —
+`work/linux/Documentation/devicetree/bindings/timer/arm,arch_timer.yaml:35-42` lists secure timer irq, non-secure
+timer irq, virtual timer irq, hypervisor timer irq — so the four INTIDs are **17 (secure EL1), 18 (non-secure
+EL1), 19 (virtual) and 16 (hypervisor)**, and a GIC PPI number `n` is INTID `n + 16`. The generated tree the
+payload itself carries has the same node, decompiled as `interrupts = <0x01 0x01 0xff08 0x01 0x02 0xff08 0x01 0x03
+0xff08 0x01 0x00 0xff08>` at `work/out/gauguin.dts:4313-4317` — `0xff08` being `GIC_CPU_MASK_SIMPLE(8) |
+IRQ_TYPE_LEVEL_LOW`. **The deviation is the finding**: 13, 14, 11 and 10 are the ARM architectural assignment and
+are what `-M virt` implements, and this SoC routes the same four lines to the bottom of the PPI space instead. It
+is not a one-off: `sdm845.dtsi`, `sm8150.dtsi` and `sc7180.dtsi` all declare PPIs 1, 2, 3 and 0, while
+`sm8250.dtsi` and `sm8350.dtsi` declare the architectural 13, 14, 11 and 10. Qualcomm moved the timer, and gauguin
+is on the older side of the move.
+
+
+**And the phone's own firmware agrees, which is measurable in the dump.** `device/dxe/ArmTimerDxe.efi` carries, at
+file offset `0x3af0`, a block of four `UINT32`s: `0x00000011 0x00000012 0x0000001b 0x0000001a` — 17, 18, 27, 26 —
+sitting immediately after the `AutoGen.c` `__FILE__` string at `0x3ae4`. The order is what identifies it:
+`TimerDxe.inf`'s `[Pcd.common]` lists `PcdTimerPeriod`, then Sec, Int, Virt, Hyp, and the block's last two words
+are 27 then 26, which is the `[Pcd.common]` order and **not** `ArmPkg.dec:264-267`'s declaration order (Sec, Int,
+Hyp, Virt) and not token order (`0x35`, `0x36`, `0x40`, `0x41`), both of which would print 26 before 27. They are
+present as *data* rather than as instructions, which is what a patchable or dynamic-default declaration produces —
+the whole 32,768-byte stock image contains no `movz`, `orr` or `add` from the zero register materialising any of
+the four — while the build's own image, `FixedAtBuild`, bakes them into instructions instead: the immediate `0x11`
+moved into `w20` at `0x11c8`, the immediate `0x12` into `w19` at `0x11c4` — disassembly addresses, as 4.200 cites
+one of them — and no such data block anywhere. So the
+phone's firmware registers the non-secure EL1 physical timer at **18**, exactly as the payload does.
+
+
+**Why twelve packages carry the same pair.** Every Qualcomm SoC package in Mu-Silicium — Bitra, Blackbolt, Divar,
+Hana, Kamorta, Moorea, Napali, Nazgul, Nicobar, Rennell, Starlord, Strait — carries `PcdArmArchTimerSecIntrNum|17`
+and `PcdArmArchTimerIntrNum|18` on the same two lines. That is not twelve measurements; it is one, copied, and it
+is Qualcomm's own pair. `ArmPkg.dec:264-268`'s 29, 30, 26, 27 are the architectural numbers, and every one of
+those packages leaves Hyp and Virt at them.
+
+
+**The inversion, and what it exonerates.** The payload registers four lines: 17, 18, 27 and 26
+(`TimerDxe.c:401/409/413/416`, and 4.205 measured the enable set that follows from them as `0x0c06ffff`). On the
+phone **17 and 18 are the hardware's numbers**, so the timer this driver arms — `USE_PHYSICAL_TIMER = 1` makes
+`ArmGenericTimerCounterLib` the physical one, so `TimerDxe.c:161-166` programs `CNTP` — raises the INTID it
+registered, and the tick fires. On this instrument the two Qualcomm numbers are the wrong ones and the two ArmPkg
+defaults are the right ones, so nothing the driver arms is registered and the tick cannot fire. That makes 4.200's
+`decides` clause — *"that 4.199's frozen `PollCount` is the instrument's arithmetic"* — a measurement rather than
+an inference, and it settles the item 4.205 reopened: the hub's poll froze because this machine raises 30 and the
+payload registered 18, and for no other reason these runs can see. The payload's timer numbers are **right for the
+phone** and wrong only for the model.
+
+
+**The defect that is left, and it is in both.** Neither file gets the virtual and hypervisor numbers right. The
+tree says virtual is PPI 3 (INTID 19) and hypervisor is PPI 0 (INTID 16); the firmware and the payload both say 27
+and 26, the ArmPkg defaults. Nothing in the phone's tree claims INTID 26 or 27 at all — the complete PPI set
+`sm6350.dtsi` declares is 0, 1, 2 and 3 for the timer, 5 for the `arm,armv8-pmuv3` PMU and 8 for the GICv3
+maintenance interrupt — so the payload enables two lines nothing in the tree drives. It is inert while
+`USE_PHYSICAL_TIMER = 1`, because only `CNTP` is ever armed, and it becomes a fault the moment that switch is
+flipped, because then the registration the tick needs is the one at 27 and the line is at 19. **A candidate edit —
+`PcdArmArchTimerVirtIntrNum|19`, `PcdArmArchTimerHypIntrNum|16` — is offered and not made**: a device tree is a
+declaration by the same vendor's firmware, not a measurement of the silicon, and whether PPI 10 or 11 carries
+something on this phone that the tree does not name is unmeasured.
+
+
+**What the next run tests, now that the pair is known.** 4.205's prediction was to change
+`PcdArmArchTimerIntrNum` from 18 to 30. With the four numbers known, the variant that makes the payload's numbers
+the instrument's moves exactly two of them — Sec 17 → 29 and Int 18 → 30 — because 27 and 26 are already
+ArmPkg's defaults and already the instrument's timer lines. That is *not applying the Qualcomm override*, and it
+is the same change 4.205 predicted with the arithmetic finished. The prediction is that the tick arrives and, if
+the root hub's re-enumeration is driven by a timer event, `PollCount` advances past 01 and the wall opens; the
+falsifier is the tick arriving with the poll still holding, which would say the wall is not timer-driven and the
+notification that ran once was the last one this payload was ever going to get. Note what this run can and cannot
+say: it tests the instrument's model, and the phone's tick — which this step now expects to work — has still never
+been observed in a console.
+
+
+**decides**: that gauguin's four generic-timer interrupt lines are the PPIs 1, 2, 3 and 0 — INTIDs 17, 18, 19 and
+16 (`sm6350.dtsi:3373-3380`, inherited by `sm7225.dtsi:6`, read in the binding's fixed order at
+`arm,arch_timer.yaml:35-42`, and the same node in the tree the payload carries at
+`work/out/gauguin.dts:4313-4317`); that the phone's own stock `ArmTimerDxe.efi` carries 17, 18, 27 and 26 as a
+four-word AutoGen block at `0x3af0`, in the `[Pcd.common]` order, and not as the immediates a `FixedAtBuild`
+declaration produces; that `PcdArmArchTimerSecIntrNum|17` and `PcdArmArchTimerIntrNum|18` are therefore this
+phone's numbers rather than a mistake, and that the identical pair in twelve Mu-Silicium Qualcomm packages is
+Qualcomm's pair rather than twelve readings; that the non-secure EL1 physical timer the payload arms raises the
+INTID the payload registered, so the tick fires on the phone and 4.205's frozen poll is the instrument's number
+alone; and that the two of the four neither source gets right are the virtual and hypervisor numbers, 27 and 26
+against the tree's 19 and 16. **corrects**: 4.205's `does not decide` clause that the phone-side timer PPIs are
+*"architectural and unmeasured on hardware"* — they are not architectural, because this SoC routes them away from
+the architectural four, and they were measurable on this host without the phone, from a tree 4.200 had already
+read for exactly this purpose; 4.205's argument that `APSS_GIC600_GICD` being a GICv3 makes 26, 27, 29 and 30 the
+phone's numbers, in which the address is right and the inference is exactly backwards; 4.205's heading and
+`decides` clause reading *"the interrupt its own physical timer raises at 30 was registered at 18"* as the
+payload's defect, when it is a defect of the instrument's number space; and 4.204's reading of `-M virt`'s INTIDs
+29, 30, 27 and 26 *"against the 17 and 18 `BitraPkg.dsc.inc:51-52` sets"* — `docs/00`'s *"the timer number is
+wrong too"*, `docs/07`'s *"And the timer number is wrong"* — which is true of the instrument and false of the
+phone. **does not decide**: whether PPI 10 or 11 carries anything on this phone that the tree does not name, which
+is what the Virt/Hyp candidate edit turns on; whether the payload's hub poll is driven by a timer event at all,
+which is what the variant run tests; whether the phone's timer tick has ever actually been delivered, since no
+console has been read from a booted payload in this project and the expectation here rests on two declarations by
+the same vendor; and whether anything else in the payload waits on the tick. **carries the standing limits
+unchanged**: the thirteen rungs, the SEEDED SMEM word, the AOP `0xC3F000C` record and the EL3 stub's three
+fabricated structures all stand and none is touched; `0x41E00000` stays retired; the payload of record is
+unchanged and is still the 4.204/4.205 image; the SPMI window stays blank because `-M virt` has no SPMI arbiter to
+alias to. **not an action**: no run of the instrument, no build, no `fastboot` command, no console read from the
+device and no seed written anywhere; nothing on disk changed — several files and two images were read for it
+(`work/linux/arch/arm64/boot/dts/qcom/sm6350.dtsi`, `sm7225.dtsi`, the `arm,arch_timer.yaml` binding,
+`work/out/gauguin.dts`, `work/uefi/Mu-Silicium/Silicon/Qualcomm/*/*.dsc.inc`, `device/dxe/ArmTimerDxe.efi` and the
+build's own `ArmTimerDxe.efi`). **device state**: unchanged and not re-measured this step, and the device was
+still not enumerating when 4.205 last looked. Three physical actions remain outstanding and none can be taken from
+this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow
+needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb devices` is empty, so no
+screencap can be taken from this host at all, and `先读屏，再刷下一次` still forbids booting the payload before that
+photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
+firmware LUN are all as they were, nothing was flashed, no partition was written, and
+`device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+
