@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
 # Build one variant payload and prove that what came out is what was asked for.
-# Three experiments are defined below: `arch-first` reorders the a-priori batch,
-# `xhci-host` adds the USB host stack, and `apriori-extras` promotes four drivers
-# into the a-priori batch that this build packages but leaves out of it.
+# Four experiments are defined below: `arch-first` reorders the a-priori batch,
+# `xhci-host` adds the USB host stack, `apriori-extras` promotes four drivers
+# into the a-priori batch that this build packages but leaves out of it, and
+# `usbcfg-sentinel` does what `xhci-host` does and additionally rewrites one
+# instruction inside the shipped UsbConfigDxe.
 #
 # Why arch-first exists. The nine architectural protocols DXE never installs
 # (Security, Bds, Watchdog, Variable, Variable Write, Capsule, Monotonic, Reset,
@@ -69,6 +71,46 @@
 #                dispatch order of every future build is how the payload in
 #                `boot` stops being comparable to the one being flashed.
 #
+#   usbcfg-sentinel
+#                `xhci-host` plus one rewritten instruction in the shipped
+#                UsbConfigDxe. Steps 4.181-4.183 found the emulated USB host
+#                controller blocked by a single word: the publisher writes 0x10000
+#                (its own "unassigned" sentinel) into the record word that is
+#                iface+0x8C, which XhciPciEmulation's Supported requires to read 1,
+#                and no repair available at the platform level can change it -
+#                re-connecting the handle after dispatch was measured not to help
+#                (4.183), and the only caller that writes a real value there,
+#                UsbStartController, never runs in this guest because its PMIC
+#                bring-up fails first. So this experiment changes the word instead
+#                of the order, and it is the one build in this repository that
+#                rewrites a byte of a Qualcomm-signed driver. What it is for is the
+#                counterfactual: if the word were 1, would the chain run?
+#                Everything else is held fixed against 4.183, including the
+#                one-shot re-connect that produced its refusal, so the two runs
+#                differ by four bytes.
+#
+#                Which four bytes took one more step than expected. 4.184 patched
+#                the sentinel store in the record initialiser loop (VA 0x3B6C) and
+#                the word did not move - the gate still read w8c=00010000 on every
+#                pass. The census's own w88 says why: that loop is bounded by
+#                `cmp x8, #0x1 ; b.hs`, so it initialises record 0 alone, and the
+#                E722B03F interface the gate reads is rec_base+0x100, which is the
+#                host-client record's own +0x28. Record 1 is initialised by hand in
+#                UsbConfigInit at VA 0x39E4, with the literal 0x10000, before the
+#                interface is installed - and in this guest nothing writes that word
+#                again. So the site that decides the reading is 0x39E4, and it is the
+#                default here; SENTINEL_SITE=loop reproduces 4.184's build, which is
+#                kept precisely so that its negative result stays repeatable. Both
+#                sites are one instruction of the same shape (`orr wN, wzr, #0x10000`
+#                -> `mov wN, #0x1`) and each is gated on its own unique eight-byte
+#                pair. See tools/patch-usbcfg-sentinel.py, which owns the offsets, the
+#                pristine hash and the in-volume gate, and whose docstring carries
+#                the disassembly this paragraph summarises.
+#
+#                The output directory carries the site name, so a run of one site
+#                cannot overwrite the artifact of the other. work/out/usb-sentinel/
+#                holds 4.184's, built before the split, and is not written to again.
+#
 # Environment:
 #   DISPLAY=simple|qcom   which display driver the platform is regenerated with.
 #                         Default simple, because that is what the baseline
@@ -124,12 +166,18 @@ ORDER_ARGS=(--display "$DISPLAY")
 OUTDIR="$P2"
 STAGED_BLOBS=""
 REORDERS=0
+SENTINEL=0
+# Which instruction `usbcfg-sentinel` rewrites: `host` is the store the gate
+# reads (0x39E4), `loop` is record 0's sentinel (0x3B6C) and is 4.184's build,
+# kept reproducible on purpose. See the header and the tool.
+SENTINEL_SITE="${SENTINEL_SITE:-host}"
+USBCFG_REL="QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.efi"
 case "$EXP" in
     arch-first)
         GEN_ARGS=(--apriori-move "$ANCHOR:$(IFS=,; echo "${ARCH_FIRST_NAMES[*]}")")
         REORDERS=1
         ;;
-    xhci-host)
+    xhci-host|usbcfg-sentinel)
         GEN_ARGS=(--xhci-host)
         # ORDER_ARGS is left alone: this experiment adds no `!if` to APRIORI.inc,
         # because nothing it adds goes into that file. If that ever changes, the
@@ -147,6 +195,18 @@ import sys; sys.path.insert(0, '$ROOT/tools')
 from make_xbl_binaries import SIBLING_BLOBS
 print(' '.join(SIBLING_BLOBS.values()))")
         [ -n "$STAGED_BLOBS" ] || die "SIBLING_BLOBS is empty - nothing would be staged"
+        if [ "$EXP" = usbcfg-sentinel ]; then
+            SENTINEL=1
+            case "$SENTINEL_SITE" in
+                host|loop) ;;
+                *) die "SENTINEL_SITE must be host or loop, not '$SENTINEL_SITE'" ;;
+            esac
+            # A directory of its own, both against the other site and against
+            # 4.182/4.183's artifacts: a run of one site must not be able to
+            # overwrite the payload of the other, or the two images stop being
+            # distinguishable by where they are.
+            OUTDIR="$OUT/usb-sentinel-$SENTINEL_SITE"
+        fi
         ;;
     apriori-extras)
         GEN_ARGS=(--apriori-extras)
@@ -157,7 +217,7 @@ print(' '.join(SIBLING_BLOBS.values()))")
         # because the promotion adds no `!if`.
         REORDERS=1
         ;;
-    *) die "unknown experiment '$EXP' (known: arch-first, xhci-host, apriori-extras)" ;;
+    *) die "unknown experiment '$EXP' (known: arch-first, xhci-host, apriori-extras, usbcfg-sentinel)" ;;
 esac
 
 # The tree has to be left the way it was found, including after a failure: this
@@ -186,6 +246,25 @@ restore() {
         done
         note "the $(echo "$STAGED_BLOBS" | wc -w) staged USB host blobs are gone from uefi/Binaries/gauguin and from $MU/Binaries/gauguin"
     fi
+    if [ "$SENTINEL" = 1 ]; then
+        # The patch is the one thing this run puts into a Qualcomm-signed blob,
+        # and it was applied to the checkout's copy rather than to the generated
+        # one - so the regeneration above has already undone it, because the
+        # generator writes uefi/Binaries/gauguin/ from device/dxe/ every time.
+        # That is the mechanism; what follows proves it happened, using the tool
+        # that wrote the patch to read it back, rather than trusting the
+        # mechanism. A restore that failed silently would leave a patched
+        # Qualcomm driver in the checkout for the next build to pick up, which is
+        # exactly the kind of difference that never shows up in a diff.
+        USBCFG="$MU/Binaries/gauguin/$USBCFG_REL"
+        if ! python3 "$ROOT/tools/patch-usbcfg-sentinel.py" --check "$USBCFG" 2>/dev/null |
+             grep -q '^  state   pristine$'; then
+            note "RESTORE FAILED: $USBCFG_REL is not the shipped image -"
+            python3 "$ROOT/tools/patch-usbcfg-sentinel.py" --check "$USBCFG" >&2 || true
+            exit 1
+        fi
+        note "the sentinel patch is gone: $USBCFG_REL in the checkout is the shipped image again"
+    fi
 }
 trap restore EXIT
 
@@ -194,6 +273,17 @@ log "generating the platform: $EXP"
 # ---------------------------------------------------------------------------
 python3 "$GEN" --display "$DISPLAY" "${GEN_ARGS[@]}"
 "$ROOT/tools/sync-uefi-platform.sh"
+
+if [ "$SENTINEL" = 1 ]; then
+    # After the sync and not before it: sync-uefi-platform.sh copies
+    # uefi/Binaries/gauguin/ over the checkout, so a patch applied to either of
+    # those earlier would be overwritten by the very step that installs it.
+    log "patching the sentinel in UsbConfigDxe (site: $SENTINEL_SITE)"
+    python3 "$ROOT/tools/patch-usbcfg-sentinel.py" --apply \
+        "$MU/Binaries/gauguin/$USBCFG_REL" --site "$SENTINEL_SITE"
+    python3 "$ROOT/tools/patch-usbcfg-sentinel.py" --check \
+        "$MU/Binaries/gauguin/$USBCFG_REL" --site "$SENTINEL_SITE" | sed 's/^/   /' >&2
+fi
 
 INC="$ROOT/uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc"
 mkdir -p "$OUTDIR"
@@ -263,12 +353,13 @@ python3 "$ROOT/tools/make_boot_image.py" --fd "$FD" --bootshim "$BOOTSHIM" \
     -o "$IMG"
 
 # ---------------------------------------------------------------------------
-log "the order that came out, read from the image and not from the file"
+log "the volume that came out, read from the image and not from the file"
 # ---------------------------------------------------------------------------
-# The point of the exercise: APRIORI.inc is what was asked for, this is what the
-# firmware carries. They are checked against each other because a reorder that
-# silently did not reach the volume would look exactly like a reorder that made
-# no difference on the device.
+# The point of the exercise, for every experiment below: what was asked for is the
+# file the generator wrote, and what the firmware carries is inside the packed
+# image. The two are checked against each other because a change that silently did
+# not reach the volume would look exactly like a change that made no difference on
+# the device.
 #
 # Every check below is read from the exit status of the command itself and not
 # from a pipe: `cmd | tail` hands `set -e` the status of `tail`, so a failing
@@ -283,6 +374,32 @@ gate() {                       # gate <log> <name> <command...>
     fi
 }
 
+# The patch's own gate, and it is first because everything below it describes an
+# image that is worth reading only if this driver is in it. Read out of the packed
+# image rather than out of the file that was patched, because the build runs GenFw
+# over every PE32 binary module and only the volume can say what survived that.
+# Every experiment is gated, not only the one that patches: each instruction pair
+# this looks for is unique in the whole shipped UsbConfigDxe, so a run that finds
+# neither has lost the driver, and that would otherwise be discovered only by a
+# panel that says nothing about USB at all.
+if [ "$SENTINEL" = 1 ]; then
+    SENTINEL_EXPECT=patched
+    SENTINEL_SITE_GATE="$SENTINEL_SITE"
+else
+    SENTINEL_EXPECT=original
+    # The pristine gate names a site as well, so that a run which finds neither
+    # variant of the wrong pair fails instead of passing quietly. `host` is the
+    # one the census reads, and its pair is unique, so "no host pair at all" is a
+    # real statement about every payload this script builds.
+    SENTINEL_SITE_GATE=host
+fi
+log "the UsbConfigDxe instruction that reached the volume (site: $SENTINEL_SITE_GATE)"
+gate "$OUT/sentinel-$EXP.log" "patch-usbcfg-sentinel.py --in-image" \
+    python3 "$ROOT/tools/patch-usbcfg-sentinel.py" \
+    --in-image "$IMG" --site "$SENTINEL_SITE_GATE" --expect "$SENTINEL_EXPECT"
+grep -E 'pair|ok:' "$OUT/sentinel-$EXP.log" | sed 's/^/   /' >&2
+
+log "the a-priori order that came out"
 gate "$OUT/apriori-order-$EXP.log" "apriori-order.py" \
     python3 "$ROOT/tools/apriori-order.py" "$IMG" "${ORDER_ARGS[@]}"
 tail -n 1 "$OUT/apriori-order-$EXP.log" | sed 's/^/   /' >&2
@@ -314,4 +431,13 @@ else
     note "the device, and the panel has nothing to say about it, so it is not the"
     note "payload that answers the open P2 question and must not take the place of"
     note "the one in boot until that reading has been taken."
+    if [ "$SENTINEL" = 1 ]; then
+        note "This one also carries four changed bytes - UsbConfigDxe's host-client"
+        note "record now reads as mode 1 instead of unassigned (site $SENTINEL_SITE) -"
+        note "so it is a counterfactual and not a candidate: it is here to answer"
+        note "whether the gate opens, and it is not to be flashed to the boot"
+        note "partition as a fix. The panel to read is P2 GATE2's w8c (1, against"
+        note "00010000), P2 SUPP BEB12BEE...'s s=, and pciio in the P2 USB census on"
+        note "the pass after the re-connect."
+    fi
 fi

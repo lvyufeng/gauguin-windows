@@ -1310,6 +1310,56 @@ Work:
 > `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`. No device was touched. See
 > `docs/08` step 4.183.
 
+> **Step 4.184 — the sentinel's writer is not the loop: that loop is bounded by `Index < 1` and
+> initialises record 0, and the gate reads record 1.** 4.183 left two repairs and said one of them —
+> changing the sentinel `UsbStartController` writes — was inside a binary this project cannot rebuild.
+> Before accepting that, this step asked *which instruction* writes the word the gate reads, and the
+> disassembly says the obvious candidate is not it. The gate's two clauses read `iface+0x88` and
+> `iface+0x8C`, and in `UsbConfigDxe`'s own `UsbConfigInit` the only stores into those two words are a
+> hand-written pair at `0x39e0`/`0x39e8` (index `1`, mode `0x10000`) and the record-initialiser loop's
+> pair at `0x3b5c`/`0x3b70` — and the loop is bounded by `cmp x8, #0x1 ; b.hs` at `0x3b00`, so it runs
+> for `Index = 0` alone. The interface the gate reads is `rec_base+0x100`, the host-client record, i.e.
+> **record 1**; patching record 0's store is invisible. The measurement agrees exactly: the fourth
+> variant (`--site loop`) boots, and on all 23 digest passes the panel reads `P2 GATE2 w8c=00010000`
+> and `P2 SUPP BEB12BEE-… s=Unsupported`, with `pciio=0` on every census row, no `ConfigUsb` row and no
+> `XhcPciEmulationDriverBindingStart` row. A negative result, and the useful one: the word is written
+> **once**, in the record 1 hand initialisation, and nothing in this guest revisits it. Instrument:
+> `tools/patch-usbcfg-sentinel.py` (added; `--site loop`), `tools/build-apriori-variant.sh` (4th
+> experiment, `usbcfg-sentinel`). No device was touched. See `docs/08` step 4.184.
+>
+> **Step 4.185 — the gate opens and the binding still fails, one level down.** This step is 4.184's
+> same tool aimed one word over: `--site host` rewrites `0x39e4`, the *mode* store of the record the
+> gate reads, `orr w10, wzr, #0x10000` becoming `mov w10, #1`. The pattern holds on every one of 25
+> digest passes — `P2 GATE2 w8c` moves `00010000` → `00000001` and `P2 SUPP BEB12BEE-… s` moves
+> `Unsupported` → `Success` — so 4.181's gate is confirmed as real and as the *first* barrier, not the
+> only one. The binding then fails one level down, inside the publisher the emulation just opened: the
+> `+0x10` thunk (`0x1428`) re-shuffles its arguments, `ConfigUsb` (`0x2e80`) receives `(Mode = 1,
+> Index = iface+0x88 = 1)`, and its entry guard `0x2ea4: cmp w8, #0x1 ; b.hs` takes the
+> `EFI_INVALID_PARAMETER` exit, printing `ConfigUsb: ConfigUsb: Error - Invalid CoreNum passed: 1`
+> before the emulation's own `XhcPciEmulationDriverBindingStart: Unable to configure USB in host mode,
+> Status =  (0x2)`. `pciio` is `0` on every census row: the abort moved, the result did not. `%d` is
+> proved to be the index rather than a "core number" by a single-store invariant — the only store to
+> `[x29,#-0x10]` is `0x2e90` — and the same word is then used as a record index (stride `0xd8`) to
+> fetch `UsbCoreIfc`. The run also settles 4.183's `Access Denied`: `UsbfnDwc3Dxe` opens the **same**
+> `E722B03F` GUID `BY_DRIVER`, and the connect loop's second iteration is refused because the
+> emulation never releases its own open (`Start` has no `CloseProtocol`; no `[x?,#0x120]` in
+> `0x1514–0x1708`). **The decision this forces**: reordering cannot be sufficient and the only repair
+> left is inside a shipped binary; the two words are both required — `+0x8C == 1` for the emulation,
+> `+0x88 == 0` for `ConfigUsb` — while `UsbfnDwc3Dxe` wants `+0x8C == 4` of the same word, so **no
+> single value of the record serves both clients** and the paired patch is a *counterfeit*
+> construction-time record that may be read only as a probe of `ConfigUsb`'s next step, never as a
+> device behaviour. Two corrections were made to instruments rather than to conclusions: the
+> identification of the emulation in the volume is by **whole-file** match (the 45,056-byte Bitra file
+> occurs exactly once, at `0x34b134`; the generic file zero times) and not by `.text[0:64]`, which is a
+> shared prologue occurring 45 times; and `P2 USB n=` is **not** a pass counter (26 rows over 25
+> passes, with `n=8` ×3 and `n=16` ×2) — `P2 CONN`/`GATE`/`GATE2` are. Instrument:
+> `tools/patch-usbcfg-sentinel.py` (`--site host`, `--site index`), `tools/build-apriori-variant.sh`.
+> **Still open**: whether the paired `host`+`index` build gets past `ConfigUsb` at all (the run either
+> asserts `(NULL != UsbCoreIfc)` at `UsbConfigLib.c:304` or calls `UsbCoreIfc+0x18` and prints one of
+> the "initializaition" rows), the first P3 clause, and the phone — whose prediction is now one
+> character wide, since 4.183's `shut` and 4.185's `open` are the two values a single word can take.
+> No device was touched. See `docs/08` step 4.185.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

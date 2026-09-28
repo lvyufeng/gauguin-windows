@@ -37857,3 +37857,410 @@ step, and it is a decision rather than a measurement.
   Nothing was written to it at any point.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
   ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.
+
+## Step 4.184 — the sentinel's writer is not the loop: that loop is bounded by `Index < 1` and initialises record 0, the gate reads record 1, and rewriting the loop's store leaves `w8c=00010000` on all 23 passes
+
+### What 4.183 left, and why one more reading could not settle it
+
+4.183 ended with three candidate repairs and one of them tested: re-connecting the handle after `K 73`
+does not make the emulation bind. It left the second one — change the sentinel — and it left it with a
+stated difficulty: the store is inside a shipped binary. That is a limit on *rebuilding*, not on
+*editing*, and this project builds its payload anyway. But the step also inherited a weaker thing than
+it looked: from 4.181 onward every step had *read* `0x00010000` at `iface+0x8C` and *called* it the
+sentinel, and no step had ever changed it. A word that is only read is a hypothesis about which word
+matters, and the cheapest way to turn it into a measurement is to change the word inside the volume and
+re-run 4.183's instrument unchanged — which 4.183 itself makes possible, because it showed the handle
+already reaches the emulation after dispatch. No Apriori work is needed to ask the question.
+
+### The instrument, and the two things it had to be careful about
+
+`tools/patch-usbcfg-sentinel.py` is new in this step. It rewrites one instruction in the shipped
+`UsbConfigDxe.efi`, and it is built so that it cannot rewrite the wrong one silently:
+
+- `--check FILE` reports the state of every site and the sha256 of the file.
+- `--check-seeds FILE` asserts the gate's own precondition: each site's eight-byte pair — the `orr`
+  together with the store that follows it — must occur **exactly once** in the pristine image. The bare
+  `orr` is not unique (ten instructions in this image materialise `0x10000`), so the pair is what makes
+  the gate a gate; all three sites pass this on the shipped file, `original pair 1 / patched pair 0`.
+- `--apply FILE --site host|index|loop` refuses a file that is neither the known pristine build
+  (`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`) nor already patched, and
+  refuses to run without `--site`, because two instructions with different meanings and a default among
+  them is how a build patches the wrong one — which is exactly what this step did.
+- `--in-image IMG --site S --expect patched|original` unpacks the *volume* out of the built Android
+  payload with `tools/fv-inventory.py` and counts the pair there, not at a fixed offset. `GenFw` runs
+  over the module before packing, so VA == offset cannot be assumed inside an image, and what this gate
+  asserts is a statement about the volume that came out.
+
+The two sites, read off the shipped binary, are eight bytes apart and not interchangeable:
+
+```
+39d8: orr  w9,  wzr, #0x1         ; the record's index   <- written once, by hand
+39e0: str  w9,  [x8, #0x188]
+39e4: orr  w10, wzr, #0x10000     ; the record's mode    <- written once, by hand
+39e8: str  w10, [x8, #0x18c]
+...
+3af4: mov  x8, xzr                ; the initialiser loop:   for (Index = 0; Index < 1; Index++)
+3b00: cmp  x8, #0x1
+3b04: b.hs 0x3cd4                 ; ... and it exits after record 0
+3b5c: str  w9,  [x11, #0xb0]      ;   rec[Index]+0xB0 = Index
+3b6c: orr  w9,  wzr, #0x10000     ;   rec[Index]+0xB4 = 0x10000
+3b70: str  w9,  [x8,  #0xb4]
+```
+
+The loop *looks* like the sentinel's writer — it is the only place that materialises `0x10000` for a
+record — and its bound is `Index < 1`, so it initialises **record 0**. The `E722B03F` interface whose
+words the gate reads is installed against `rec_base+0x100`, which is **record 1's** `+0x28`; record 1
+is initialised by hand, four instructions before the two stores above, and nothing in this guest
+writes either word again. This step built the `loop` site (`SENTINEL_SITE=loop`): four bytes at VA
+`0x3B6C`, `orr w9, wzr, #0x10000` → `mov w9, #0x1`. Everything else — the instrument, the one-shot
+re-connect, the four `loader` seeds, the three `el3` flags, `--seconds 280` — is 4.183's, byte for
+byte, so the two runs differ by four bytes.
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-sentinel/Mu-gauguin-usbcfg-sentinel-gzip.img` (**new**, `SENTINEL_SITE=loop`) | 1,173,504 | `ae3877ef2f835112562e575d3eb69af6418016b3e46f945a59123c54706f8b09` |
+| `/tmp/xhci-sentinel-payload.raw` (inflated outer blob) | 3,145,840 | `97a638924d3ad6cfa81030cc3c0a7b9b596ebb870aea1a29ec1e9399381c833a` |
+| `work/out/qemu-panel-4.184-xhci-sentinel.txt` | 69,087 | `9addc3913b19467c6de2eebb020b0b3da52977de34edcaf53e66e3a764bfad1a` |
+| `work/out/qemu-panel-4.184-xhci-sentinel-plain.txt` | 19,641 | `fd6e486ce71eecea6224aca9634378509186abd9f6eb6d5d45a21d08859210c3` |
+
+Pass 1 (`run36-plain.sh`) re-read the module base and it did not move a fifth time —
+`PC 0x00009C40E46C (0x00009C40B000+0x0000346C) [ 0] DALSys.dll`, `FAR 0xAFAFAFAF…` — and it carries
+no probe row of its own, because it dies before the digest block (`|P2 ` occurs zero times in its
+panel). Pass 2 (`run36.sh`, `BASE=0x9c40b000`, `gdbprobe36.py`, 280 s) reaches the digest, **23 census
+passes**.
+
+### The reading
+
+The gate words are unchanged, on every pass, from 4.183:
+
+```
+P2 GATE2 w80=9BEBC650 w88=00000001 w8c=00010000|      (23 of 23 rows, one distinct line)
+P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Unsupported|    (once per connect block)
+P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Unsupported|
+P2 RECONN h=9C028D98 s=Not Found|
+P2 RECONN sup=949+17 cfg=7+17|
+P2 CONN cc=2 sup=966 cfg=24 all=170|
+P2 RCNN rc=1 re=Not Found ru=17 rf=17 es=20 er=Unsupported|
+```
+
+and so is every other count: `all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77` (the
+census row prints 22 times here against 23 digest passes, `n=18` absent — the same reader artifact the
+next section measures on its own panel), `P2 STATS discovered=83 apriori=69/70 started=76 diag=7
+noload=0`, `K 51 Ss 47/69 … F056673C-…` and
+`K 73 Ss 67/69 … BEB12BEE-…`. There is **no `ConfigUsb` row and no
+`XhcPciEmulationDriverBindingStart` row anywhere in the panel**, and no `pciio=[1-9]` row anywhere. The
+rows the doc quotes as gate words are the same rows 4.183 quoted with the same values: `w88=00000001`,
+`w8c=00010000`, `s=Unsupported` for the emulation, `ru=17 rf=17 es=20 er=Unsupported`.
+
+Two checks make that a statement about *this* volume rather than about the build's intent:
+
+- `--in-image … --site loop --expect patched` → `ok`; the same image checked with `--site host
+  --expect patched` → exit 1 (`found 0 patched and 1 original`). So the volume carries the patch this
+  step asked for and not the other one.
+- The inner FVMAINs of this volume and 4.183's non-patched one are byte-identical except for the
+  region and the digest, and the *only* difference between this step's payload and 4.185's (below) is
+  measurable, because both volumes are the same size and their inner volumes differ in exactly two
+  4-byte runs — one per site, `0x188` apart, at the same `GenFw` delta. `GenFw` moved nothing.
+
+### What this decides
+
+**The negative result is the measurement.** 4.184 shows that a change to the bytes of the shipped
+`UsbConfigDxe` that demonstrably reaches the volume moves nothing at all: not the gate word, not the
+emulation's `Supported`, not the census, not one row. So the loop's store is not the store the gate
+reads, and the sentinel is not "the `0x10000` in the initialiser"; it is the `0x10000` in the
+hand-written block, and the two are in different records.
+
+**And it makes the next step cheap and unambiguous**, because the other site is four instructions
+earlier in the same function and the tool already has it: the prediction is stated in advance and has
+one row to move (`P2 GATE2 w8c`), which is the form of experiment this project has been able to
+falsify cleanly all along.
+
+### Rows
+
+- **instrument** (three files): `tools/patch-usbcfg-sentinel.py` (new: `--check`, `--check-seeds`,
+  `--apply --site`, `--in-image --site --expect`, the pristine hash, the two sites with their unique
+  pairs); `tools/build-apriori-variant.sh` — a fourth experiment `usbcfg-sentinel` (`--xhci-host` plus
+  one rewritten instruction), `SENTINEL_SITE=host|loop`, and an output directory that carries the site
+  name so a run of one site cannot overwrite the artifact of the other; `run36-plain.sh`, `gdbprobe36.py`,
+  `run36.sh` (`BASE=0x9c40b000`).
+- **acts**: this step edits a byte of a Qualcomm-signed driver that ships in the volume. That is the
+  first time in this project that the *firmware* under test has been changed rather than the instrument
+  around it, and the bound on it is that the edit is four bytes, inside a record initialiser, in a guest
+  where nothing reads that record's word.
+- **answers**: whether the `0x10000` at `iface+0x8C` is load-bearing, for the word 4.184 chose — no.
+- **eliminates** the `loop` site as a repair, and with it the reading that "the sentinel store" is the
+  initialiser loop's.
+- **does not close**: whether the *other* word of the same record is load-bearing (that is 4.185), the
+  phone, and the first P3 clause.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression at
+  `0x12000c`; the seeded SMEM target-info word without which no run carries the digest rows; and that
+  the volume is built from a Qualcomm driver this repository does not have the source of.
+- **a limit this step adds, and the reason 4.185 must be read with care**: with the `loop` site patched,
+  record 0's mode word reads `1` — a record that was never started reads as started. In this guest
+  nothing reads it (the gate reads record 1 and `UsbStopController` is never called), but a *device*
+  build of the same edit would change behaviour in paths this run cannot see. No patched volume has
+  been flashed, and none may be.
+- **not an action**: nothing was flashed, no partition was written, no stub or Microsoft image was
+  changed. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched.
+  The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a Windows
+  tablet whose modem and cameras cannot be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing, and
+  nothing was written to it at any point.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
+  ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.
+
+## Step 4.185 — the gate opens and the binding still fails: with `iface+0x8C` written as `1` the emulation's `Supported` answers `Success`, its `Start` reaches `ConfigUsb`, and a guard on the *other* word of the same record refuses it
+
+### What 4.184 left, and why one more reading could not settle it
+
+4.184 localised the sentinel to the hand-written block and changed the *other* store in it. What was
+still only inferred was that the store at `0x39E4` — the one four instructions later — is the word the
+gate reads. No reading of the gate row can settle that, because the census reads the interface *after*
+dispatch and a static offset does not name a runtime address. The one thing that settles it is
+changing the store and watching the word move, which needs a build.
+
+The prediction was stated before the build: `P2 GATE2 w8c` must read `00000001` on every pass, and if
+the emulation's `Supported` is the only thing standing between this platform and a published USB host
+controller, `P2 SUPP BEB12BEE-… s=` must move from `Unsupported` to `Success` and the census's `pciio`
+must stop being zero. One independent variable: four bytes at VA `0x39E4` of the module,
+`orr w10, wzr, #0x10000` → `mov w10, #0x1`.
+
+### The instrument, and the two things it had to be careful about
+
+`SENTINEL_SITE=host` (the tool's default), writing to `work/out/usb-sentinel-host/` so that 4.184's
+artifact is not overwritten, and the same in-volume gate run per site: this volume passes `--site host
+--expect patched` and **fails** `--site loop --expect patched` with exit 1, exactly as 4.184's volume
+passes `loop` and fails `host`. The two volumes are the same size, and their inner FVMAINs are
+7,540,736 B each and byte-identical **except two 4-byte runs**, at `0x3A9D3C` and `0x3A9EC4`; those are
+`0x3A6358` ahead of VA `0x39E4` and VA `0x3B6C` respectively — the same delta, one per site, and
+`0x188` apart, which is the distance between the two sites. So between 4.184 and 4.185 exactly two
+words of the firmware changed, and they are the two words this project has been arguing about. (The
+*compressed* section header differs by 14 bytes — deflate is not length-preserving — while the inner
+volume is not.)
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-sentinel-host/Mu-gauguin-usbcfg-sentinel-gzip.img` (**new**, `SENTINEL_SITE=host`) | 1,173,504 | `3d264df2e9b4c5b7773fe141b92f07433b4ad6626d8bbf4718e4150d50e6d944` |
+| `/tmp/xhci-sentinel-host.raw` (inflated outer blob) | 3,145,840 | `8fbb3a9b7f3366fa743b16a6421cc5e48d5911714a4bdbc495619cda9b00c59c` |
+| `work/out/qemu-panel-4.185-host.txt` | 84,774 | `d2db94991af3f37b701672c736215c8209d8950c8859e5b3bfb2a8a05588c53b` |
+| `work/out/qemu-panel-4.185-host-plain.txt` | 19,689 | `fdbde6da6296d8d838e801c91c82279140295ee31cb4de192bb4e9fb03dcae57` |
+
+Pass 1 again paid for the base: `0x9C40B000`, `+0x346C`, a fifth consecutive step, zero `|P2 ` rows.
+Pass 2 (`run37.sh`, `run37-plain.sh`, `gdbprobe37.py`) reaches the digest with **25 census passes**.
+
+### The reading
+
+Two rows moved, and they moved on every pass:
+
+```
+P2 GATE2 w80=9BEBC650 w88=00000001 w8c=00000001|      (25 of 25 rows, one distinct line)
+P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success|
+```
+
+and inside the re-connect's transcript, in order, five rows that 4.183 and 4.184 do not have:
+
+```
+374 |P2 SUPP n=17|
+375 |P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Unsupported|
+376 |P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success|
+377 |ConfigUsb: ConfigUsb: Error - Invalid CoreNum passed: 1|
+378 |XhcPciEmulationDriverBindingStart: Unable to configure USB in host mode, Status =  (0x2)|
+379 |P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Access Denied|
+```
+
+Everything else is where 4.184 left it: `P2 CONN cc=2 sup=967 cfg=25 all=170`, `P2 RCNN rc=1 re=Not
+Found ru=18 rf=18 es=20 er=Success`, `all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77`
+on **every** pass, no `pciio=[1-9]` anywhere in the panel, `P2 STATS discovered=83 apriori=69/70
+started=76 diag=7 noload=0`, `P2 ERR Device Error x2 / Unsupported x2 / Access Denied x1 / Not Found
+x1`, and `K 51 Ss 47/69 … F056673C-…` / `K 73 Ss 67/69 … BEB12BEE-…` unmoved.
+
+So the barrier 4.181 found is real and it is *the first* barrier: opening it moved the failure one
+level down, into the publisher's own library, and left `pciio` at zero.
+
+### What the two new rows are, instruction by instruction
+
+Both strings are in the shipped binaries, and `XhcPciEmulation` is the **Bitra** build —
+`Binaries/bitra/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.efi`, 45,056 B,
+`sha256 68ee8cf1f8412b1bdc31388a08ebd43a93a37f7bb32257a2c47c132f27e098f0` — which is proved to be the
+one in the volume by **the whole 45,056-byte file occurring exactly once** in the inner FVMAIN
+(`0x34b134`, so its `.text` at VA `0x1000` sits at `0x34c134` and the `Supported` quoted below at
+`0x34c598`), while the generic build of the same driver (`Binaries/generic/…`, 36,864 B,
+`sha256 8dc117a20d223f9f0fc9dfa0ac3c83770fb7a7cee3ac6b096f255ef45160fbb0`) occurs **zero** times.
+The narrower form of this sentence, which this section carried first, said the file was identified by
+its `.text[0:64]` occurring once at `0x4fd74`; that is **withdrawn on measurement**: those sixteen
+instructions are a shared entry prologue and occur **45** times in this volume, and the one at
+`0x4fd74` belongs to a different module (`MZ` at `0x4ed74`) that happens to open with the same code.
+A whole-file match is the identification; a code window is not. Read off that file:
+
+```
+1464: ldr x9, [x22, #0x1f8]            ; gBS
+1468: ldr x3, [x20, #0x28]             ; the E722B03F GUID, at 0x9078 in .data
+1470: add x1, x1, #0x78                ; &OpenData
+1478: add x2, sp, #0x8                 ; &Interface
+147c: orr w5, wzr, #0x10               ; BY_DRIVER
+1480: ldr x8, [x9, #0x118] ; blr x8    ; OpenProtocol
+14ec: ldr w9,  [x8, #0x88] ; cmp w9, #0x3 ; b.hi 0x14d8
+14fc: ldr w8,  [x8, #0x8c] ; cmp w8, #0x1 ; b.ne 0x14d8
+```
+
+— the two-clause gate. Then its `Start`:
+
+```
+15ac: ldr x9, [x12, #0x118] ; blr x9   ; OpenProtocol(E722B03F, BY_DRIVER)
+15c0: tbnz x19, #0x3f, 0x16cc           ; -> "Unable to open USB Config Protocol"
+15c4: ldr x0, [sp, #0x20]
+15c8: orr w1, wzr, #0x1
+15cc: ldr x15, [x0, #0x10]              ; the interface's +0x10
+15d0: ldr w2, [x0, #0x88]               ; ... called with (w1 = 1, w2 = iface+0x88)
+15d4: blr x15
+15dc: tbnz x19, #0x3f, 0x16d8           ; -> the row on the panel
+```
+
+and there is **no `ldr x?, [x?, #0x120]`** — no `CloseProtocol` — anywhere in `0x1514–0x1708`, so the
+`BY_DRIVER` open that the successful `OpenProtocol` took is never released when `Start` fails. The
+interface's `+0x10` is the template thunk at `0x1428`, and the thunk is a two-instruction reshuffle
+(`mov w0, w1 ; mov w1, w2 ; b 0x2e80`), so the arguments arrive at `ConfigUsb` swapped — which is why
+the failure string is about the *second* argument the caller passed:
+
+```
+2e8c: stur w0,  [x29, #-0xc]            ; the caller's w1 == 1
+2e90: stur w1,  [x29, #-0x10]           ; the caller's w2 == iface+0x88 == 1
+2ea0: ldur w8,  [x29, #-0x10]
+2ea4: cmp  w8,  #0x1
+2ea8: b.hs 0x2eb0                       ; >= 1 -> EFI_INVALID_PARAMETER
+2eb4: mov  x8,  #0x2 ; movk x8, #0x8000, lsl #48
+2ed8: ldur w8,  [x29, #-0x10]           ; ... and the printed value is that same word
+2ef4: mov  w3,  w8
+2ef8: bl   0x1978                       ; "%a: ConfigUsb: Error - Invalid CoreNum passed: %d\n"
+2efc: b    0x31c8
+...
+2f10: ldur w8,  [x29, #-0x10]           ; the same value, now a record index
+2f18: mov  w8,  #0xd8
+2f20: mul  x9,  x9, x10
+2f24: adrp x10, 0x11000 ; add x10, x10, #0x2b8
+2f2c: add  x9,  x10, x9 ; ldr x9, [x9, #0x18]     ; UsbCoreIfc = rec[i]+0x18
+```
+
+The only store to `[x29,#-0x10]` in the whole function is `0x2e90`, and there are exactly two stores to
+that slot in the whole 16,075-line disassembly, neither of them inside `ConfigUsb` — so the `1` in the
+message is the value that arrived, i.e. `iface+0x88`, and the same `1` is the record index the guard
+rejects. The message calls that argument a "CoreNum"; the binary uses it as an index into the record
+table, stride `0xd8` from `0x112b8`. `ConfigUsb` itself is reached from exactly one place in the image
+— the template thunk at `0x1430` — so nothing inside `UsbConfigDxe` can be blamed for the arguments: the
+values come from the *client*, and this client passed `1` for both.
+
+Three independent readings agree on what the two words mean, which is what makes the abort a statement
+about the record and not about the mode. `UsbStartController` (`0x4dc8`) guards its own arguments the
+same way and then writes both words:
+
+```
+4df4: cmp w8, #0x1      ; b.hs 0x4e00    ; Index must be 0
+4e08: cmp w8, #0x10000  ; b.lo 0x4e6c    ; Mode must be assigned
+50f0: str w8, [x11, #0xb0]               ; rec[Index]+0xB0 = Index
+5108: str w8, [x9,  #0xb4]               ; rec[Index]+0xB4 = Mode
+5110: cmp w8, #0x4 ; b.ne 0x5264         ; Mode 4 is the special case
+```
+
+so `iface+0x88` is the record's own index and `iface+0x8C` is its mode; `ConfigUsb` routes `Mode == 4`
+to `UsbCoreIfc+0x10` and the string at `0xe1c1` ("failed to perform device initializaition for USB core
+%d: %r", assert at line 313) and every other mode to `UsbCoreIfc+0x18` and the string at `0xe244`
+("…host initializaition…", assert at line 318); and the two client drivers want opposite modes —
+`XhciPciEmulation` accepts `+0x8c == 1`, `UsbfnDwc3Dxe` accepts `+0x8c == 4`
+(`14fc: cmp w8, #0x4`). Mode 1 is host, mode 4 is device, and the emulation is the host client.
+
+**The `Access Denied` row is the leak, read from two binaries and one core file.** `UsbfnDwc3Dxe`'s
+`Supported` opens the *same* GUID — the constant at its own `.data+0x88` decodes to
+`E722B03F-B250-42CE-8EBD-5BD51812D037`, byte-equal to `UsbConfigDxe`'s at `0x11098` and to the
+emulation's at `0x9078` — with `BY_DRIVER`. DxeCore's connect loop repeats while any binding answered
+`Success` (`do { … } while (DriverFound)`), so once the emulation says `Success` the loop runs a second
+iteration and asks `UsbfnDwc3Dxe` again; by then the emulation still holds its own `BY_DRIVER` open —
+the one `Start` never closed — and `Handle.c:1218` refuses:
+`if (Exclusive || ByDriver) { Status = EFI_ACCESS_DENIED; goto Done; }`. The prediction this makes is
+checkable in the panels already on disk, and it holds in all three: one `F056673C` row per connect when
+the emulation declines (4.183 and 4.184, twice each — once per `P2 SUPP` block), and in 4.185 three
+rows, the third of them the `Access Denied` that only exists because the gate opened.
+
+### A correction to the instrument's own vocabulary
+
+`P2 USB n=` is **not** a pass counter, and this step's panel is where that becomes visible: 26 rows for
+25 digest passes, with `n=8` three times and `n=16` twice, and one of them truncated —
+`P2 USB n=16 all=139 pciio=0 usb2hc=0 usbio=0 bik..` is the only truncated probe row in the panel.
+4.184's panel has 22 such rows for 23 passes with `n=18` missing, and 4.183's 23 rows for 24 passes with
+`n=12` and `n=13` twice each. The values differ between runs that ran the same instrument, so the count
+is a property of the *reader* as much as of the firmware (the reader declines to splice a screen
+boundary it cannot verify, and reports the row instead). Every pass count in this document is taken from
+`P2 CONN`/`P2 GATE`/`P2 GATE2`, which agree with each other and print once per digest pass — 25, 23 and
+24 for these three runs.
+
+### What this decides
+
+**4.181's sentinel reading is now a measurement of necessity, not an inference.** The word the gate
+checks is the word the store at `0x39E8` writes, and rewriting that store moves the gate from
+`00010000` to `00000001` and the emulation's answer from `Unsupported` to `Success`. Two runs whose
+inner volumes differ in two 4-byte runs, one word each, separate the whole question from every other
+difference between them.
+
+**And 4.183's conclusion refines in a way that matters for the plan: opening the gate is necessary and
+not sufficient.** The publisher's own library refuses the client one call later, on a guard that is
+about the record's *index* rather than its mode — `cmp w8, #0x1 ; b.hs` admits only `0` — while this
+platform's `UsbConfigInit` installs the `E722B03F` interface for the host-client handle against
+**record 1**, whose index word it writes as `1`. The same guard shape appears in `UsbStartController`,
+which admits only `Index == 0`, so the record this platform offers a host client is a record neither
+function will start.
+
+**The shape of the remaining repair is therefore two words, not one**, and both are now sites in
+`tools/patch-usbcfg-sentinel.py`: `host` (which this step built and measured) and `index` (`0x39D8`,
+`orr w9, wzr, #0x1` → `mov w9, wzr`, whose eight-byte pair is unique in the pristine image and whose
+gate checks out on both volumes as `original`). A build with `host` alone cannot get past `ConfigUsb`;
+a build with `index` alone cannot open the gate. Pairing them is a *counterfeit* construction-time
+value — the interface would describe record 1 while carrying record 0's index — and the run it would
+produce is a probe of what `ConfigUsb` does next, never a device behaviour. What it would decide is
+which of two readings is true in this guest: if `rec[0]+0x18` is null, the run should print
+`%a:%d ASSERT: (NULL != UsbCoreIfc)` at `UsbConfigLib.c:304` and halt in the self-loop at `0x2f80`; if
+it is populated, the run should reach `UsbCoreIfc+0x18` and one of the two "initializaition" rows. The
+loop at `0x3af4` does call into `0x6f5c` with each record's index and the address `rec[i]+0x18` (the
+field `ConfigUsb` reads), so the answer is not obvious from either binary alone — which is exactly the
+kind of question a four-byte build settles.
+
+### Rows
+
+- **instrument**: nothing new was written. `SENTINEL_SITE=host` (the tool's default), the same
+  `tools/patch-usbcfg-sentinel.py` gate, `run37-plain.sh` / `gdbprobe37.py` / `run37.sh`, and
+  `tools/build-apriori-variant.sh` unchanged since 4.184 except for the site it is told to use.
+- **acts**: as in 4.184, four bytes of a shipped Qualcomm driver are rewritten inside this project's own
+  payload. Nothing was flashed.
+- **answers**: whether the `0x10000` at `iface+0x8C` is the barrier 4.181 said it was — yes, it is the
+  first one — and what the next barrier is.
+- **eliminates**: the reading that the emulation's `Supported` gate is the whole obstacle, and with it
+  the hope that one word is enough; also the two-word reading of the abort as being about the *mode*
+  (the mode is now `1`, the emulation's own accepted value, and the abort is the index).
+- **pays a debt from the prior steps, in the opposite direction**: 4.181 through 4.184 assumed the
+  interface the gate reads is the one `UsbConfigInit` installs and that the words in it are the words
+  those stores write. This step is the measurement of that assumption, and it holds.
+- **closes**: 4.184's *"does not close: whether the `0x10000` at `iface+0x8C` is load-bearing"*.
+- **does not close**: whether the paired build gets past `ConfigUsb` (both candidate next rows are
+  named above and neither is observed), the phone, the first P3 clause, and `P2 WHY`'s `O` at SEQ/WHY
+  index 42 (`CCCB0C28-4B24-11D5-9A5A-0090273FC14D`, the 70th APRIORI GUID) whose reason code is still
+  unread.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression at
+  `0x12000c`; the seeded SMEM target-info word; and that this repository has no source for the driver it
+  patches — the disassembly is the whole of what is known about it.
+- **a prediction for the phone, and the cheapest device reading this project has**: a device run whose
+  PMIC path works should show `pciio` non-zero and the emulation's `Supported` answering `Success`
+  without `ConfigUsb` printing `Invalid CoreNum passed`; the two strings to watch for on the device
+  console are the ones this run does *not* print — `GetCoreBaseAddr: Error - BaseAddr is NULL`
+  (`0xdf17`) and `CoreNum out of range` (`0xdfb6`) — which occur zero times in any QEMU panel. Since the
+  guest's own record layout is what makes this run abort, the device is the only place that can say
+  whether it is a property of the machine or of the instrument. It needs `fastboot boot`, 先读屏, and the
+  stock-boot restore path standing by, and it is a question for the user rather than a step taken here.
+- **not an action**: nothing was flashed, no partition was written, no stub or Microsoft image was
+  changed, and no volume with a patched `UsbConfigDxe` has left this host. `userdata` (107 GB,
+  unbacked), the partition table and the firmware LUN remain untouched. The porting goal is unchanged
+  and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install
+  and P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and
+  cameras cannot be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing.
+  Nothing was written to it at any point.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
+  ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.

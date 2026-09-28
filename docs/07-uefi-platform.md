@@ -3612,6 +3612,44 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `Mu_Basecore/.../Hand/DriverSupport.c`, `tools/build-apriori-variant.sh`. No firmware source outside
 > those two files was changed, no device was touched. See `docs/08` step 4.183.
 
+> **Step 4.184 — the sentinel's writer is not the loop, and the loop is not the record.** 4.183's
+> platform note said "the sentinel is written inside the shipped `UsbConfigDxe`, so no binary swap
+> avoids it"; this step asks *which instruction* writes it, and the answer is not the one the naming
+> suggests. The only stores into the two words the gate reads (`rec[i]+0xB0`, `rec[i]+0xB4`) are a
+> hand-written pair at `0x39e0`/`0x39e8` and the record-initialiser loop's pair at `0x3b5c`/`0x3b70` —
+> and that loop is bounded by `cmp x8, #0x1 ; b.hs` at `0x3b00`, so it runs for `Index = 0` **alone**
+> and initialises **record 0**, while the interface the `E722B03F` gate reads is `rec_base+0x100`, i.e.
+> **record 1**. Patching the loop's store is therefore invisible, and the measurement says so: on all
+> 23 digest passes `P2 GATE2 w8c=00010000` and `P2 SUPP BEB12BEE-… s=Unsupported`, on every census row
+> `pciio=0`, no `ConfigUsb` row, no `XhcPciEmulationDriverBindingStart` row. The zero result is itself
+> the platform fact: the word is written once, by `UsbConfigInit`'s hand initialisation of the
+> host-client record — `1` for the index, `0x10000` for the mode — and nothing in this guest revisits
+> it afterwards.
+> Instrument: `tools/patch-usbcfg-sentinel.py` (added, `--site loop`), `tools/build-apriori-variant.sh`
+> (4th experiment). No device was touched. See `docs/08` step 4.184.
+>
+> **Step 4.185 — the gate opens, the binding still fails, and it fails one level down.** With that same
+> hand-written block's *mode* store rewritten (`--site host`, `0x39e4`: `orr w10, wzr, #0x10000` →
+> `mov w10, #1`), all 25 digest passes read `P2 GATE2 w8c=00000001` and the emulation's own `Supported`
+> flips `Unsupported` → `Success`: the `E722B03F` gate 4.181 read is real, and it is the *first*
+> barrier rather than the only one. The binding then fails inside the publisher — the emulation opens
+> the interface `BY_DRIVER`, calls its `+0x10` thunk, and `ConfigUsb`'s entry guard refuses the *other*
+> word of the same record: `0x2ea4: cmp w8, #0x1 ; b.hs` on `iface+0x88`, the record **index** (`1`),
+> takes the `EFI_INVALID_PARAMETER` exit and prints `ConfigUsb: Error - Invalid CoreNum passed: 1`,
+> after which the emulation prints `Unable to configure USB in host mode, Status =  (0x2)`. `pciio`
+> stays `0` on every census row (26 rows for 25 passes). A second platform fact falls out of the same
+> run: `UsbfnDwc3Dxe` opens the **same** GUID `BY_DRIVER` and is refused `Access Denied`, because
+> `XhciPciEmulation`'s `Start` has no
+> `CloseProtocol` on its error path (no `[x?,#0x120]` anywhere in `0x1514–0x1708`) and DxeCore's
+> connect loop runs a second iteration once `Supported` answers `Success`. So the platform's own two
+> USB clients want **opposite** values of one word — `+0x8C == 1` for the host emulation,
+> `+0x8C == 4` for the device function — and the interface the platform constructs, record 1 with
+> index `1` and mode `0x10000`, satisfies neither. The platform conclusion is therefore sharper and
+> unchanged in direction: an Apriori reorder cannot be sufficient, and the only remaining repair is a
+> change to a shipped binary, which makes the next measurement a probe of `ConfigUsb` rather than a
+> platform change. Instrument: `tools/patch-usbcfg-sentinel.py` (`--site host`, `--site index`),
+> `tools/build-apriori-variant.sh`. No device was touched. See `docs/08` step 4.185.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
