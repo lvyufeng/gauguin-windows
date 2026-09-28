@@ -43180,3 +43180,108 @@ that payload may be booted. `device/dxe/UsbConfigDxe.efi` is untouched at sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5.
 
 
+
+## Step 4.210 — the payload in `boot` is a build from the ten-step window between 4.31 and 4.41 and the phone now holds its only copy: it carries `P2Key` and `P2Tick` and lacks `P2FreeWhy`, the path the record names for it was rewritten the next morning at 09:20, no image on this disk reads 13/14, and 451 candidates across four framings reproduce neither its bytes nor its inner volume
+
+
+**What was open.** Step 4.188 read `boot` for the first time since it was flashed, found **13 of 14**
+instruments, and closed on two questions it could not answer, in its own words: *"Which build this is, and why
+it carries thirteen instruments rather than fourteen, are **not** established."* The record's chain said the
+file written at 09-24 15:04 was `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`; step 4.42's own gate said
+the file at that path then read 9 of 10 and did **not** carry `P2FreeWhy`; and every readback between the 15:04
+write and 4.188 came back at zero bytes, so the question had been carried unresolved across the forty-six steps
+in between. This step answers the half that an instrument set can answer, and measures the other half as a loss.
+
+**The instrument set places the build in a ten-step window on a single day, and that is the answer 4.188 asked
+for.** `tools/probe-fingerprint.py` on the readback names exactly one missing rung — `P2FreeWhy` — and lists
+`P2Key` (2 lines) and `P2Tick` (1 line) present in `DxeCore`, with the other eleven present too. `git log -S`
+dates those three literals: `P2Key` and `P2Tick` both enter with `7f3cee9`, **step 4.31** (2026-09-24, *"the
+panel was holding the load flood, and no `P2` line has ever been on it"*), and `P2FreeWhy`, `P2 FWTY` and `P2
+FWHY` all enter together with `b2fb010`, **step 4.41** (2026-09-24, *"rung three is the whole map, so the probe
+goes inside `FindFreePages`"*). A payload that has the first two and not the third was built strictly
+**between** them, and nothing else in the record reads that way. It is a source range and not a filename, which
+is the strongest form the evidence supports, because the file is gone (next paragraph). It is also the plain
+answer to *"why thirteen rather than fourteen"*: thirteen is what that window's build reads on a ladder that has
+since grown a rung it predates.
+
+**The file the record names for it no longer names those bytes, and this is the same failure 4.209 recorded one
+artifact over.** The record's 15:04 write was `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, and step
+4.42's gate is the evidence that the file at that path *then* matched the phone on the one rung that separates
+the two candidates — `--expect P2FreeWhy` exits `0` on `p2-freewhy-g` and **`1`** on `p2-variants`. The file at
+that path today is not that build. Its mtime is **2026-09-25 09:20:34**, the morning after the flash, and it now
+reads the **full ladder** at 14/14; so do `work/out/p2-freewhy/` (mtime 09-24 21:20:20) and
+`work/out/p2-freewhy-g/` (09-24 23:30:08), both built after the flash as well. So the path was rewritten within
+eighteen hours, and — unlike the xhci artifact 4.209 audited, where all four builds survived under other names —
+the payload that went to the phone was never hashed anywhere, so there is no archived copy to recover it from
+and no digest to check one against.
+
+**No 13/14 build exists on this disk, and every image dated 2026-09-24 was fingerprinted to make sure.** A tally
+over the images under `work/out` gives **125 at 14/14**, 6 at 11/14, 4 at 7/14, 3 at 9/14, 2 at 4/14, 1 at 6/14
+and 1 at 0/14 — the family jumps 11/14 to 14/14 with nothing between, so the phone's 13/14 is a *readback* and
+not a build output. The 09-24 sweep, which is the day the payload would have been built, finds the same:
+`p2-4.16` (three files, 9/14), `p2-4.19` (three, 11/14), `p2-4.20` (three, 11/14), `boot-readback-0924.bin` and
+`boot-control-0924-pre-4.31.bin` (11/14, and byte-identical to each other at `sha256
+77778cd624d2842be6ff4b84a5b21ece36177e80da83d01eebae4c46e3d70a72`), and the 21:20 and 23:30 builds (14/14).
+Nothing on that day reads 13/14 either.
+
+**The `kernel_size` chain on `boot` is five rungs long, and it is monotone with the ladder.** Each row was
+decoded from the archived file in this step rather than recalled:
+
+| image | `kernel_size` | inflated inner | inner sha256 (first 16) | ladder |
+| --- | --- | --- | --- | --- |
+| `work/out/boot-before-p2walk.img` (`fb697f47…`) | 1,134,485 | 3,145,840 | `d0919c0004d12698` | 4/14 |
+| `work/out/boot-now-0923.img` (`3547fd04…`) | 1,135,628 | 3,145,840 | `5e228f3219f168b5` | 6/14 |
+| `work/out/p2-silicon-gzip-preread-0923d.img` = `/tmp/boot-before.img` | 1,136,314 | 3,145,840 | `39b09eee669d5eb8` | 7/14 |
+| `work/out/boot-readback-0924.bin` = `boot-control-0924-pre-4.31.bin` | 1,136,759 | 3,145,840 | `fdeb58c7bf0b3d75` | 11/14 |
+| `work/out/boot-readback.bin` = `/tmp/boot-now.img` | 1,136,864 | 3,145,840 | `64d7702d08519034…` | 13/14 |
+
+Every one of the five inflates to **the same 3,145,840 bytes** and every one has a different digest, so the
+inflated length is constant across the whole chain and separates no two builds — only the digest does, which is
+the same lesson step 4.32 recorded as *"a path is not a fixation, a sha256 is"*. The `kernel_size` is what
+moves, and it moves the way the instrument count does: 4 → 6 → 7 → 11 → 13. Two of the five are readbacks of the
+partition (`boot-readback-0924` and `boot-readback`) and three are build outputs, so the chain is two
+independent kinds of artifact agreeing on one ordering.
+
+**The readback's own bytes are reproduced by nothing on this host.** The readback is 4,194,304 B at `sha256
+e905b3a66819949bf6c94c4f807bea3c3f6cf8117c5700470655800bdf1b0431`, mtime 2026-09-28 17:26, and it is a genuine
+device read rather than a host artifact: `cmp -n 4194304` against `/tmp/boot-now.img` — the whole 134,217,728 B
+partition, read at 17:23, three minutes earlier — is clean over its entire length. Its Android header is page
+2048, version 1, a **gzip** kernel at `0x800` of `kernel_size` 1,136,864, and the gzip member ends at 1,049,270
+with 87,594 B trailing — and those trailing bytes are a **complete FDT**, magic `d00dfeed` and a `total_size`
+field of exactly 87,594, byte-identical (`sha256 6b2d68941f16ccd8…`) to `work/out/sm7225-xiaomi-gauguin.dtb`.
+So the payload carries this board's device tree unmodified, and the readback is checkable at three independent
+places — its length against the live partition read, its inflated inner digest, and its trailing tree. A
+`ProcessPoolExecutor` sweep over **451** candidates of 1–40 MB under `work/out`, `/tmp`, `~/backup` and the
+Mu-Silicium `Build` and `Binaries` trees, trying raw, gzip, lzma and Android-boot framing at offsets 0 and 8,
+matched neither the readback's bytes nor its inner digest of
+`64d7702d08519034dd56a1a698a013a82d38bd7062bdd7bd8982f0a596552451`. That is an independent route to 4.188's own
+conclusion — it compared the first 1,138,912 bytes against 183 `ANDROID!` files and found only the readback and
+`/tmp/boot-now.img` — and it widens the search rather than repeating it.
+
+**decides**: that the payload in `boot` was built from the source tree as it stood strictly between steps 4.31
+and 4.41, because it carries the two literals the first added and lacks the one the second added, and that is a
+ten-step window on 2026-09-24 rather than any other place in the record; that the file the record names for it
+has been rewritten since (mtime 2026-09-25 09:20:34, now 14/14), so the path no longer names those bytes; and
+that the phone is now the **only** copy of what is on it — no image on this disk reads 13/14 and no file
+reproduces the readback's bytes or its inner digest.
+
+**does not decide**: that the payload *is* the 15:04 write of `p2-variants`, which is an inference from
+instrument set rather than from a digest — two builds made from the same ten-step window would be
+indistinguishable on this ladder, and the writes at 15:02 and 15:04 were only ever compared to *that day's*
+files; nor whether `boot` has changed since 2026-09-28 17:26, which nothing on this host has read since; nor
+anything about the model's failure, none of which this step touches; nor any of the panel readings that are
+still owed.
+
+**Not an action**: read-only — `sha256sum`, `stat`, `cmp`, `find`, one `ProcessPoolExecutor` sweep, `git log
+-S`, `tools/probe-fingerprint.py` over the archived images, and one `zlib.decompressobj(31)` inflate into
+`/tmp/bootRB-inner.fd`. No build, no instrument leg, no QEMU run, no flash, no `fastboot` command, no partition
+written, no seed written, no console read from the device and no device file opened. The payload in `boot` is
+unchanged and the device was not touched. **The consequence is for the next device window rather than for the
+model**: three physical actions remain outstanding and none can be taken from this host — a reset of the phone,
+the reboot to the bootloader the P3 `fastboot boot` workflow needs, and a screen photograph — and the photograph
+is now the **only** way to read the payload in `boot`, because the readback is the last copy of a build that no
+longer exists anywhere on this host. *先读屏，再刷下一次* is unchanged and now has a second reason behind it: what is on
+the phone cannot be reconstructed if it is overwritten. `userdata` (107 GB, unbacked), the partition table and
+the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+

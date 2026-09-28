@@ -7,11 +7,28 @@ cellular and cameras are permanently out of reach, Wi-Fi/audio/GPU are hard but 
 Each phase ends with a commit. A phase is only "done" when its gate has actually been
 observed on hardware, not when the code compiles.
 
-## Where things actually stand (2026-09-26)
+## Where things actually stand (2026-09-26, with a 2026-09-29 note beneath)
 
 Nothing below is "done" except P0, and the only gate observed on hardware is
 P0's plus the first half of P2's (see its row). This table is the honest state;
 the sections under it are the plan.
+
+**Added 2026-09-29, after steps 4.197–4.210.** The table below is dated
+2026-09-26 and predates four findings a reader of it should have in hand.
+**The tick arrives on the instrument** — replacing the two Qualcomm timer
+INTIDs with the two this machine actually raises takes the enable set to
+`0x6c00ffff` with nothing left pending, runs the root hub's periodic callback
+645 times instead of once, and advances a poll that had been frozen since
+4.200 past its own wall (step 4.207). **The PMIC wall the payload then reaches
+is the instrument's and not the phone's**, measured from both sides (step
+4.208). **The P3 gate's artifact digest is the 4.112 build's**, and that path
+has held three more builds since, all four retained (step 4.209). And **the
+payload in `boot` is a 13/14 build whose file no longer exists anywhere on
+this host** (step 4.210) — the one item here that changes what a device
+session may safely do, because overwriting `boot` destroys the last copy of a
+build that was never archived. **No gate moves**: P0 is still the only done
+phase, P1's partition path is still untried, P2 is still half met, P3's items
+2–4 are still not started, and P4 and P5 have not begun.
 
 | phase | gate | state |
 |---|---|---|
@@ -179,6 +196,31 @@ cheapest instrument the record is missing (`docs/08` step 4.130).
 Neither blocks building. The payload that carries the `P2` digest literals is
 already built and hashed — `work/out/p2-variants/Mu-gauguin-silicon-gzip.img`,
 `90b21643…` — and still owes its first reading, under *先读屏，再刷下一次*.
+
+**4.210: the payload in `boot` is a build from the ten-step window between
+4.31 and 4.41, and the phone now holds its only copy — which corrects the
+sentence above.** `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` is
+`90b21643…` *today*, but that is not the file that went to the phone: its
+mtime is **2026-09-25 09:20:34**, the morning after the 15:04 flash, and it
+now reads the full ladder where the file written that afternoon read 9 of 10
+and carried no `P2FreeWhy` (step 4.42's own gate). **What is on the phone,
+measured**: step 4.188's readback is 13 of 14 instruments, carrying `P2Key`
+and `P2Tick` and missing only `P2FreeWhy`; those two literals enter with
+`7f3cee9` (**4.31**) and the third with `b2fb010` (**4.41**), so the source
+tree is strictly between them and *thirteen rather than fourteen* is simply
+what that window's build reads on a ladder that has since grown the rung it
+predates. **No 13/14 build exists on this disk** — the images under `work/out`
+tally 125 at 14/14 and 6 at 11/14 with nothing between, and every image dated
+09-24 was fingerprinted to confirm it — and a 451-candidate sweep across raw,
+gzip, lzma and Android-boot framing reproduces neither the readback's bytes
+nor its inner `64d7702d…`. The `kernel_size` chain on `boot` is five rungs and
+monotone with the ladder: 1,134,485 / 4-14, 1,135,628 / 6-14, 1,136,314 /
+7-14, 1,136,759 / 11-14, **1,136,864 / 13-14**, every one inflating to the
+same 3,145,840 bytes, so only the digest separates them and a size is not
+evidence. **The consequence is for the next device window and not the model**:
+the photograph owed under *先读屏，再刷下一次* is now the only way to read what is in
+`boot`, because overwriting it destroys the last copy. See `docs/08` step
+4.210.
 
 The pieces a device session uses — the full sequence, with what each outcome
 means and which payload to try next, is
