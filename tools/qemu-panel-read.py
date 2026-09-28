@@ -117,6 +117,53 @@ ZERO_MEM_POOL_BASE = 0x40000000
 # The size of a stage-2 level 2 block, which is what a redirected region is.
 STAGE2_BLOCK = 0x200000
 
+# Where `-M virt` puts its own GIC. It is a property of the machine, not of the
+# board, and it is read here once so that `REAL_REGIONS`, `REAL_PAGES`,
+# `machine_gic` and the header's readback all name the same address. `info mtree
+# -f` on this command line gives `gic_dist` at +0, `gic_cpu` at +0x10000,
+# `gicv2m` at +0x20000, `gic_viface` at +0x30000, `gic_vcpu` at +0x40000; the
+# words `machine_gic` reads are the first and second of those and a probe of the
+# hole the third window's IPA lands in.
+MACHINE_GIC_BASE = 0x08000000
+
+# The board windows `-M virt` implements itself, and where it puts them. A region
+# named here is *not* pointed at the pool: the 2 MB stage-2 block it occupies is
+# pointed at the machine's own device, so the guest's register accesses reach
+# hardware that can hold pending state and raise a line. Everything else this
+# platform declares below `LOW_MMIO_LIMIT` keeps the RAM model, and the tool says
+# so in its own header rather than leaving the difference to be inferred.
+#
+# The first entry is the one that matters. `APSS_GIC600_GICD` is the board's
+# interrupt controller, 0x17A00000..0x17B6FFFF, and `-M virt`'s GICv2 sits at
+# 0x08000000 with `gic_dist` at +0, `gic_cpu` at +0x10000 and the rest behind it
+# (`info mtree -f`, 4.200). Both are in one 2 MB block, and the board's own
+# distributor/CPU-interface spacing is the machine's, so the block maps whole:
+# 0x17A00000 -> 0x08000000, 0x17A10000 -> 0x08010000. `APSS_GIC500_GICR` is in the
+# same block and is *not* implemented by a GICv2 - 0x17A60000 lands on
+# 0x08060000, which `-M virt` has nothing at, the same zero an untouched pool
+# block reads. The payload's own dispatcher takes the V2 path (4.201 read the
+# writes), so nothing under this instrument should read it; a run whose payload
+# took the V3 path would find no redistributor here and that is a limit of the
+# machine, not a finding about the board.
+REAL_REGIONS = (("APSS_GIC600_GICD", MACHINE_GIC_BASE),)
+
+# Single 4 KB register banks the machine implements at a *board* address, which
+# cannot ride along with a block alias because the board address is not inside the
+# aliased block. There is exactly one, and it is the reason this file has a level
+# 3 table at all.
+#
+# The GICv2 CPU interface is programmed at `PcdGicInterruptInterfaceBase`, and
+# that PCD is **0**: `BitraPkg.dsc.inc:45-46` overrides the distributor and the
+# redistributor bases and does not override this one, so it stays at
+# `ArmPkg.dec:284`'s default 0. 4.201 confirmed it by execution - the writer
+# stored ICCBPR, ICCPMR and ICCICR at base 0 and ICDDCR at 0x17A00000. Under the
+# RAM model that base is block 0 of the pool, which is where a CPU interface goes
+# to be forgotten: the distributor can be told to forward and the CPU end can
+# never be told to receive. `-M virt`'s GICv2 has `gic_cpu` at 0x08010000, so IPA
+# page 0 is aliased there and the rest of block 0 - `GCC CLK CTL` at 0x00100000,
+# which the clock driver reads back - keeps its pool page, page for page.
+REAL_PAGES = ((0x00000000, 0x08010000, "PcdGicInterruptInterfaceBase"),)
+
 # The seed's own numbers, as names in `qemu-el3-stub.S`. Naming what to read is
 # the whole of this file's list: the values themselves are read out of the
 # assembled object, so an edit to the assembly that this file does not follow
@@ -538,6 +585,115 @@ def smem_region(pkg):
                                   " number nothing in the tree says")
 
 
+# The machine's own controller, and the registers of it whose values decide
+# whether the alias did anything. Read out of the machine at the end of the run
+# with the same `pmemsave` the stage-2 tables are read with, because "the block
+# points at the machine's GIC" and "the guest's writes reached it" are two claims
+# and only the second one is about the guest. The distributor's first page and the
+# CPU interface's are read separately: `-M virt` puts them 64 KB apart, which is
+# the spacing the board uses too, and that spacing is exactly why one 2 MB block
+# alias can serve both.
+#
+# The four that matter most. `GICD_ISENABLER0` word 0 holds the enable bits for
+# every interrupt ID below 32 - which is every PPI and SGI, and the ARM generic
+# timer is a PPI - so it is where the payload's own numbering would show. And the
+# caveat that came out of the first run with real hardware behind these rows:
+# `pmemsave` carries QEMU's unspecified transaction attributes and this machine has
+# the security extensions on (`-M virt,secure=on` -> `hw/arm/virt.c:754`), so every
+# word below is read as a NON-SECURE access. `GICD_IGROUPR` is RAZ/WI for such an
+# access by definition (`arm_gic.c:988-993`), `GICD_ISENABLER0` and `GICD_ISPENDR0`
+# return only the Group-1 bits (`:1019-1022`), and a priority mask in the lower half
+# reads zero (`:712-725`) - so a zero in any of those rows is the non-secure view
+# and is *not* proof that the payload wrote nothing. `GICD_ISPENDR0` otherwise says
+# which of them the machine has raised. A line raised and not enabled is the
+# difference between a controller that works and a number that does not match, and
+# no amount of reasoning about the firmware's PCDs can tell those two apart from
+# the guest's side. What *does* separate "the writes arrived and were refused" from
+# "the writes never happened" is the pair of words that are non-secure-writable
+# anyway - `GICD_CTLR`'s Group-1 enable bit (`:1200-1209`) and `GICC_CTLR`'s
+# (`:745-763`) - because those two are the ones that read back set.
+GIC_DIST_WORDS = ((0x000, "GICD_CTLR"), (0x004, "GICD_TYPER"),
+                  (0x008, "GICD_IIDR"), (0x080, "GICD_IGROUPR0"),
+                  (0x100, "GICD_ISENABLER0"), (0x180, "GICD_ICENABLER0"),
+                  (0x200, "GICD_ISPENDR0"), (0x280, "GICD_ICPENDR0"),
+                  (0x300, "GICD_ISACTIVER0"), (0xC00, "GICD_ICFGR0"),
+                  (0xC04, "GICD_ICFGR1"))
+GIC_CPU_WORDS = ((0x000, "GICC_CTLR"), (0x004, "GICC_PRIMASK"),
+                 (0x008, "GICC_BPR"), (0x00C, "GICC_IAR"),
+                 (0x014, "GICC_RPR"), (0x018, "GICC_HPPIR"))
+
+
+def machine_gic(mon):
+    """The machine's GIC registers, or None if the read failed.
+
+    Two physical reads and no interpretation: the distributor's first page at the
+    machine's own base and the CPU interface's first page 64 KB above it, plus the
+    hole the board's redistributor window was aliased into, which is worth one word
+    because "a GICv2 has no redistributor and the alias put that window where the
+    machine has nothing" is a claim this instrument makes and can be caught making.
+    """
+    scratch = tempfile.mkdtemp(prefix="qemu-gic-")
+    try:
+        got = []
+        for base, off, name in (
+                [(MACHINE_GIC_BASE, off, name) for off, name in GIC_DIST_WORDS]
+                + [(MACHINE_GIC_BASE + 0x10000, off, name)
+                   for off, name in GIC_CPU_WORDS]
+                + [(MACHINE_GIC_BASE + 0x60000, 0x000, "GICR window (aliased)")]):
+            dump = os.path.join(scratch, "w.bin")
+            mon.cmd(f'pmemsave {base + off:#x} 4 "{dump}"', timeout=10.0)
+            with open(dump, "rb") as fh:
+                blob = fh.read()
+            if len(blob) < 4:
+                return None
+            got.append((name, struct.unpack_from("<I", blob, 0)[0]))
+    except (OSError, SystemExit):
+        return None
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return got
+
+
+def real_aliases(regions, on):
+    """`({block: machine address}, {block: {page: machine address}})`.
+
+    Both empty unless `on`. Derived from the region list rather than written
+    beside it: the block is the one the *platform's own map* puts that region in,
+    so the alias and the redirect are two answers about the same bytes and they
+    cannot drift apart without one of them being visibly wrong about the block
+    index. What is *not* derived is the machine address - that is `REAL_REGIONS`
+    and `REAL_PAGES`, read out of `-M virt` rather than out of the board, because
+    it is a fact about the machine the instrument runs on and not about the phone.
+
+    A block alias and a page alias for the same block would disagree about every
+    page the page alias does not name, so that pair is refused rather than
+    resolved in favour of one of them.
+    """
+    if not on:
+        return {}, {}
+    by_name = {n: (b, s) for n, b, s in regions}
+    blocks = {}
+    for name, pa in REAL_REGIONS:
+        if name not in by_name:
+            die(f"the alias table names {name}, and this platform's memory map"
+                f" declares nothing by that name below {LOW_MMIO_LIMIT:#x}; pointing"
+                f" a block at the machine because a region *should* be there would"
+                f" be aliasing a window this firmware does not have")
+        b, s = by_name[name]
+        for blk in range(b // STAGE2_BLOCK, (b + s - 1) // STAGE2_BLOCK + 1):
+            blocks[blk] = pa + blk * STAGE2_BLOCK - b
+    pages = {}
+    for ipa, pa, why in REAL_PAGES:
+        blk, page = ipa // STAGE2_BLOCK, ipa // 0x1000 % (STAGE2_BLOCK // 0x1000)
+        if blk in blocks:
+            die(f"{why} at {ipa:#x} is in block {blk}, which is aliased whole to"
+                f" {blocks[blk]:#x}; a page alias inside a block alias would leave"
+                f" every other page of that block pointing at the machine too, and"
+                f" the regions sharing the block would be silently aliased with it")
+        pages.setdefault(blk, {})[page] = pa
+    return blocks, pages
+
+
 def block_for_ipa(plan, ipa, what):
     """The pool address an address's 2 MB block is redirected to.
 
@@ -583,7 +739,8 @@ def aop_block_for(plan, ipa, rec_off):
     return at
 
 
-def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None, aop=None):
+def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None,
+                   aop=None, alias=None, pages=None):
     """Assemble `qemu-el3-stub.S` to the addresses the run will use.
 
     Every address the stub has to agree with is a `--defsym` and not a `.set` in
@@ -655,21 +812,70 @@ def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None, aop=Non
             die("--el3-zero-mem needs the redirect table it is supposed to"
                 " assemble; the caller has to have read a memory map first")
         inc = os.path.join(os.path.dirname(os.path.abspath(out)), "s2_l2.inc")
+        alias = alias or {}
+        pages = pages or {}
+        if len(pages) > 8:
+            die(f"{len(pages)} block(s) need a level 3 table and the stub reserves"
+                f" 8; the tables start at S2_L3_OFF and each is"
+                f" {STAGE2_BLOCK // 0x1000 * 8:#x} bytes, so the ninth would run into"
+                f" the rest of the stub")
+        l3_off = {blk: n for n, blk in enumerate(sorted(pages))}
         with io.open(inc, "w", encoding="utf-8") as fh:
             fh.write(f"/* GENERATED by tools/qemu-panel-read.py - do not edit by hand.\n"
                      f" *\n"
                      f" * The stage-2 level 2 table for the low gigabyte: identity for\n"
-                     f" * every 2 MB block except the {len(plan)} that the platform's own\n"
-                     f" * MemoryMapLib.c declares below {LOW_MMIO_LIMIT:#x}, which point at\n"
-                     f" * {ZERO_MEM_POOL_BASE:#x} + n * {STAGE2_BLOCK:#x} instead.\n"
+                     f" * every 2 MB block except the"
+                     f" {len(plan) - len(alias) - len(pages)} that the\n"
+                     f" * platform's own MemoryMapLib.c declares below {LOW_MMIO_LIMIT:#x},\n"
+                     f" * which point at {ZERO_MEM_POOL_BASE:#x} + n * {STAGE2_BLOCK:#x}\n"
+                     f" * instead, the {len(alias)} the machine implements itself, which\n"
+                     f" * point at the machine, and the {len(pages)} that need 4 KB\n"
+                     f" * granularity, which point at a level 3 table in s2_l3.inc.\n"
                      f" */\n")
             for i in range(STAGE2_L2_ENTRIES):
-                if i in plan:
+                if i in pages:
+                    fh.write(f"    .quad EL3_LOAD + S2_L3_OFF"
+                             f"{f' + {l3_off[i] * 0x1000:#x}' if l3_off[i] else ''}"
+                             f" + 0x3    /* block {i}, {i * STAGE2_BLOCK:#x}"
+                             f" - level 3 table */\n")
+                elif i in alias:
+                    fh.write(f"    .quad S2_BLOCK | {alias[i]:#x}"
+                             f"    /* block {i}, {i * STAGE2_BLOCK:#x}"
+                             f" - the machine's own device */\n")
+                elif i in plan:
                     fh.write(f"    .quad S2_BLOCK | {plan[i]:#x}"
                              f"    /* block {i}, {i * STAGE2_BLOCK:#x} - redirected */\n")
                 else:
                     fh.write(f"    .quad S2_BLOCK | {i * STAGE2_BLOCK:#x}\n")
             fh.write("\n")
+        if pages:
+            l3 = os.path.join(os.path.dirname(inc), "s2_l3.inc")
+            with io.open(l3, "w", encoding="utf-8") as fh:
+                fh.write(f"/* GENERATED by tools/qemu-panel-read.py - do not edit"
+                         f" by hand.\n"
+                         f" *\n"
+                         f" * One level 3 table per block that needs 4 KB granularity,\n"
+                         f" * in block order and {STAGE2_BLOCK // 0x1000} entries each.\n"
+                         f" * The aliased pages point at the machine; every other page\n"
+                         f" * of the block points at the same offsets *inside* the pool\n"
+                         f" * block that block already had, so the pages this file does\n"
+                         f" * not name are the RAM model they were before.\n"
+                         f" */\n")
+                for blk in sorted(pages):
+                    fh.write(f"    /* block {blk}, {blk * STAGE2_BLOCK:#x}"
+                             f" - level 3 table at S2_L3_OFF"
+                             f"{f' + {l3_off[blk] * 0x1000:#x}' if l3_off[blk] else ''}"
+                             f" */\n")
+                    for p in range(STAGE2_BLOCK // 0x1000):
+                        pa = pages[blk].get(p)
+                        note = ""
+                        if pa is None:
+                            pa = plan[blk] + p * 0x1000
+                        else:
+                            note = "    /* the machine's own */"
+                        fh.write(f"    .quad S2_PAGE | {pa:#x}{note}\n")
+                fh.write("\n")
+            defsym += ["--defsym", "S2_L3=1"]
         include = ["-I", os.path.dirname(inc)]
         defsym += ["--defsym", "ZERO_MEM=1",
                    "--defsym", f"S2_MOVED_IPA={ZERO_MEM_IPA:#x}"]
@@ -764,10 +970,12 @@ def stub_consts(obj, names):
     return found
 
 
-def stub_tables(mon, load_addr, obj, plan):
+def stub_tables(mon, load_addr, obj, plan, pages=None):
     """The stage-2 evidence, read out of the running guest.
 
-    Returns `(l1_0, l2, backing, diag)` or None if the read failed, where `l2` is
+    Returns `(l1_0, l2, backing, diag, l3)` or None if the read failed, where `l3`
+    is the level 3 tables' pages, concatenated in block order, or None when there
+    are none. `l2` is
     the 512 level 2 entries as the guest's memory holds them, `backing` is what the
     address `ZERO_MEM_IPA` is redirected to actually contains, and `diag` is
     `(vtcr, vttbr, hcr, scr)` as the guest itself read them back.
@@ -796,7 +1004,13 @@ def stub_tables(mon, load_addr, obj, plan):
         diag_off = stub_symbol(obj, "s2_diag")
         l1_off = stub_symbol(obj, "s2_l1")
         l2_off = stub_symbol(obj, "s2_l2")
+        # The level 3 tables sit directly after the level 2 one when they exist,
+        # and they are read by the same pass so that a capture cannot carry the
+        # block descriptor that names a level 3 table without the table it names.
+        l3_off = stub_symbol(obj, "s2_l3") if pages else None
         span = l2_off - l1_off + 8 * STAGE2_L2_ENTRIES
+        if l3_off is not None:
+            span = l3_off - l1_off + 8 * STAGE2_BLOCK // 0x1000 * len(pages)
         mon.cmd(f'pmemsave {load_addr + l1_off:#x} {span:#x} "{dump}"', timeout=10.0)
         with open(dump, "rb") as fh:
             blob = fh.read()
@@ -818,10 +1032,17 @@ def stub_tables(mon, load_addr, obj, plan):
     l2_at = l2_off - l1_off
     if len(blob) < l2_at + 8 * STAGE2_L2_ENTRIES or len(backing) < 16:
         return None
+    l3 = None
+    if l3_off is not None:
+        at = l3_off - l1_off
+        want = 8 * STAGE2_BLOCK // 0x1000 * len(pages)
+        if len(blob) < at + want:
+            return None
+        l3 = struct.unpack_from(f"<{STAGE2_BLOCK // 0x1000 * len(pages)}Q", blob, at)
     return (struct.unpack_from("<Q", blob, 0)[0],
             struct.unpack_from(f"<{STAGE2_L2_ENTRIES}Q", blob, l2_at),
             struct.unpack_from("<QQ", backing, 0),
-            words)
+            words, l3)
 
 
 def aop_words(aop_bytes, rec):
@@ -952,6 +1173,25 @@ def main():
                          " The payload is not touched; the guest's own page tables"
                          " are not touched; an access at or above 4 GB is a"
                          " translation fault that only this instrument produces")
+    ap.add_argument("--el3-gic-real", action="store_true",
+                    help="with --el3-stub --el3-zero-mem: stop pretending the"
+                         " interrupt controller is RAM. The board's GIC window"
+                         " 0x17A00000 is 2 MB that this platform's own map declares"
+                         " and this instrument has been pointing at zeroed pool RAM"
+                         " since the flag existed, which is a controller that cannot"
+                         " hold pending state, cannot raise a line, and cannot"
+                         " deliver an interrupt of any kind - so every facility in"
+                         " the payload that waits on one waits forever. With this"
+                         " flag the block is pointed at the machine's own GICv2"
+                         " instead (0x08000000, whose gic_dist and gic_cpu spacing"
+                         " is the board's), and IPA page 0 - where"
+                         " PcdGicInterruptInterfaceBase, which BitraPkg does not"
+                         " override, puts the CPU interface - is pointed at gic_cpu"
+                         " page for page through a level 3 table. Everything else,"
+                         " SPMI included, keeps the RAM model and the tool's header"
+                         " says which is which: this makes the controller real, it"
+                         " does not make the *sources* real, and which interrupts"
+                         " the payload asks for is still the payload's own PCDs")
     ap.add_argument("--el3-seed-smem", action="store_true",
                     help="with --el3-stub --el3-zero-mem: fabricate the small"
                          " structure EnvDxe reads at Apriori slot 2 - the pointer"
@@ -1027,6 +1267,13 @@ def main():
                 f" guest has an EL3; the stub replaces the answer rather than adding"
                 f" to it")
         args.machine = "virt,secure=on"
+        alias, pages = {}, {}
+        if args.el3_gic_real and not args.el3_zero_mem:
+            die("--el3-gic-real changes what a stage-2 block points at, and the"
+                " stage-2 table is what --el3-zero-mem builds; without it the flag"
+                " would be dropped and the run would be a plain one whose header"
+                " claimed the machine's own controller was behind the guest's GIC"
+                " window")
         if args.el3_zero_mem:
             # What is redirected is not one address but every region this board's
             # map declares below LOW_MMIO_LIMIT, because the firmware's use of its
@@ -1036,9 +1283,19 @@ def main():
             # somewhere new each run, which is indistinguishable from progress.
             regions = low_regions(pkg)
             plan = l2_plan(regions, args.load_addr)
+            alias, pages = real_aliases(regions, args.el3_gic_real)
             print(f"stage 2  {len(regions)} region(s) below {LOW_MMIO_LIMIT:#x} in"
-                  f" {os.path.basename(pkg)}, {len(plan)} 2 MB block(s) redirected to"
+                  f" {os.path.basename(pkg)}, {len(plan)} 2 MB block(s):"
+                  f" {len(plan) - len(alias) - len(pages)} redirected to"
                   f" {ZERO_MEM_POOL_BASE:#x}..{ZERO_MEM_POOL_BASE + len(plan) * STAGE2_BLOCK:#x}")
+            for i in sorted(alias):
+                print(f"         block {i} ({i * STAGE2_BLOCK:#x}) is the machine's"
+                      f" own device at {alias[i]:#x}")
+            for blk in sorted(pages):
+                for p, pa in sorted(pages[blk].items()):
+                    print(f"         block {blk} page {p}"
+                          f" ({blk * STAGE2_BLOCK + p * 0x1000:#x}) is the machine's"
+                          f" own device at {pa:#x}")
             # Stage 2 is only in force if the machine gave the CPU an EL2 at all.
             # QEMU's virt machine turns EL2 on for the CPU it creates as part of
             # `virtualization=on`, and without it the stub's `msr hcr_el2` is
@@ -1064,7 +1321,7 @@ def main():
         stub, stub_obj = build_el3_stub(
             args.load_addr,
             os.path.join(tempfile.mkdtemp(prefix="qemu-el3-"), "el3.bin"),
-            args.el3_zero_mem, plan, seed, aop)
+            args.el3_zero_mem, plan, seed, aop, alias, pages)
         # The seed's own numbers, read back out of the assembly that folded them
         # into instructions. Every comparison below - the header's, the read-back's
         # and the exit status's - is against these and not against a copy kept in
@@ -1104,6 +1361,11 @@ def main():
                   f" {at + (ipa & (STAGE2_BLOCK - 1)):#x} - the three numbers are"
                   f" decoded out of the driver's own instructions; see"
                   f" tools/qemu-el3-stub.S")
+    elif args.el3_gic_real:
+        die("--el3-gic-real changes what a stage-2 block points at, so it means"
+            " nothing without --el3-zero-mem to build the stage-2 table it is a"
+            " change to; the run would be a plain one wearing an aliased one's"
+            " header")
     elif args.el3_zero_mem:
         die("--el3-zero-mem is the stub's behaviour and means nothing without"
             " --el3-stub; an abort it did not answer would still stop the boot")
@@ -1143,7 +1405,7 @@ def main():
     mon = Monitor(args.socket)
 
     lines, screens, gaps = [], 0, []
-    tables, seed_got = None, None
+    tables, seed_got, gic = None, None, None
     worst, weak = 60.0, 0
     scratch = tempfile.mkdtemp(prefix="qemu-panel-")
     dump = os.path.join(scratch, "fb.bin")
@@ -1191,10 +1453,17 @@ def main():
         # an address was answered read as zero has to be able to show the entry
         # that answered it.
         if stub and args.el3_zero_mem:
-            tables = stub_tables(mon, args.load_addr, stub_obj, plan)
+            tables = stub_tables(mon, args.load_addr, stub_obj, plan, pages)
             if seed:
                 seed_got = stub_seed(mon, args.load_addr, stub_obj, plan,
                                      seed[1] + SEED_SMEM_FLAG_OFF, aop)
+            # The machine's own interrupt controller, read here for the same reason
+            # the tables are: it is the other end of the redirect. That the alias
+            # exists is one claim; that the payload's own writes landed in it is
+            # another, and only the second one is about the guest. Read while it is
+            # still running and before anything is torn down.
+            if alias or pages:
+                gic = machine_gic(mon)
         shutil.rmtree(scratch, ignore_errors=True)
         if proc:
             proc.terminate()
@@ -1240,8 +1509,10 @@ def main():
                                  f" capture that cannot show the first says nothing"
                                  f" about the second\n")
                 else:
-                    l1_0, l2, backing, diag = tables
+                    l1_0, l2, backing, diag, l3 = tables
                     l2_addr = args.load_addr + stub_symbol(stub_obj, "s2_l2")
+                    l3_addr = (args.load_addr + stub_symbol(stub_obj, "s2_l3")
+                               if pages else None)
                     # Every entry is checked against the plan this end handed over,
                     # and every entry that is not in the plan is checked for being
                     # the identity. Not the one address this end named: what the
@@ -1249,17 +1520,47 @@ def main():
                     # own - and one sampled entry cannot support a claim about a set.
                     # The two ends of the instrument are compared here rather than
                     # each announcing itself.
-                    wrong = [i for i, pa in sorted(plan.items())
+                    #
+                    # Four kinds of entry now, not two, and each is checked against
+                    # the thing that produced it: a redirected block against the pool
+                    # address the plan gave it, an aliased block against the machine
+                    # address the alias table gave it, a paged block against a table
+                    # descriptor naming its level 3 table, and everything else
+                    # against the identity.
+                    red = [i for i in plan if i not in alias and i not in pages]
+                    wrong = [i for i in red
                              if (l2[i] & 0x3) != 0x1
-                             or (l2[i] & ~(STAGE2_BLOCK - 1)) != pa]
+                             or (l2[i] & ~(STAGE2_BLOCK - 1)) != plan[i]]
+                    bad_alias = [i for i in sorted(alias)
+                                 if (l2[i] & 0x3) != 0x1
+                                 or (l2[i] & ~(STAGE2_BLOCK - 1)) != alias[i]]
+                    bad_page = [i for i in sorted(pages)
+                                if (l2[i] & 0x3) != 0x3
+                                or (l2[i] & ~0xFFF) != l3_addr]
                     ident = sum(1 for i, e in enumerate(l2)
                                 if i not in plan and (e & 0x3) == 0x1
                                 and (e & ~(STAGE2_BLOCK - 1)) == i * STAGE2_BLOCK)
                     want_ident = STAGE2_L2_ENTRIES - len(plan)
+                    # The pages of a paged block, against the two sources that
+                    # named them: the machine for the aliased page, the block's own
+                    # pool 2 MB for the rest.
+                    bad_l3 = []
+                    if l3 is not None:
+                        n = STAGE2_BLOCK // 0x1000
+                        for k, blk in enumerate(sorted(pages)):
+                            for p in range(n):
+                                want = pages[blk].get(p)
+                                want = (plan[blk] + p * 0x1000
+                                        if want is None else want)
+                                got = l3[k * n + p]
+                                if ((got & 0x3) != 0x3
+                                        or (got & ~0xFFF) != want):
+                                    bad_l3.append((blk, p, got, want))
                     ok = ((l1_0 & 0x3) == 0x3 and (l1_0 & ~0xFFF) == l2_addr
-                          and not wrong and ident == want_ident)
+                          and not wrong and not bad_alias and not bad_page
+                          and not bad_l3 and ident == want_ident)
                     fh.write(f"# el3 zero-mem on: stage 2 gives the guest a 4 GB"
-                             f" identity map, with the {len(plan)} 2 MB block(s)"
+                             f" identity map, with the {len(red)} 2 MB block(s)"
                              f" holding this platform's declared regions below"
                              f" {LOW_MMIO_LIMIT:#x} redirected to"
                              f" {ZERO_MEM_POOL_BASE:#x}.."
@@ -1267,16 +1568,49 @@ def main():
                              f" one block each so that a register written and read"
                              f" back is the value that was written. No byte of the"
                              f" payload was changed\n")
+                    if alias or pages:
+                        fh.write(f"#   and {len(alias)} of those block(s) are not"
+                                 f" given RAM at all - they are pointed at the"
+                                 f" machine's own device, because it implements"
+                                 f" them: "
+                                 + ", ".join(f"block {i} ({i * STAGE2_BLOCK:#x})"
+                                             f" -> {alias[i]:#x}"
+                                             for i in sorted(alias))
+                                 + (f", and block {sorted(pages)[0]}"
+                                    f" ({sorted(pages)[0] * STAGE2_BLOCK:#x})"
+                                    f" page by page through a level 3 table"
+                                    f" at {l3_addr:#x} with "
+                                    + ", ".join(f"page {p} -> {pa:#x}"
+                                                for p, pa in sorted(
+                                                    pages[sorted(pages)[0]].items()))
+                                    if pages else "")
+                                 + f"\n")
                     fh.write(f"#   read back out of the guest: L1[0] = {l1_0:#x},"
-                             f" {len(plan) - len(wrong)}/{len(plan)} redirected"
-                             f" entries and {ident}/{want_ident} identity entries"
-                             f" are what this header describes -"
+                             f" {len(red) - len(wrong)}/{len(red)} redirected"
+                             f" entries, {len(alias) - len(bad_alias)}/{len(alias)}"
+                             f" aliased entries and {ident}/{want_ident} identity"
+                             f" entries"
+                             + (f", and {len(pages) * (STAGE2_BLOCK // 0x1000) - len(bad_l3)}"
+                                f"/{len(pages) * (STAGE2_BLOCK // 0x1000)}"
+                                f" level 3 page(s)" if pages else "")
+                             + f" are what this header describes -"
                              f" {'the walk is the one this header describes' if ok else 'THE WALK IS NOT THE ONE THIS HEADER DESCRIBES'}\n")
-                    if wrong:
-                        i = wrong[0]
+                    for i in wrong[:1]:
                         fh.write(f"#   L2[{i}] = {l2[i]:#x}, but block"
                                  f" {i * STAGE2_BLOCK:#x} is declared and the plan"
                                  f" put it at {plan[i]:#x}\n")
+                    for i in bad_alias[:1]:
+                        fh.write(f"#   L2[{i}] = {l2[i]:#x}, but block"
+                                 f" {i * STAGE2_BLOCK:#x} was to be pointed at the"
+                                 f" machine's {alias[i]:#x}\n")
+                    for i in bad_page[:1]:
+                        fh.write(f"#   L2[{i}] = {l2[i]:#x}, but block"
+                                 f" {i * STAGE2_BLOCK:#x} was to be a level 3 table"
+                                 f" descriptor naming {l3_addr:#x}"
+                                 f" ({l3_addr + 0x3:#x})\n")
+                    for blk, p, got, want in bad_l3[:1]:
+                        fh.write(f"#   L3[{blk}][{p}] = {got:#x}, but page"
+                                 f" {p} of block {blk} was to be {want:#x}\n")
                     if not ok and (l1_0 & ~0xFFF) != l2_addr:
                         fh.write(f"#   L1[0] should name the L2 table at"
                                  f" {l2_addr:#x} as a table descriptor"
@@ -1555,7 +1889,89 @@ def main():
                                          f" in the plan, not {at:#x} where this"
                                          f" seed wrote; the guest's read and this"
                                          f" write are not the same memory\n")
+        if gic is not None and alias:
+            gw = dict(gic)
+
+            def _bits(v):
+                return (", ".join(str(i) for i in range(32) if v >> i & 1)
+                        or "none")
+
+            # The other end of the alias, read out of the machine rather than
+            # described. Every one of these words is reset-zero when the machine
+            # boots and none of them is in the payload's image, so a bit that is set
+            # here was set by the payload through the redirect - the read is what
+            # makes "the guest's writes reach hardware" a measurement instead of a
+            # consequence of the table being written correctly.
+            fh.write(f"# GIC: and the block(s) above are not RAM. They are pointed at"
+                     f" the machine's own interrupt controller, which is live"
+                     f" hardware at {MACHINE_GIC_BASE:#x}, and these are its"
+                     f" registers read back out of it after the payload ran. The"
+                     f" words are reset-zero and the payload's image does not hold"
+                     f" them, so what is set here was set through the alias\n")
+            fh.write(f"#   distributor: CTLR {gw['GICD_CTLR']:#x} TYPER"
+                     f" {gw['GICD_TYPER']:#x} IIDR {gw['GICD_IIDR']:#x} IGROUPR0"
+                     f" {gw['GICD_IGROUPR0']:#x} ISENABLER0"
+                     f" {gw['GICD_ISENABLER0']:#010x} ICENABLER0"
+                     f" {gw['GICD_ICENABLER0']:#010x} ISPENDR0"
+                     f" {gw['GICD_ISPENDR0']:#010x} ICPENDR0"
+                     f" {gw['GICD_ICPENDR0']:#010x} ISACTIVER0"
+                     f" {gw['GICD_ISACTIVER0']:#010x} ICFGR0"
+                     f" {gw['GICD_ICFGR0']:#x} ICFGR1 {gw['GICD_ICFGR1']:#x}"
+                     f" - the distributor is"
+                     f" {'on' if gw['GICD_CTLR'] & 1 else 'OFF'}, and the IDs below"
+                     f" 32 it has enabled *in Group 1* are"
+                     f" {_bits(gw['GICD_ISENABLER0'])}\n")
+            fh.write(f"#   CPU interface at {MACHINE_GIC_BASE + 0x10000:#x}, which is"
+                     f" where IPA page 0 was aliased: CTLR {gw['GICC_CTLR']:#x}"
+                     f" PRIMASK {gw['GICC_PRIMASK']:#x} BPR {gw['GICC_BPR']:#x}"
+                     f" IAR {gw['GICC_IAR']:#x} RPR {gw['GICC_RPR']:#x} HPPIR"
+                     f" {gw['GICC_HPPIR']:#x} - the interface is"
+                     f" {'on' if gw['GICC_CTLR'] & 1 else 'OFF'}, and an IAR of"
+                     f" 0x3ff is the \"no interrupt to give you\" the GICv2 returns,"
+                     f" so a value other than that is one the machine had\n")
+            fh.write(f"#   and the board's second window, APSS_GIC500_GICR, which"
+                     f" shares the block: {MACHINE_GIC_BASE + 0x60000:#x} holds"
+                     f" {gw['GICR window (aliased)']:#010x}, which a GICv2 has"
+                     f" nothing at - the redistributor is a GICv3 idea and this"
+                     f" machine is a GICv2, so the payload's V2 path never reads it\n")
+            # Three rules for reading the rows above. The first is a limit of the
+            # read itself, and it is the one that came out of the first run with
+            # real hardware behind these rows: `pmemsave` carries QEMU's
+            # unspecified attributes and this machine has the security extensions
+            # on, so every word was read as a NON-SECURE access. `GICD_IGROUPR` is
+            # RAZ/WI for such an access by definition, `GICD_ISENABLER0` and
+            # `GICD_ISPENDR0` return only the Group-1 bits and a priority mask in
+            # the lower half reads zero - so the zeros above are the non-secure view
+            # and not proof that the payload wrote nothing. The second is the one
+            # that matters for the firmware's own claim: `PcdArmArchTimerSecIntrNum`
+            # and `PcdArmArchTimerIntrNum` are 17 and 18 in this platform
+            # (`BitraPkg.dsc.inc:51-52`) while `-M virt` raises its generic timer as
+            # PPIs 13 and 14, INTIDs 29 and 30, so an enabled bit at 17 or 18 with a
+            # pending bit at 29 or 30 is a delivered interrupt the payload did not
+            # register for. The third is a limit of the instrument: reading GICC_IAR
+            # through the monitor is a real read of the register, and on this machine
+            # that acknowledges, so the value above is what was pending when the run
+            # ended and the read itself may have taken one away
+            fh.write(f"#   read with three rules, and the first is the one that"
+                     f" decides how the zeros above may be used: `pmemsave`"
+                     f" carries QEMU's unspecified attributes while this machine has"
+                     f" the security extensions on, so every word above is a"
+                     f" non-secure view - IGROUPR is RAZ/WI for one, ISENABLER0 and"
+                     f" ISPENDR0 return only Group-1 bits, and a priority mask in"
+                     f" the lower half reads zero, so none of those zeros says the"
+                     f" payload wrote nothing; what does say its writes arrived is"
+                     f" the pair of words that are non-secure-writable anyway,"
+                     f" GICD_CTLR's Group-1 enable and GICC_CTLR's, both of which"
+                     f" read back set. Second: BitraPkg sets"
+                     f" PcdArmArchTimerSecIntrNum 0x11 and PcdArmArchTimerIntrNum 0x12"
+                     f" while this machine raises its generic timer as the PPIs"
+                     f" 0x1d and 0x1e, so an enable at 17 or 18 with a pending at 29"
+                     f" or 30 is a real interrupt the payload did not register for."
+                     f" Third: reading GICC_IAR is a real read that acknowledges on"
+                     f" this machine, so the value above is what was pending when the"
+                     f" run ended, not a count of what was raised\n")
         fh.write(f"# region  {name} at {base:#x}, dumping {need:#x} bytes\n")
+
         fh.write(f"# {len(lines)} rows, weakest margin {worst:.2f} of 60 sub-blocks,"
                  f" {weak} characters under {args.min_margin}\n")
         if gaps:
@@ -1644,6 +2060,44 @@ def main():
               f" {ZERO_MEM_IPA:#x} reads {backing[0]:#x}")
         print(f"  as the guest reads them back: VTCR_EL2={diag[0]:#x}"
               f" VTTBR_EL2={diag[1]:#x} HCR_EL2={diag[2]:#x} SCR_EL3={diag[3]:#x}")
+    if gic is not None and alias:
+        gw = dict(gic)
+
+        def bits(v):
+            return (", ".join(str(i) for i in range(32) if v >> i & 1)
+                    or "none")
+
+        print(f"gic      the {len(alias)} aliased block(s) are the machine's own"
+              f" controller at {MACHINE_GIC_BASE:#x}, not RAM, and it reads back:"
+              f" distributor {'on' if gw['GICD_CTLR'] & 1 else 'OFF'}"
+              f" (CTLR {gw['GICD_CTLR']:#x} TYPER {gw['GICD_TYPER']:#x} IIDR"
+              f" {gw['GICD_IIDR']:#x}), Group-1 enables below 32 ="
+              f" {bits(gw['GICD_ISENABLER0'])}, Group-1 pending ="
+              f" {bits(gw['GICD_ISPENDR0'])}")
+        print(f"  CPU interface {'on' if gw['GICC_CTLR'] & 1 else 'OFF'}"
+              f" (CTLR {gw['GICC_CTLR']:#x} PRIMASK {gw['GICC_PRIMASK']:#x} BPR"
+              f" {gw['GICC_BPR']:#x} IAR {gw['GICC_IAR']:#x} RPR"
+              f" {gw['GICC_RPR']:#x} HPPIR {gw['GICC_HPPIR']:#x}); the"
+              f" redistributor window reads"
+              f" {gw['GICR window (aliased)']:#x}, which a GICv2 has nothing at")
+        print(f"  every word above is a NON-SECURE view - `pmemsave` carries QEMU's"
+              f" unspecified attributes and this machine has the security"
+              f" extensions on - so IGROUPR is RAZ here, the enable and pending"
+              f" sets hold only Group-1 bits, and a priority mask in the lower half"
+              f" reads zero: those zeros say nothing about what the payload wrote,"
+              f" and the two words that are non-secure-writable anyway (CTLR's"
+              f" Group-1 enable in both windows) read back set, which is what says"
+              f" its writes arrived and were refused")
+        if gw["GICD_ISENABLER0"] & ~gw["GICD_ISPENDR0"] & 0xFFFFFFFF:
+            print(f"  enabled and not pending:"
+                  f" {bits(gw['GICD_ISENABLER0'] & ~gw['GICD_ISPENDR0'])} - a line"
+                  f" asked for and not raised is the one thing that separates a"
+                  f" controller that works from a number that does not match")
+        if (gw["GICD_ISPENDR0"] & 1 << 29) or (gw["GICD_ISPENDR0"] & 1 << 30):
+            print(f"  and the pending set includes 29/30, which is this machine's"
+                  f" generic timer, while BitraPkg registers 17 and 18 - the"
+                  f" interrupt is real and its number is not the one the payload"
+                  f" asked for")
     if seed:
         smem_base, smem_size = seed[1], seed[2]
         if seed_got is None:

@@ -1805,6 +1805,30 @@ Work:
 > returns zero, the 13-slave scan for slave `0x51` finds nothing, and the driver reports not-detected — which makes
 > "a payload failure on real hardware" an open question rather than a finding. Nothing was flashed,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.203.
+> **4.204: the instrument's GIC block is the machine's own controller, and the payload's writes reach it and are
+> refused.** `--el3-gic-real` (`MACHINE_GIC_BASE = 0x08000000`, `REAL_REGIONS`, `REAL_PAGES` in
+> `tools/qemu-panel-read.py`; `S2_L3_OFF` and the `.ifdef S2_L3` include in `tools/qemu-el3-stub.S`) points stage-2
+> block 189 at the machine's distributor and aliases IPA page 0 — which is `PcdGicInterruptInterfaceBase`, 0 here
+> because `BitraPkg.dsc.inc:44-46` overrides only the distributor and redistributor bases — through a generated
+> level-3 table to `0x08010000`, because IPA 0 shares its block with `GCC CLK CTL`. Measured three ways: the header
+> self-verifies (`L1[0] = 0x48003003, 53/53 redirected, 1/1 aliased, 457/457 identity, 512/512 level 3 pages`), the
+> registers read back live (`GICD_CTLR 0x1 TYPER 0x408 IIDR 0x43b`; `GICC_CTLR 0x1 PRIMASK 0x0 BPR 0x7 IAR 0x3ff`),
+> and `0x17A60000` now **aborts** through the guest where 4.201 read pool RAM. The payload's `ICDDCR`/`ICCICR` writes
+> arrive — they are the two bits a non-secure writer may set (`arm_gic.c:1200-1209`, `:745-763`) and they read back
+> set, while nothing else could have written them (no monitor write command, and `-device loader` at a device
+> address is silently dropped). **The zeros are a non-secure view, proved not assumed**: `GICD_CTLR` prints `0x1`
+> where a secure read (`:958-967`) would print `0x2`, and `GICD_IGROUPR0 = 0x0` is RAZ/WI for NS by definition
+> (`:988-993`). **Nothing is delivered** because `-M virt,secure=on` sets `has-security-extensions`
+> (`hw/arm/virt.c:754`), no secure firmware runs, so `arm_gic_common_reset_hold` takes `resetprio = 0`
+> (`arm_gic_common.c:279-286`; `irq_reset_nonsecure` is set only by `arm_gic_common_linux_init` `:334-347`, which
+> `virt.c` never calls) and every interrupt stays in Group 0 — and `ArmGicV2Dxe.c` writes no `ICDIGROUPR` at all,
+> because on the phone the secure world does the grouping first. **The timer number is wrong too**: `-M virt`'s DTB
+> gives INTIDs 29/30/27/26 against `BitraPkg.dsc.inc:51-52`'s 17/18 and `ArmPkg.dec:266-267`'s 27/26. The carried
+> prediction that `PcdArmArchTimerVirtIntrNum` is unset is **false** (`ArmPkg.dec:267`, `TimerDxe.inf`
+> `[Pcd.common]`), and `TimerDxe` ran (`K 9 Ss 9/69 … 49EA041E-…`). Otherwise the run is 4.201 line for line:
+> `HUB NOTIFY` exactly once at 18.2 s, the wall answered by hand at 43.6 s, digest rows unchanged. SPMI stays blank
+> as the directive said: no SPMI arbiter on `-M virt` to alias to. Nothing was flashed, `UsbConfigDxe.efi` is still
+> `sha256 6943cc61…`. See `docs/08` step 4.204.
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

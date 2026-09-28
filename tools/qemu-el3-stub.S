@@ -661,6 +661,24 @@
     .equ  S2_L2_OFF, 0x3000
 
     /*
+     * And where the level 3 tables go, when there are any. Directly after the
+     * level 2 one, which is `512 * 8 = 0x1000` bytes and so ends here; each table
+     * is a 2 MB block at 4 KB granularity and is the same size again. There is
+     * one table per block that needs it, in block order, and the level 2 entries
+     * that name them are emitted by the same generator that emits them - so the
+     * offset arithmetic in `tools/qemu-panel-read.py` and the `.org` here are the
+     * only two places that know where they are, and the read-back compares the
+     * descriptors against the symbol rather than against either.
+     *
+     * They exist for one reason: `PcdGicInterruptInterfaceBase` is 0 on this
+     * platform, so the GIC's CPU interface is programmed at IPA 0, and IPA 0 is
+     * four bytes of a 2 MB block that also holds the clock controller. A whole
+     * block cannot be given to the machine without giving it the clock controller
+     * too, so that block is resolved page by page instead.
+     */
+    .equ  S2_L3_OFF, 0x4000
+
+    /*
      * Four words of read-back, so that a run can say what the walk was actually
      * given instead of what this source meant to give it. The registers that
      * decide the walk - VTCR_EL2 and VTTBR_EL2 for the tables, HCR_EL2 for
@@ -697,6 +715,15 @@
      * has to be able to execute from the identity-mapped RAM it was loaded into.
      */
     .equ  S2_BLOCK, 0x7FD
+
+    /*
+     * The same descriptor at level 3, where the granule is 4 KB and bits [1:0] of
+     * `0b11` mean a page rather than a table. Everything above bit 1 is the field
+     * layout the comment above describes - MemAttr, S2AP, shareability, AF - and
+     * it is the same word for the same reason: a page and a block differ in what
+     * they cover, not in what they mean.
+     */
+    .equ  S2_PAGE, 0x7FF
 
     /*
      * The size of one stage-2 block, named here because the seeding block below
@@ -1136,4 +1163,20 @@ s2_l1:
     .org  S2_L2_OFF
 s2_l2:
     .include "s2_l2.inc"
+
+    /*
+     * And the level 3 tables, when the generator says there are any. `.ifdef` on a
+     * `--defsym` rather than a flag of this file's own, because the thing that
+     * decides is the same list that decides which level 2 entries are table
+     * descriptors - and if the two ever disagreed, the guest would take a
+     * translation fault on a block the table describes as a pointer to a table
+     * that is not there. A build with no paged block emits neither the descriptors
+     * nor this, and is byte for byte the build that came before it.
+     */
+    .ifdef S2_L3
+    .globl s2_l3
+    .org  S2_L3_OFF
+s2_l3:
+    .include "s2_l3.inc"
+    .endif
 .endif

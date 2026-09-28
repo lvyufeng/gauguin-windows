@@ -4177,6 +4177,38 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > head, and its device-side status is open. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`.
 > See `docs/08` step 4.203.
 >
+> **Step 4.204 — the instrument's GIC block is the machine's own controller, the alias is measured three ways, and
+> the payload's writes reach it and are refused.** `tools/qemu-panel-read.py` gained `--el3-gic-real`
+> (`MACHINE_GIC_BASE = 0x08000000` `:127`, `REAL_REGIONS` `:148`, `REAL_PAGES` `:165`) and `tools/qemu-el3-stub.S`
+> gained `S2_L3_OFF` (`:679`) with the `.ifdef S2_L3` include (`:1176-1178`): block 189 (`0x17A00000`) now points at
+> the machine's distributor, and IPA page 0 — which is `PcdGicInterruptInterfaceBase`, 0 on this platform because
+> `BitraPkg.dsc.inc:44-46` overrides only the distributor and redistributor bases — goes page by page through a
+> generated level-3 table to `0x08010000`, because IPA 0 shares its 2 MB block with `GCC CLK CTL`. Measured three
+> ways: the header self-verifies (`L1[0] = 0x48003003, 53/53 redirected, 1/1 aliased, 457/457 identity, 512/512
+> level 3 pages`), the registers read back live (`GICD_CTLR 0x1 TYPER 0x408 IIDR 0x43b`; `GICC_CTLR 0x1 PRIMASK
+> 0x0 BPR 0x7 IAR 0x3ff RPR 0xff HPPIR 0x3ff`), and `0x17A60000` now **aborts** through the guest (it aliases to
+> `0x08060000`, where a GICv2 has no redistributor) where 4.201 read pool RAM. **And the payload's writes arrive**:
+> `GICD_CTLR 0x1`/`GICC_CTLR 0x1` are the two bits a non-secure writer may set (`arm_gic.c:1200-1209`,
+> `:745-763`) and they are set, while the words it may not touch read zero or RAZ (`:697-706`, `:712-725`,
+> `:1019-1022`) — and nothing else can have written them, because the QEMU monitor has no memory-write command and
+> a `-device loader` at a device address is silently dropped. **The zeros are a non-secure view**, and that is
+> proved rather than assumed: `GICD_CTLR` prints `0x1`, where a secure read of `s->ctlr` (`:958-967`) would print
+> `0x2`; `GICD_IGROUPR0 = 0x0` is RAZ/WI for an NS access by definition (`:988-993`) and says nothing about the
+> groups. **Why nothing is delivered**: `-M virt,secure=on` sets `has-security-extensions` (`hw/arm/virt.c:754`),
+> no secure firmware runs, so `arm_gic_common_reset_hold` takes `resetprio = 0` (`arm_gic_common.c:279-286`) —
+> `irq_reset_nonsecure` is set only by `arm_gic_common_linux_init` (`:334-347`), which `virt.c` never calls and
+> which has no property — every interrupt stays in Group 0, and every non-secure write is filtered; and
+> `ArmGicV2Dxe.c` contains **no `ICDIGROUPR` write at all**, because on the phone the secure world groups the
+> interrupts before the payload starts. **And the timer number is wrong**: `-M virt`'s own DTB gives INTIDs 29, 30,
+> 27, 26 against `BitraPkg.dsc.inc:51-52`'s 17/18 and `ArmPkg.dec:266-267`'s 27/26. **The carried prediction that
+> `PcdArmArchTimerVirtIntrNum` is unset is false** — `ArmPkg.dec:267` declares it and `TimerDxe.inf`'s
+> `[Pcd.common]` lists it — and `TimerDxe` did run (`94.82s K 9 Ss 9/69 … 49EA041E-6752-42CA-B0B1-7344FE2546B7`).
+> The run is otherwise 4.201 line for line: `HUB NOTIFY` fired **exactly once** (18.2 s, `PollCount` 0 → 1), the
+> wall was hit at 18.5 s and answered by hand to `06` at 43.6 s, and the digest rows are unchanged. The SPMI window
+> stays blank, as the directive said it would: `-M virt` has no SPMI arbiter to alias to. Two new instrument facts:
+> the monitor has no memory-write command, and `-device loader` at a device address is dropped. Nothing was
+> flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.204.
+>
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

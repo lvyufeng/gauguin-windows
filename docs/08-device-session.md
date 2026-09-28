@@ -42467,3 +42467,177 @@ returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the pa
 device's storage was written, so `userdata`, the partition table and the firmware LUN are all as they were.
 Nothing was flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.204 — the GIC block is the machine's own controller and the alias is measured three ways, and the payload's writes reach it and are refused: the zeros the instrument prints are a non-secure view of a GIC whose secure world never ran, so nothing can be delivered and the wall still has to be answered by hand
+
+The instrument's GIC block is no longer a page of pool RAM. `tools/qemu-panel-read.py` gained `--el3-gic-real`
+with `MACHINE_GIC_BASE = 0x08000000` (`:127`), `REAL_REGIONS = (("APSS_GIC600_GICD", MACHINE_GIC_BASE),)` (`:148`)
+and `REAL_PAGES = ((0x00000000, 0x08010000, "PcdGicInterruptInterfaceBase"),)` (`:165`); `tools/qemu-el3-stub.S`
+gained `S2_L3_OFF = 0x4000` (`:679`) and the `.ifdef S2_L3` include of a generated level-3 table (`:1176-1178`).
+Two mechanisms, because the board's two GIC windows do not land the same way. `APSS_GIC600_GICD` at `0x17A00000` is
+2 MB-aligned, so a whole stage-2 block can be pointed at the machine's own distributor at `0x08000000` — block 189,
+the same block that held both windows and was handed `0x46800000` of zeroed pool in every run through 4.203.
+`PcdGicInterruptInterfaceBase` is **0** on this platform — `BitraPkg.dsc.inc:44-46` overrides only
+`PcdGicDistributorBase|0x17A00000` and `PcdGicRedistributorsBase|0x17A60000`, so the interface base keeps
+`ArmPkg.dec`'s default — and IPA 0 shares its 2 MB block with `GCC CLK CTL`, which cannot be handed to the machine
+wholesale. That block is therefore resolved page by page through a generated level-3 table, and its page 0 alone
+goes to the machine's CPU interface at `0x08010000`. Nothing else in the map changed, the payload was not touched,
+and `-M virt,secure=on` raises its generic timer into that same controller.
+
+**The alias is measured three ways, and none of them is arithmetic on the tables.** The instrument's own header
+self-verifies the walk: `L1[0] = 0x48003003, 53/53 redirected entries, 1/1 aliased entries and 457/457 identity
+entries, and 512/512 level 3 page(s) are what this header describes`. A physical read of the machine's controller
+after the payload ran returns live values where the old instrument returned the pool's zeros — `GICD_CTLR 0x1 TYPER
+0x408 IIDR 0x43b`, and `TYPER 0x408` is ITLinesNumber 8, 256 interrupt IDs, which is `-M virt`'s own GICv2 identity
+and not a number any image here contains; the CPU interface reads `CTLR 0x1 PRIMASK 0x0 BPR 0x7 IAR 0x3ff RPR 0xff
+HPPIR 0x3ff`. And the third is the one that cannot be faked: **reading `APSS_GIC500_GICR` at `0x17A60000` through
+the guest now aborts**. It shares block 189, so the alias carries it to `0x08060000`, where a GICv2 has no
+redistributor and nothing at all — the guest's read returns `unreadable` where 4.201 read `00000000` out of pool
+RAM. That abort is the measurement the two instruments differ by — 4.201 could read that window and 4.204 cannot,
+because in 4.204 there is hardware behind it and in 4.201 there was a page of pool. The control held too: `0x08000000`
+is not in this board's declared map, so the guest's page tables never translate it and the watchpoint this run set
+on it never fires, while the `0x17A00000` one does — the alias changed where the block points, not what the guest
+addresses.
+
+**And the payload's programming reaches the machine.** `GICD_CTLR = 0x1` and `GICC_CTLR = 0x1` are set, and they
+are set by the payload: the words are reset-zero, the payload's image does not contain them, and the instrument
+has no way to write them — a `-device loader` at a device address is silently dropped (measured: `addr=0x08010004`
+left `GICC_CTLR` at `0x00000000` and `addr=0x08000100` left `ICDISER0` at 0), and the QEMU monitor exposes no
+memory-write command at all (`help` lists `device`, `dump-guest-memory`, `expire`, `loadvm`, `memsave`, `pmemsave`,
+`qom-get`, `qom-list`, `qom-set`, `savevm`, `set`, `xp`). The only writer of this controller is the guest, through
+the alias. And the two words that are set are exactly the two that a non-secure writer *can* set: `gic_dist_writeb`
+at `GICD_CTLR` byte 0 (`arm_gic.c:1200-1209`) is, for a non-secure access, `deposit32(s->ctlr, 1, 1, value)` — "the
+NS version is just an alias of the S version's bit 1" — and `gic_set_cpu_control` (`:745-763`) masks a non-secure
+write to `GICC_CTLR_EN_GRP1 | EOIMODE_NS`. Both read back as 1, which is the payload's `ICDDCR` write at
+`ArmGicV2Dxe.c:463` and its `ICCICR` write at `:486` arriving in hardware.
+
+**The zeros are a non-secure view, and this step had to establish that before they could be read at all.** The
+reader performs its register reads with `pmemsave`, which carries QEMU's unspecified transaction attributes; this
+machine is created with `has-security-extensions` true, because `hw/arm/virt.c:754` sets it from `vms->secure` and
+the command line says `secure=on`. So every word the header prints is read as a **non-secure** access. That the
+read is non-secure is not an assumption: a secure read of `GICD_CTLR` byte 0 returns `s->ctlr` whole (byte 0 alone,
+`arm_gic.c:958-967`), and the payload's non-secure write can only have set bit 1, so a secure read would have
+printed `0x2`. It printed `0x1`. Under that reading the rows say less than they appear to: `GICD_IGROUPR0 = 0x0`
+is **RAZ/WI for a non-secure access by definition** (`arm_gic.c:988-993`, "these RAZ/WI if this is an NS access to
+a GIC with the security extensions") and is not evidence that no interrupt is in Group 1; `GICD_ISENABLER0`,
+`GICD_ISPENDR0` and the active set return **only the Group-1 bits** (`:1019-1022`); and `gic_get_priority_mask`
+(`:712-725`) returns RAZ when the mask sits in the lower half, which is why `GICC_PRIMASK 0x0` is compatible with
+the `0xff` the payload wrote at `ArmGicV2Dxe.c:635`. `GICC_BPR 0x7` is the one of the three CPU-interface words
+that reads back the written value, and the reason is in the same file: BPR is banked and a non-secure read takes
+the non-secure bank (`:1614-1626`), so the `7` the payload wrote at `:632` is what a non-secure read returns. The
+instrument's own comment said `GICD_ISENABLER0` "says *which* interrupts the payload asked for"; on this machine it
+says which *Group-1* interrupts are enabled, and the header, the stdout summary and that comment were corrected in
+this step to say so.
+
+**Why nothing is delivered, with a source for each link.** `-M virt,secure=on` gives the machine a TZ-aware GIC
+(`hw/arm/virt.c:754`), and no secure firmware runs on it. `arm_gic_common_reset_hold` (`arm_gic_common.c:279-286`)
+therefore takes its `else` branch — `resetprio = 0` — because `irq_reset_nonsecure` is false, and `:284`'s `memset`
+of `s->irq_state` leaves every interrupt in Group 0 and every priority at zero; the flag that would have chosen
+`0x80` is set only by `arm_gic_common_linux_init` (`:334-347`), which `hw/arm/virt.c` never calls and which has no
+QEMU property (`:359-363` lists `num-cpu`, `num-irq`, `revision`, `has-security-extensions`,
+`has-virtualization-extensions`, `num-priority-bits`). QEMU states the consequence in its own comment above that
+branch: with `priority_mask[]` zero, "NS code cannot ever rewrite the priority to anything else". So for the
+guest's non-secure accesses — `gic_cpu_ns_access` (`arm_gic.c:80-82`) is `!gic_is_vcpu && security_extn &&
+!attrs.secure`, true for every access the payload makes — the distributor's Set-Enable branch (`:1250-1258`) skips
+every interrupt that is not Group 1, `gic_set_priority_mask` (`:697-706`) refuses the priority mask, and
+`gic_set_cpu_control` (`:745-763`) keeps only the Group-1 enable bit. And nothing in the payload ever puts an
+interrupt in Group 1: **`ArmGicV2Dxe.c` contains no write to `ARM_GIC_ICDIGROUPR` at all** — its distributor
+writes are `ICDIPR`, `ICDIPTR`, `ICDISER`, `ICDICER` and `ICDDCR`. On the phone the grouping is done for it, by
+the secure world, before the non-secure payload starts. This machine has no secure world, so nobody does it, and
+the payload's enables are refused by a controller that is otherwise live and answering.
+
+**The timer's number is now read off the machine rather than inferred.** `-M virt`'s own DTB, dumped with
+`-M virt,secure=on,virtualization=on,gic-version=2,dumpdtb=`, gives its timer node as `interrupts = <0x01 0x0d
+0x104 0x01 0x0e 0x104 0x01 0x0b 0x104 0x01 0x0a 0x104>` — PPIs 13, 14, 11 and 10, INTIDs **29, 30, 27 and 26**,
+which `hw/arm/virt.c:817-820` maps in that order to `ARCH_TIMER_NS_EL1_IRQ`, `ARCH_TIMER_VIRT_IRQ`,
+`ARCH_TIMER_NS_EL2_IRQ`, `ARCH_TIMER_S_EL1_IRQ`. Against that: `BitraPkg.dsc.inc:51-52` sets
+`PcdArmArchTimerSecIntrNum|17` and `PcdArmArchTimerIntrNum|18`, and `ArmPkg.dec:266-267` defaults the other two to
+Hyp 26 and Virt 27. So `TimerDxe` registers handlers at 27, 26, 17 and 18 while the machine raises its timers at
+29 (non-secure EL1, the one the driver actually programs), 30 (virtual), 27 (non-secure EL2) and 26 (secure EL1).
+Even with the grouping fixed, the non-secure EL1 timer the payload sets a period on is INTID 29, for which no
+handler would exist: the payload's 17 and 18 match nothing on this machine, and its 26 and 27 would catch the
+secure and the hypervisor timers by accident. That is the mismatch 4.204's runner predicted, and the machine's own
+device tree is what makes it a measurement.
+
+**`TimerDxe` ran, and the prediction this step carried into the run is false.** The Apriori rows read
+`94.57s K 7 Ss 7/69 free=1024 DE371F7C-DEC4-4D21-ADF1-593ABCC15882` (ArmGicDxe), `94.82s K 8 Ss 8/69` (MetronomeDxe)
+and `94.82s K 9 Ss 9/69 free=1024 49EA041E-6752-42CA-B0B1-7344FE2546B7` — TimerDxe's `FILE_GUID`
+(`TimerDxe.inf:13`), the last Apriori entry, `Ss` meaning EntryPoint returned `EFI_SUCCESS` *and* `CoreStartImage`
+succeeded (`Dispatcher.c:555-591`, documented at `docs/08:24940-24975`). The carried prediction was that
+`PcdArmArchTimerVirtIntrNum` would have no value and that the `ASSERT_EFI_ERROR` at `TimerDxe.c:402` — ahead of the
+Hypervisor, Secure and non-secure registrations at `:409`, `:413` and `:416`, in the driver's own instruction
+order — would fire before them. It is false twice over: `ArmPkg.dec:266-267` gives Virt 27 and Hyp 26 as declared
+defaults, and `TimerDxe.inf`'s `[Pcd.common]` section lists all four, so nothing is unset. The registration path
+itself is unconditional for Virt, Sec and Intr (only Hyp is guarded, by `if (TimerHypIntrNum != 0)` at `:408`), and
+a registered handler is enabled: `GicCommonRegisterInterruptSource` (`ArmGicCommonDxe.c`) calls
+`This->EnableInterruptSource` for a non-NULL handler, `GicV2EnableInterruptSource` (`ArmGicV2Dxe.c:130`) guards
+only `Source >= mGicNumInterrupts` and then calls `ArmGicEnableInterrupt`, whose only effect is the `ICDISER`
+write at `ArmGicV2Dxe.c:66-68`. Whether those four writes were issued and refused as Group 0, or never issued at
+all, is not decidable from the rows this instrument printed — the non-secure view cannot see either — and that is
+named here as the first thing 4.205 must make answerable.
+
+**What the run shows is otherwise 4.201 line for line, and the step's own prediction failed.** `HUB NOTIFY #1`
+(`UsbBusDxe + 0x658C`, the only writer of `HubIf->PollCount`) fired **exactly once**, at 18.2 s, with `PollCount`
+still `00` after the routine's own increment — the driver's immediate `SignalEvent`, unchanged by the alias; the
+wall at `UsbBusDxe + 0x4EF4` was hit at 18.5 s reading `PollCount = 01`, and the instrument answered it to `06` by
+hand at 43.6 s. The digest rows match 4.201's: `P2 USB n=1 all=139 pciio=0 usb2hc=0` at 106.08 s then
+`n=2 … pciio=1 usb2hc=1` at 146.20 s, `P2 GATE2 w80=9BEBC650 w88=00000000 w8c=00000001`, `P2 RCNN rc=1
+re=Success ru=32 rf=32 es=20 er=Success`, `KEY 6/69 err=Device Error at=27`, the two `P2 DIAG S … Device Error`
+rows (`D3C16B1F-…` at `K 28`, `04357C9D-…` at `K 35`), and `P2 APRI matched=1..69 unhit=1 miss=none`. The phase-1
+break-in landed at `pc=0x9ccb4260` (`rva=0x1e260` of the MZ at `0x9cc96000`) instead of 4.201's `0x9ccaef68`, in
+the same eight-PC loop the answered hub has been spinning in since 4.201. So the honest reading of the step the
+user chose — *"让中断真的能送达 guest"* — is that the first half is done and measured, and the second half is not
+achieved: a controller that is real hardware, that the guest's writes provably reach, and that refuses them all.
+
+**Two instrument facts learned on the way, recorded because they bound what any run here can claim.** The QEMU
+monitor has no memory-write command, so no instrument in this family can preload a register the guest has not
+written, and the alias read-back is therefore a statement about the guest and not about the machine's reset
+state. And `-device loader` at a device address is silently dropped, which rules out populating the GIC from the
+command line. Second-order and unresolved, carried rather than used: a frozen `-S` machine poked over its GDB stub
+(`/tmp/gicpoke.py`, raw `M`/`m` packets) reports a `GICC_PMR` written `0xff` reading back `0x0`, a `GICC_BPR`
+written `7` reading back `0x0` and a `GICD_ISENABLER0` bit 17 write reading back `0x0000ffff`, while the run's own
+header reads `PRIMASK 0x0`, `BPR 0x7` and `CTLR 0x1`. The run's values are the ones with a writer behind them and
+the poke is not evidence for anything in this step; the discrepancy is named as an open item.
+
+**decides**: that the stage-2 alias to the machine's own GICv2 works and is measured three ways — the instrument's
+walk self-verifies, the machine's registers read back live (`GICD_CTLR 0x1 TYPER 0x408 IIDR 0x43b`, `GICC_CTLR 0x1
+PRIMASK 0x0 BPR 0x7 IAR 0x3ff RPR 0xff HPPIR 0x3ff`), and `0x17A60000` now aborts through the guest where 4.201
+read pool RAM; that the payload's `ICDDCR` and `ICCICR` writes reach hardware, because the two words that read
+back set are exactly the two a non-secure writer may set (`arm_gic.c:1200-1209`, `:745-763`) while the words a
+non-secure writer may not touch read zero or RAZ (`:697-706`, `:712-725`, `:1019-1022`); that `pmemsave` reads are
+non-secure accesses on this machine, proved by `GICD_CTLR` printing `0x1` where a secure read of `s->ctlr` would
+have printed `0x2`; that `GICD_IGROUPR0 = 0x0` is RAZ/WI by definition (`:988-993`) and carries no information
+about the groups; that the machine cannot deliver a Group-0 interrupt to a non-secure CPU interface and nothing on
+it ever moves an interrupt out of Group 0, because `arm_gic_common_reset_hold` takes `resetprio = 0` and
+`irq_reset_nonsecure` is unreachable from `-M virt` (`arm_gic_common.c:279-286`, `:334-347`, `:359-363`) and
+because `ArmGicV2Dxe.c` contains no `ICDIGROUPR` write at all; that `-M virt`'s generic timer is INTIDs 29, 30, 27
+and 26 (its own DTB) against the 17 and 18 `BitraPkg.dsc.inc:51-52` sets and the 27 and 26 `ArmPkg.dec:266-267`
+defaults; and that `TimerDxe` started and returned `EFI_SUCCESS` (`K 9 Ss`, `49EA041E-…`). **corrects**: the
+carried prediction that `PcdArmArchTimerVirtIntrNum` is unset — it is declared (`ArmPkg.dec:267`) and listed
+(`TimerDxe.inf`, `[Pcd.common]`), so the `ASSERT` at `TimerDxe.c:402` was never going to fire; the instrument's
+own comment that `GICD_ISENABLER0` "says *which* interrupts the payload asked for", which is true only of Group-1
+interrupts on a TZ-aware machine and is now stated as such in the comment, the header and the stdout summary; the
+header's sentence that the distributor's "interrupt IDs below 32 it will forward are none", which is a statement
+about the non-secure view and is now printed with its Group-1 qualification; and 4.201's framing that the empty
+enable set was a machine-side arithmetic — the enable set is empty in the non-secure view and the machine-side
+cause is one of two mechanisms, not one. **does not decide**: whether the payload's four `ICDISER` writes were
+issued and refused or never issued, which is the first thing a machine with a grouped interrupt cannot hide;
+whether a grouped GIC makes the hub's `PollCount` advance and the enumeration run, which is the whole point of the
+step and is now the next run's question; whether `PcdArmArchTimerSecIntrNum`/`IntrNum` 17/18 are the right numbers
+on the phone (they are Qualcomm's, and this machine's 29/30 are `-M virt`'s); and the frozen-machine poke's three
+values, which are carried unexplained. **carries the standing limits unchanged**: `0x41E00000` stays retired; the
+thirteen rungs, the fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP
+`0xC3F000C` seed and the EL3 stub's three fabricated structures all stand; the patched payload is still a
+**counterfeit** construction-time value; and the SPMI window stays blank, as the directive said it would, because
+`-M virt` has no SPMI arbiter to alias to — `PMIC ARB SPMI` at `0x0C400000 + 0x02800000` remains stage-2 blocks
+98-117 of pool RAM, and `PMIC was not detected` remains this instrument's own arithmetic. **not an action**: one
+run of the instrument and one frozen machine poked over its GDB stub; no `fastboot` command, no console read from
+the device, no seed written anywhere, and the two files this step changed are the two it ran. **device state**:
+unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and `lsusb` showing no
+Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken from this host: **a
+physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow needs, and a
+**screen photograph** of the 4.187 P3 payload's judgement lines — `adb devices` is empty, so no screencap can be
+taken from this host at all, and `先读屏，再刷下一次` still forbids booting the payload before that photograph exists. Nothing on the device's
+storage was written, so `userdata`, the partition table and the firmware LUN are all as they were. Nothing was
+flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
