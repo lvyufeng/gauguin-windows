@@ -4209,6 +4209,68 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > the monitor has no memory-write command, and `-device loader` at a device address is dropped. Nothing was
 > flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.204.
 >
+> **Step 4.205 — the machine delivers: a non-secure EL1 guest that enables the four timer PPIs and arms one timer
+> takes exactly one interrupt per leg, INTID 30 for `CNTP` and 27 for `CNTV`.** `tools/qemu-el3-stub.S` gained the
+> `GIC_SECURE` block (`:792`, behind the reader's new `--el3-gic-secure`), which runs **before** `scr_el3` is
+> written and does the four things `arm_gic_common_linux_init` would do if `virt.c` called it: `0x80` to all 288
+> priority bytes (`GIC_DIST_BASE + 0x400`), `0xFFFFFFFF` to all 9 `IGROUPR` words (`+0x80`), `0xff` to `GICC_PMR` at
+> `GIC_CPU_BASE + i*0x1000 + 4` for the one CPU interface, then `dsb sy` and two **secure** read-backs into
+> `s2_diag` words 4 and 5. It never touches `GICD_CTLR`: the payload's own write to it is what turns Group-1
+> forwarding on, and the secure half only groups the interrupts and raises the mask. `--el3-gic-secure` is mutually
+> exclusive with the rest of that flag family, and the alias underneath it is the one 4.204 measured.
+> **The delivery is measured, not argued.** A 4,236-byte non-secure EL1 guest
+> (`work/out/qemu-probe-4.205/gic-selfirq.S`, git-ignored) repeats the payload's four writes, enables **all four**
+> PPIs the machine's device tree names, arms **one** timer, waits with `DAIF` still masked for the machine's own
+> `GICD_ISPENDR` bit, then unmasks; its handler reads `GICC_IAR`, writes `GICC_EOIR`, clears the taken INTID's
+> enable and records the count and the first two INTIDs in the distributor's priority bytes, where a non-secure
+> priority write survives a read-back exactly when it is even (`arm_gic.c:664-694`). Both legs returned **exactly
+> one delivery** — `ICENABLER0 = 0x2c00ffff` (INTID 30 cleared) with `pending: 30` on the `CNTP` leg, `0x6400ffff`
+> (27 cleared) with `pending: 27` on the `CNTV` leg — and the delivered INTID is provably the one taken, because it
+> is the only INTID the guest enabled that is missing from that leg's Group-1 enable set. Supporting rows, both
+> legs: `GICC_PRIMASK 0xfe` (the non-secure mask is up), `GICC_PMR 0xff` and `GICD_IGROUPR0 0xffffffff` (the two
+> secure read-backs), `GICD_CTLR 0x1`, `GICC_CTLR 0x1`, and `GICC_IAR 0x3ff` as the *"nothing left"* read the reader
+> makes after the handler has already acknowledged. So 4.204's *"nothing is delivered"* is answered: on this
+> instrument, with a secure world having grouped the interrupts and raised the mask, **delivery works** — which is
+> what *"修仪器：让 GIC 变真"* asked for.
+> **And the timer numbers are pinned by measurement.** `/tmp/virt204.dts`'s `/timer` node emits S_EL1, NS_EL1, VIRT
+> and NS_EL2 as the PPIs 13, 14, 11 and 10 in that order (`virt.c:362-378`), `virt.c:810-812` sets `intidbase =
+> NUM_IRQS + i*GIC_INTERNAL` so `INTID = 16 + PPI`, and `virt.c:817-820` wires `[GTIMER_PHYS] =
+> ARCH_TIMER_NS_EL1_IRQ`: the INTIDs are **29 = secure EL1, 30 = non-secure EL1, 27 = virtual, 26 = EL2 physical**,
+> and the two legs returned exactly 30 and 27. **This corrects 4.204's parenthetical**, which had 29 and 30 swapped
+> and 27 and 26 swapped — the payload's pending bit is 30 either way, so nothing downstream changes, but the reason
+> for it is now this step's measurement rather than a reading of the DTB.
+> **Why the payload still sees nothing is a number, not a mechanism.** Its enable set — `GICD_ISENABLER0 =
+> 0x0c06ffff`, i.e. `0..15, 17, 18, 26, 27` — is exactly `TimerDxe`'s four registrations: `TimerDxe.c:401`
+> (`PcdArmArchTimerVirtIntrNum`), `:409` (the hypervisor's, guarded `!= 0`), `:413` (`Sec`) and `:416` (`Int`), each
+> through `gInterrupt->RegisterInterruptSource`, which enables the line. `ArmPkg.dec:264-267` defaults them **29
+> (Sec), 30 (Int), 26 (Hyp), 27 (Virt)**; `BitraPkg.dsc.inc:51-52` overrides `Sec|0x11` and `Int|0x12`.
+> `USE_PHYSICAL_TIMER = 1` (`BitraPkg.dsc.inc:10`, `tools/make_uefi_platform.py:187`) resolves
+> `ArmGenericTimerCounterLib` to `ArmGenericTimerPhyCounterLib` (`SiliciumPkg.dsc.inc:139-143`), so
+> `TimerDxe.c:161-166` programs `CNTP`, the machine raises **30**, and the one interrupt that is pending was
+> registered under a number the machine never raises. The two registrations that did land on real timer PPIs (26 =
+> Hyp, 27 = Virt) are the two `BitraPkg` left at `ArmPkg`'s defaults. The next run changes `PcdArmArchTimerIntrNum`
+> from 18 to 30 and predicts the tick arrives — and if the hub's re-enumeration is timer-driven, `PollCount`
+> advances past 01 and the wall opens; the falsifier is the same run with the tick arriving and the poll still
+> holding.
+> **Two reader sentences are corrected by this step.** The third rule-of-reading clause — *"BitraPkg sets
+> `PcdArmArchTimerSecIntrNum` 0x11 and `PcdArmArchTimerIntrNum` 0x12 while this machine raises its generic timer as
+> the PPIs 0x1d and 0x1e"* — now names all four measured INTIDs, and the stdout pending-set line now says the
+> pending interrupt is real and its number is not the one the payload asked for. **And the enable row is the
+> Group-1-enabled set, not RAZ**: `gic_dist_readb`'s Set/Clear-Enable branch `continue`s each non-Group-1 IRQ
+> (`arm_gic.c:1009-1027`) and QEMU routes the Clear-Enable window through that same branch, so `ICENABLER0` is
+> **not** the complement of `ISENABLER0` — it is the same set printed twice (measured `0x0c06ffff` and
+> `0xffff060c`), which corrects 4.204's *"only the Group-1 bits"* framing. The SGIs 0-15 are a machine default
+> (`arm_gic_common.c:295-299` enables them and never sets their group), which is why they become visible only once
+> the payload's own `GICD_CTLR` write turns Group-1 forwarding on. **An isolation run settles the priority rows**:
+> the same instrument against a two-instruction kernel with no payload in it reads **0 of 288** priority bytes
+> non-zero while still reading `GICC_PRIMASK 0xfe` and both secure read-backs, so every `0x80` in the payload run
+> was written by the payload over the stub's fill — a driver's default written across a range it will never use.
+> **One defect this step introduced and fixed**: the reader's `machine_gic()` returned a list where every caller
+> indexed it by name, caught by the guest's over-288 read-back and corrected before any row was believed. **And one
+> carried open item is withdrawn**: the delivery guest's own PPI enables *"did not land"* was a 16-bit-shifted
+> literal in that file — `0x6C00`, naming the SGIs 10, 11, 13 and 14 — and not a property of the machine; with
+> `0x6C000000` both legs read the four intended PPIs. The SPMI window stays blank, no `fastboot` command was run,
+> nothing was flashed, and `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.205.
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

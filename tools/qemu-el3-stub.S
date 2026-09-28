@@ -746,6 +746,31 @@
     .equ  S2_MOVED_IPA, 0x01FD4000
     .endif
 
+    /*
+     * The machine's own interrupt controller, as `-M virt`'s GICv2 lays it out:
+     * `gic_dist` at 0x08000000 with 288 interrupts behind it, `gic_cpu` 64 KB
+     * above that with one CPU interface, and 4 KB per further interface. The
+     * launcher passes all four numbers in because the machine it describes is the
+     * machine whose registers it reads back afterwards, and a number written in
+     * both files is a number that can differ. These defaults are what the file
+     * assembles to when it is assembled without a launcher.
+     */
+    .ifndef GIC_DIST_BASE
+    .equ  GIC_DIST_BASE, 0x08000000
+    .endif
+    .ifndef GIC_CPU_BASE
+    .equ  GIC_CPU_BASE, 0x08010000
+    .endif
+    .ifndef GIC_NUM_IRQ
+    .equ  GIC_NUM_IRQ, 288
+    .endif
+    .ifndef GIC_IGROUPR_WORDS
+    .equ  GIC_IGROUPR_WORDS, 9
+    .endif
+    .ifndef GIC_NUM_CPU
+    .equ  GIC_NUM_CPU, 1
+    .endif
+
     .section .text
     .globl _start
 
@@ -763,6 +788,117 @@ _start:
     adr   x0, vectors
     msr   vbar_el3, x0
     isb
+
+.ifdef GIC_SECURE
+    /*
+     * The secure world's interrupt controller setup, which this machine does not
+     * have and which the payload cannot do for itself.
+     *
+     * `-M virt,secure=on` gives the machine a TZ-aware GIC (`hw/arm/virt.c:754`)
+     * and nothing ever runs securely on it, so `arm_gic_common_reset_hold` takes
+     * `resetprio = 0` and leaves every interrupt in Group 0
+     * (`arm_gic_common.c:279-286`) - and a non-secure access cannot move one,
+     * because `GICD_IGROUPR` is RAZ/WI for it (`arm_gic.c:1215-1219`). So the
+     * payload's own GIC driver could not perform this if it tried, and it does
+     * not try: `ArmGicV2Dxe.c` contains no `ICDIGROUPR` write at all, because on
+     * the board the secure world groups the interrupts before the non-secure
+     * payload starts. These three stores are what QEMU's own minimalist firmware
+     * performs in that situation - the path `arm_gic_common_linux_init` arms for
+     * a kernel booted straight into NonSecure - plus the one thing that path does
+     * not perform and that the non-secure world cannot perform for itself.
+     *
+     * One, every implemented interrupt's priority to 0x80. That is `resetprio`
+     * with `irq_reset_nonsecure` set, which is what `arm_gic_common.c:247` gives
+     * the mask and `:300-302` the per-interrupt priorities. 0x80 is the value
+     * whose non-secure view is a priority at all: for an interrupt in Group 1 the
+     * non-secure read is `(prio << 1) & 0xff` (`arm_gic.c:683-694`), so 0x80 reads
+     * back as 0x00 - and the same store made non-securely would land as
+     * `0x80 | (val >> 1)` (`:664-681`), so the payload's own priority writes land
+     * half-scale and its reads of 0x80 land at zero. A priority left at 0 is a
+     * value only the secure side can see, which is why the fill is 0x80 and not 0.
+     * Both mappings are conditioned on the interrupt being in Group 1 (`:667-671`,
+     * `:688-691`), so this paragraph describes the machine this block produces and
+     * not the one it was run on.
+     *
+     * Two, every implemented interrupt into Group 1, which is
+     * `arm_gic_common.c:312-316`'s loop over `GIC_DIST_SET_GROUP`. A non-secure
+     * `ICDISER` write takes only for an interrupt whose group bit is already set
+     * (`arm_gic.c:1256-1259`), so until this is done the payload's enables land
+     * nowhere - and the launcher's `GICD_ISENABLER` words, which are non-secure
+     * reads, are a view of exactly those bits (`:1019-1022`). That is why they have
+     * read zero in every run so far, and it is why they are readable evidence of
+     * the payload's own stores only after this block has run.
+     *
+     * Three, `GICC_PMR` to 0xff on each CPU interface. This one is not in QEMU's
+     * firmware path and it is the one that decides whether a line can be raised at
+     * all: `gic_update_internal` sets the CPU's IRQ line only when
+     * `best_prio < priority_mask` (`arm_gic.c:200`), the mask resets to
+     * `resetprio` - zero here - and a *non-secure* write to the mask is ignored
+     * while it is in the lower half (`:697-709`). So with the mask at zero the
+     * payload's own `ICCPMR 0xff` cannot repair it, and nothing is delivered
+     * however the groups are set. The two reasons are separate and either one
+     * alone stops the machine.
+     *
+     * NS is still 0 in `SCR_EL3` while this runs, which is why the block is here
+     * rather than beside the stage-2 setup below: these are secure accesses, and
+     * the same `GICC_PMR` store made after `scr_el3` is a non-secure write to a
+     * mask in the lower half - the write the controller ignores, which is the
+     * whole point of the third store.
+     *
+     * What the payload keeps is its own half of the interface: the distributor's
+     * Group-1 enable and the CPU interface's, which are the two bits a non-secure
+     * writer may set (`arm_gic.c:1202-1209` for `GICD_CTLR`, `:748-757` for
+     * `GICC_CTLR`) and which 4.204 measured arriving. This block does not touch
+     * them, and a run under it that found them clear would be a payload that never
+     * enabled either one.
+     */
+    mov   x1, #GIC_DIST_BASE
+    add   x2, x1, #0x400            /* ICDIPR0: one byte per interrupt */
+    mov   w3, #0x80
+    mov   w4, #GIC_NUM_IRQ
+gic_prio:
+    strb  w3, [x2], #1
+    subs  w4, w4, #1
+    b.ne  gic_prio
+
+    add   x2, x1, #0x80             /* IGROUPR0: one bit per interrupt */
+    mov   w3, #-1
+    mov   w4, #GIC_IGROUPR_WORDS
+gic_group:
+    str   w3, [x2], #4
+    subs  w4, w4, #1
+    b.ne  gic_group
+
+    mov   x2, #GIC_CPU_BASE
+    mov   w3, #0xff
+    mov   w4, #GIC_NUM_CPU
+gic_pmr:
+    str   w3, [x2, #4]              /* GICC_PMR, secure bank */
+    add   x2, x2, #0x1000           /* the next CPU interface */
+    subs  w4, w4, #1
+    b.ne  gic_pmr
+    dsb   sy
+
+    /*
+     * The two registers the launcher reads non-securely, read here securely, into
+     * `s2_diag` behind the four the stage-2 half writes. The same addresses and
+     * two different answers, neither of which is this file's arithmetic: from here
+     * `GICD_IGROUPR0` returns the group bits themselves and `GICC_PMR` the mask,
+     * while the launcher's `pmemsave` gets `0` for the first by definition
+     * (`arm_gic.c:988-993`) and the non-secure view of the second. A split between
+     * the two is what makes "the write happened" and "the reader's zero is the
+     * view" separable statements rather than one claim read twice.
+     */
+    .if  ZERO_MEM
+    adr   x2, s2_diag
+    mov   x3, #GIC_DIST_BASE
+    ldr   w4, [x3, #0x80]
+    str   x4, [x2, #32]
+    mov   x3, #GIC_CPU_BASE
+    ldr   w4, [x3, #4]
+    str   x4, [x2, #40]
+    .endif
+.endif
 
     /*
      * SCR_EL3. NS=1 so the lower exception levels are Non-secure, RW=1 so EL2 is
@@ -1111,7 +1247,10 @@ smc_handler:
     .globl s2_diag
     .org  S2_DIAG_OFF
 s2_diag:
-    .space 32
+    /* 0x40 bytes to SEED_DIAG_OFF, so the two `stp` pairs above and the two
+     * words the GIC_SECURE block stores behind them are the whole slot, and
+     * there is no room for a seventh. */
+    .space 48
 
     /*
      * What SEED_SMEM actually wrote: the two pool addresses, the pointer as the

@@ -126,6 +126,18 @@ STAGE2_BLOCK = 0x200000
 # hole the third window's IPA lands in.
 MACHINE_GIC_BASE = 0x08000000
 
+# How much of that controller there is, and how many CPU interfaces, both read off
+# the machine rather than remembered: `GICD_TYPER` byte 0 is `(num_irq / 32) - 1 |
+# (num_cpu - 1) << 5` (`arm_gic.c:970-973`), and this machine's own read-back is
+# 0x408 - ITLinesNumber 8, CPU count field 0. So 288 interrupts, nine 32-bit
+# register words, one CPU interface, which is what the stub programs from EL3 when
+# `--el3-gic-secure` is on and what the header checks its own read-back against: a
+# wrapped word or a missing CPU interface would be a step of eight interrupts
+# mislabeled, and that is a comparison this file can make instead of asserting.
+MACHINE_GIC_NUM_IRQ = 288
+MACHINE_GIC_WORDS = MACHINE_GIC_NUM_IRQ // 32
+MACHINE_GIC_NUM_CPU = 1
+
 # The board windows `-M virt` implements itself, and where it puts them. A region
 # named here is *not* pointed at the pool: the 2 MB stage-2 block it occupies is
 # pointed at the machine's own device, so the guest's register accesses reach
@@ -594,14 +606,18 @@ def smem_region(pkg):
 # the spacing the board uses too, and that spacing is exactly why one 2 MB block
 # alias can serve both.
 #
-# The four that matter most. `GICD_ISENABLER0` word 0 holds the enable bits for
-# every interrupt ID below 32 - which is every PPI and SGI, and the ARM generic
-# timer is a PPI - so it is where the payload's own numbering would show. And the
-# caveat that came out of the first run with real hardware behind these rows:
+# The three that matter most. The enable set over the machine's whole interrupt
+# range, because word 0 holds the bits for every interrupt ID below 32 - which is
+# every PPI and SGI, and the ARM generic timer is a PPI - so it is where the
+# payload's own numbering would show, and the SPIs above it are where a
+# controller's line lives if the payload registers one at all. The pending set,
+# which says which of them the machine has raised. And the priority mask, which
+# without a secure world's help decides on its own that nothing is ever delivered.
+# The caveat that came out of the first run with real hardware behind these rows:
 # `pmemsave` carries QEMU's unspecified transaction attributes and this machine has
 # the security extensions on (`-M virt,secure=on` -> `hw/arm/virt.c:754`), so every
 # word below is read as a NON-SECURE access. `GICD_IGROUPR` is RAZ/WI for such an
-# access by definition (`arm_gic.c:988-993`), `GICD_ISENABLER0` and `GICD_ISPENDR0`
+# access by definition (`arm_gic.c:988-993`), `GICD_ISENABLER` and `GICD_ISPENDR`
 # return only the Group-1 bits (`:1019-1022`), and a priority mask in the lower half
 # reads zero (`:712-725`) - so a zero in any of those rows is the non-secure view
 # and is *not* proof that the payload wrote nothing. `GICD_ISPENDR0` otherwise says
@@ -610,21 +626,75 @@ def smem_region(pkg):
 # no amount of reasoning about the firmware's PCDs can tell those two apart from
 # the guest's side. What *does* separate "the writes arrived and were refused" from
 # "the writes never happened" is the pair of words that are non-secure-writable
-# anyway - `GICD_CTLR`'s Group-1 enable bit (`:1200-1209`) and `GICC_CTLR`'s
-# (`:745-763`) - because those two are the ones that read back set.
+# anyway - `GICD_CTLR`'s Group-1 enable bit (`:1202-1209`) and `GICC_CTLR`'s
+# (`:748-757`) - because those two are the ones that read back set.
 GIC_DIST_WORDS = ((0x000, "GICD_CTLR"), (0x004, "GICD_TYPER"),
                   (0x008, "GICD_IIDR"), (0x080, "GICD_IGROUPR0"),
-                  (0x100, "GICD_ISENABLER0"), (0x180, "GICD_ICENABLER0"),
-                  (0x200, "GICD_ISPENDR0"), (0x280, "GICD_ICPENDR0"),
+                  (0x180, "GICD_ICENABLER0"),
+                  (0x280, "GICD_ICPENDR0"),
                   (0x300, "GICD_ISACTIVER0"), (0xC00, "GICD_ICFGR0"),
-                  (0xC04, "GICD_ICFGR1"))
+                  (0xC04, "GICD_ICFGR1")) + tuple(
+                      # The enable and pending sets over the machine's whole
+                      # interrupt range and not only word 0. Word 0 is where the
+                      # firmware's own numbering would show, because every PPI and
+                      # SGI is in it and the ARM generic timer is a PPI; the words
+                      # above it are the SPIs, which is where a controller's line
+                      # lives if the firmware registers one at all. Reading one
+                      # word and not the rest would make a zero ambiguous between
+                      # "not enabled" and "not read".
+                      (0x100 + 4 * i, f"GICD_ISENABLER{i}")
+                      for i in range(MACHINE_GIC_WORDS)) + tuple(
+                      (0x200 + 4 * i, f"GICD_ISPENDR{i}")
+                      for i in range(MACHINE_GIC_WORDS))
 GIC_CPU_WORDS = ((0x000, "GICC_CTLR"), (0x004, "GICC_PRIMASK"),
                  (0x008, "GICC_BPR"), (0x00C, "GICC_IAR"),
                  (0x014, "GICC_RPR"), (0x018, "GICC_HPPIR"))
 
 
+def gic_intids(gw, kind):
+    """The interrupt IDs the machine's own enable or pending set holds.
+
+    `kind` is `ISENABLER` or `ISPENDR`. These are non-secure reads, so on a
+    TZ-aware GIC what comes back is the Group-1 bits only (`arm_gic.c:1019-1022`)
+    - which under `--el3-gic-secure` is every interrupt, because the stub put them
+    all in Group 1 before the payload started, and without that flag is nothing at
+    all, every bit being Group 0. The two readings of the same rows mean different
+    things and the header says which one it is holding.
+    """
+    v = 0
+    for i in range(MACHINE_GIC_WORDS):
+        v |= gw[f"GICD_{kind}{i}"] << (32 * i)
+    return [i for i in range(MACHINE_GIC_NUM_IRQ) if v >> i & 1]
+
+
+def gic_set_words(gw, kind):
+    """Those words as the machine holds them, high word first."""
+    return " ".join(f"{gw[f'GICD_{kind}{i}']:08x}"
+                    for i in range(MACHINE_GIC_WORDS - 1, -1, -1))
+
+
+def intids(ids):
+    """An interrupt-ID list as text, or `none` when it is empty."""
+    return ", ".join(str(i) for i in ids) or "none"
+
+
+GIC_PRIO_OFF = 0x400
+"""`GICD_IPRIORITYR0` - one byte per interrupt, the machine's whole interrupt
+range in one read. Read as a range and not as words because 72 monitor round
+trips to say the same thing is a cost with no answer in it, and because the
+question it answers is about individual bytes: a non-secure read of an interrupt's
+priority is `(prio << 1) & 0xff` (`arm_gic.c:683-694`), so a byte the payload's own
+driver wrote reads back as that value with its low bit cleared and a `0x80` put
+there from the secure side reads back as `0x00`."""
+
+
 def machine_gic(mon):
-    """The machine's GIC registers, or None if the read failed.
+    """`(words, priorities)` for the machine's GIC, or None if the read failed.
+
+    `words` maps each named 32-bit register below to its value -- a dict, because
+    every caller asks for `gw["GICD_ISENABLER3"]` by name and the order of the
+    names carries no meaning once they are read -- and `priorities` is the whole
+    `GICD_IPRIORITYR` range as bytes, one per interrupt.
 
     Two physical reads and no interpretation: the distributor's first page at the
     machine's own base and the CPU interface's first page 64 KB above it, plus the
@@ -634,7 +704,7 @@ def machine_gic(mon):
     """
     scratch = tempfile.mkdtemp(prefix="qemu-gic-")
     try:
-        got = []
+        got = {}
         for base, off, name in (
                 [(MACHINE_GIC_BASE, off, name) for off, name in GIC_DIST_WORDS]
                 + [(MACHINE_GIC_BASE + 0x10000, off, name)
@@ -646,12 +716,19 @@ def machine_gic(mon):
                 blob = fh.read()
             if len(blob) < 4:
                 return None
-            got.append((name, struct.unpack_from("<I", blob, 0)[0]))
+            got[name] = struct.unpack_from("<I", blob, 0)[0]
+        dump = os.path.join(scratch, "prio.bin")
+        mon.cmd(f'pmemsave {MACHINE_GIC_BASE + GIC_PRIO_OFF:#x}'
+                f' {MACHINE_GIC_NUM_IRQ} "{dump}"', timeout=10.0)
+        with open(dump, "rb") as fh:
+            prio = fh.read()
+        if len(prio) < MACHINE_GIC_NUM_IRQ:
+            return None
     except (OSError, SystemExit):
         return None
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return got
+    return got, prio
 
 
 def real_aliases(regions, on):
@@ -740,7 +817,7 @@ def aop_block_for(plan, ipa, rec_off):
 
 
 def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None,
-                   aop=None, alias=None, pages=None):
+                   aop=None, alias=None, pages=None, gic_secure=False):
     """Assemble `qemu-el3-stub.S` to the addresses the run will use.
 
     Every address the stub has to agree with is a `--defsym` and not a `.set` in
@@ -793,6 +870,16 @@ def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None,
     slot 2 at all, and a rung that turns both on at once cannot say which of the
     two moved the log. The stub's own header has the argument for why the word is
     a pointer.
+
+    `gic_secure` turns GIC_SECURE on, which is the one flag here that changes the
+    *machine* rather than the guest's view of it: the stub programs the
+    distributor and the CPU interface from EL3, before `SCR_EL3.NS` is set, with
+    what a secure world programs them with and this machine's own reset does not
+    (`arm_gic_common.c:279-318`). It takes addresses and counts as defsyms like
+    everything else - the machine's GIC base, its CPU interface base, and how many
+    interrupts and CPU interfaces `MACHINE_GIC_NUM_IRQ` and `MACHINE_GIC_NUM_CPU`
+    say there are - so the stub cannot be assembled against a machine other than
+    the one the header reads back.
     """
     src = os.path.join(REPO, "tools", "qemu-el3-stub.S")
     asm = shutil.which("aarch64-linux-gnu-as")
@@ -879,6 +966,15 @@ def build_el3_stub(load_addr, out, zero_mem=False, plan=None, seed=None,
         include = ["-I", os.path.dirname(inc)]
         defsym += ["--defsym", "ZERO_MEM=1",
                    "--defsym", f"S2_MOVED_IPA={ZERO_MEM_IPA:#x}"]
+        if gic_secure:
+            defsym += ["--defsym", "GIC_SECURE=1",
+                       "--defsym", f"GIC_DIST_BASE={MACHINE_GIC_BASE:#x}",
+                       "--defsym",
+                       f"GIC_CPU_BASE={MACHINE_GIC_BASE + 0x10000:#x}",
+                       "--defsym", f"GIC_NUM_IRQ={MACHINE_GIC_NUM_IRQ}",
+                       "--defsym",
+                       f"GIC_IGROUPR_WORDS={MACHINE_GIC_WORDS}",
+                       "--defsym", f"GIC_NUM_CPU={MACHINE_GIC_NUM_CPU}"]
     if seed:
         if not zero_mem:
             die("--el3-seed-smem writes into a pool block that only"
@@ -978,7 +1074,12 @@ def stub_tables(mon, load_addr, obj, plan, pages=None):
     are none. `l2` is
     the 512 level 2 entries as the guest's memory holds them, `backing` is what the
     address `ZERO_MEM_IPA` is redirected to actually contains, and `diag` is
-    `(vtcr, vttbr, hcr, scr)` as the guest itself read them back.
+    `(vtcr, vttbr, hcr, scr)` as the guest itself read them back - plus, when
+    `--el3-gic-secure` is on, the two words the stub read back out of the machine's
+    controller while it was still the secure side doing the reading: its
+    `GICD_IGROUPR0` and its `GICC_PMR`, which are the same two registers the header
+    reads non-securely and reads differently. The pair is what separates "the write
+    happened" from "the non-secure read is a view that hides it".
 
     This is the read-back that keeps the header honest. A capture that says the
     machine answered a register read has to be able to show the entries that
@@ -1015,9 +1116,9 @@ def stub_tables(mon, load_addr, obj, plan, pages=None):
         with open(dump, "rb") as fh:
             blob = fh.read()
         diag = os.path.join(scratch, "diag.bin")
-        mon.cmd(f'pmemsave {load_addr + diag_off:#x} 32 "{diag}"', timeout=10.0)
+        mon.cmd(f'pmemsave {load_addr + diag_off:#x} 48 "{diag}"', timeout=10.0)
         with open(diag, "rb") as fh:
-            words = struct.unpack("<QQQQ", fh.read(32))
+            words = struct.unpack("<QQQQQQ", fh.read(48))
         blk = ZERO_MEM_IPA & ~(STAGE2_BLOCK - 1)
         backing_at = plan[(blk // STAGE2_BLOCK) & (STAGE2_L2_ENTRIES - 1)]
         backing_at += ZERO_MEM_IPA - blk
@@ -1192,6 +1293,24 @@ def main():
                          " says which is which: this makes the controller real, it"
                          " does not make the *sources* real, and which interrupts"
                          " the payload asks for is still the payload's own PCDs")
+    ap.add_argument("--el3-gic-secure", action="store_true",
+                    help="with --el3-gic-real: do what a secure world does to that"
+                         " controller before the payload starts, because on this"
+                         " machine nothing does. The machine is TZ-aware and has no"
+                         " secure firmware, so its reset leaves every interrupt in"
+                         " Group 0 and the priority mask at zero - and an interrupt"
+                         " in Group 0 is one a non-secure enable never enables,"
+                         " while the mask cannot be moved by a non-secure write in"
+                         " the lower half at all. So the stops are: every"
+                         " interrupt's priority to 0x80, every interrupt into"
+                         " Group 1, and GICC_PMR to 0xff on each CPU interface, all"
+                         " from EL3 before SCR_EL3.NS is set. It is QEMU's own"
+                         " non-secure-boot reset plus the mask, and it is a change"
+                         " to the *machine*, not to the guest: the distributor's"
+                         " and the CPU interface's own enables stay the payload's."
+                         " What the payload's enables are is then readable at last,"
+                         " because a non-secure read of the enable set returns"
+                         " exactly the Group-1 bits")
     ap.add_argument("--el3-seed-smem", action="store_true",
                     help="with --el3-stub --el3-zero-mem: fabricate the small"
                          " structure EnvDxe reads at Apriori slot 2 - the pointer"
@@ -1274,6 +1393,12 @@ def main():
                 " would be dropped and the run would be a plain one whose header"
                 " claimed the machine's own controller was behind the guest's GIC"
                 " window")
+        if args.el3_gic_secure and not args.el3_gic_real:
+            die("--el3-gic-secure programs the machine's own GIC from EL3, and"
+                " without --el3-gic-real the guest's GIC window is a page of pool"
+                " RAM: the writes would land in the pool and the run would be a"
+                " plain one carrying a header that claimed the payload's role in"
+                " delivery had been measured")
         if args.el3_zero_mem:
             # What is redirected is not one address but every region this board's
             # map declares below LOW_MMIO_LIMIT, because the firmware's use of its
@@ -1321,7 +1446,8 @@ def main():
         stub, stub_obj = build_el3_stub(
             args.load_addr,
             os.path.join(tempfile.mkdtemp(prefix="qemu-el3-"), "el3.bin"),
-            args.el3_zero_mem, plan, seed, aop, alias, pages)
+            args.el3_zero_mem, plan, seed, aop, alias, pages,
+            args.el3_gic_secure)
         # The seed's own numbers, read back out of the assembly that folded them
         # into instructions. Every comparison below - the header's, the read-back's
         # and the exit status's - is against these and not against a copy kept in
@@ -1479,6 +1605,12 @@ def main():
     # not readable", which is the same thing to a caller that has to decide whether
     # to believe the run.
     seed_ok, aop_ok = None, None
+    # The stub's own read-backs, and None until the tables they come with have
+    # been read. `gic` can be set while `tables` is not - the controller read is
+    # guarded on the alias and not on the tables - so a header that reached for
+    # the secure pair without this default would be a NameError rather than a
+    # header that says the read failed.
+    diag = None
     with io.open(args.out, "w", encoding="utf-8") as fh:
         fh.write(f"# qemu-panel-read.py - the console off a running firmware's own memory\n")
         fh.write(f"# sampled {screens} screens over {time.time() - t0:.1f}s at"
@@ -1493,6 +1625,25 @@ def main():
                          f" {hashlib.sha256(open(stub, 'rb').read()).hexdigest()},"
                          f" payload at {args.load_addr + STUB_GAP:#x} - an SMC in this"
                          f" log returned an error rather than faulting\n")
+                if args.el3_gic_secure:
+                    fh.write(f"# el3 GIC-SECURE ON, and this run's machine is not"
+                             f" the one every earlier capture here ran on: from"
+                             f" EL3 and before SCR_EL3.NS was set, the stub wrote"
+                             f" every interrupt's priority to 0x80, every interrupt"
+                             f" into Group 1, and GICC_PMR to 0xff on each CPU"
+                             f" interface, and then read two of them back"
+                             f" itself. Those are the three things a secure world"
+                             f" does on a TZ-aware machine and this machine's own"
+                             f" reset does not, because nothing here is the secure"
+                             f" side (`arm_gic_common.c:279-286`) - and they are"
+                             f" what stands between this machine and an interrupt"
+                             f" that is never delivered, whatever the payload"
+                             f" asked for. The distributor's and the CPU"
+                             f" interface's own enables are untouched: those are"
+                             f" the payload's two bits. Everything below is said"
+                             f" about a machine that could deliver, and nothing"
+                             f" below is a statement about the machine the earlier"
+                             f" captures measured. See tools/qemu-el3-stub.S\n")
                 if not args.el3_zero_mem:
                     fh.write(f"# el3 zero-mem off - a physical address virt does not"
                              f" decode stopped this run where the guest's own"
@@ -1890,11 +2041,67 @@ def main():
                                          f" seed wrote; the guest's read and this"
                                          f" write are not the same memory\n")
         if gic is not None and alias:
-            gw = dict(gic)
-
-            def _bits(v):
-                return (", ".join(str(i) for i in range(32) if v >> i & 1)
-                        or "none")
+            gw, gprio = gic
+            typer = gw["GICD_TYPER"]
+            t_irq = ((typer & 0x1f) + 1) * 32
+            t_cpu = ((typer >> 5) & 7) + 1
+            en = gic_intids(gw, "ISENABLER")
+            pe = gic_intids(gw, "ISPENDR")
+            nz = [i for i, v in enumerate(gprio) if v]
+            # The four conditional readings below, taken here rather than inline:
+            # each is a sentence with an f-string of its own in it, and a nested
+            # replacement field is the one thing this file's Python cannot have.
+            if (t_irq, t_cpu) == (MACHINE_GIC_NUM_IRQ, MACHINE_GIC_NUM_CPU):
+                typer_says = ("which is what this read was built around, so the"
+                              " sets below are that wide")
+            else:
+                typer_says = (f"AND NOT THE {MACHINE_GIC_NUM_IRQ} INTERRUPTS AND"
+                              f" {MACHINE_GIC_NUM_CPU} CPU INTERFACE THIS READ WAS"
+                              f" BUILT AROUND - every set below is the wrong"
+                              f" width and none of it may be read")
+            if nz:
+                uniform = (len(nz) == MACHINE_GIC_NUM_IRQ
+                           and len(set(gprio)) == 1)
+                prio_says = (f" - at"
+                             f" {', '.join(f'{i}:{gprio[i]:02x}' for i in nz[:24])}"
+                             f"{f', and {len(nz) - 24} more' if len(nz) > 24 else ''}"
+                             f", which are interrupts whose priority the payload's"
+                             f" own driver wrote, because a non-secure write lands"
+                             f" as 0x80 | (v >> 1) and reads back as v with its low"
+                             f" bit cleared")
+                if uniform:
+                    prio_says += (f" - and all {MACHINE_GIC_NUM_IRQ} at one value is"
+                                  f" not a machine's doing but a driver's default"
+                                  f" written across a range it will never use:"
+                                  f" running this same instrument against a kernel"
+                                  f" of two instructions reads this row as"
+                                  f" all zeros, so every byte here is the payload's"
+                                  f" and the secure fill below is what it wrote"
+                                  f" over")
+            else:
+                prio_says = (", none of them: a 0x80 written from the secure side"
+                             " reads back as 0x00 (`gic_dist_get_priority`'s"
+                             " `(prio << 1) & 0xff`), and a priority the payload"
+                             " never wrote reads back as 0x00 as well, so this row"
+                             " cannot tell the two apart on its own - but it does"
+                             " say the payload wrote no priority byte at all, and"
+                             " this same instrument run against a kernel of two"
+                             " instructions reads it the same way, which is what"
+                             " makes the secure pair below the whole of the"
+                             " evidence that the fill landed")
+            if diag is not None and diag[4] == 0xFFFFFFFF:
+                igroupr_says = ("every interrupt into Group 1, which is what the"
+                                " non-secure read above cannot show")
+            else:
+                igroupr_says = ("NOT the all-ones this run means to have written,"
+                                " so the grouping above is not the one this header"
+                                " describes")
+            if diag is not None and diag[5] == 0xFF:
+                pmr_says = ("raised, which is what makes the PRIMASK row above"
+                            " readable at all")
+            else:
+                pmr_says = ("NOT raised, so the machine this run measured still"
+                            " cannot deliver anything")
 
             # The other end of the alias, read out of the machine rather than
             # described. Every one of these words is reset-zero when the machine
@@ -1909,18 +2116,34 @@ def main():
                      f" words are reset-zero and the payload's image does not hold"
                      f" them, so what is set here was set through the alias\n")
             fh.write(f"#   distributor: CTLR {gw['GICD_CTLR']:#x} TYPER"
-                     f" {gw['GICD_TYPER']:#x} IIDR {gw['GICD_IIDR']:#x} IGROUPR0"
-                     f" {gw['GICD_IGROUPR0']:#x} ISENABLER0"
-                     f" {gw['GICD_ISENABLER0']:#010x} ICENABLER0"
-                     f" {gw['GICD_ICENABLER0']:#010x} ISPENDR0"
-                     f" {gw['GICD_ISPENDR0']:#010x} ICPENDR0"
+                     f" {typer:#x} IIDR {gw['GICD_IIDR']:#x} IGROUPR0"
+                     f" {gw['GICD_IGROUPR0']:#x} ICENABLER0"
+                     f" {gw['GICD_ICENABLER0']:#010x} ICPENDR0"
                      f" {gw['GICD_ICPENDR0']:#010x} ISACTIVER0"
                      f" {gw['GICD_ISACTIVER0']:#010x} ICFGR0"
                      f" {gw['GICD_ICFGR0']:#x} ICFGR1 {gw['GICD_ICFGR1']:#x}"
                      f" - the distributor is"
-                     f" {'on' if gw['GICD_CTLR'] & 1 else 'OFF'}, and the IDs below"
-                     f" 32 it has enabled *in Group 1* are"
-                     f" {_bits(gw['GICD_ISENABLER0'])}\n")
+                     f" {'on' if gw['GICD_CTLR'] & 1 else 'OFF'}, and TYPER says"
+                     f" {t_irq} interrupt(s) and {t_cpu} CPU interface(s)"
+                     f" {typer_says}\n")
+            fh.write(f"#     and ICENABLER0 above is NOT the complement of the enable"
+                     f" set: QEMU reads both windows through one branch and"
+                     f" returns the enabled bits either way"
+                     f" (`arm_gic.c:1009-1027`), so the word is the same set"
+                     f" printed twice and the words below are the ones to"
+                     f" count\n")
+            fh.write(f"#   the enable set, {MACHINE_GIC_WORDS} words from"
+                     f" {MACHINE_GIC_WORDS - 1} down:"
+                     f" {gic_set_words(gw, 'ISENABLER')}\n")
+            fh.write(f"#     enabled in Group 1: {intids(en)}\n")
+            fh.write(f"#   the pending set, the same width:"
+                     f" {gic_set_words(gw, 'ISPENDR')}\n")
+            fh.write(f"#     pending: {intids(pe)}\n")
+            fh.write(f"#   and the priority bytes, one per interrupt from 0, as a"
+                     f" NON-SECURE read of GICD_IPRIORITYR0"
+                     f" ({MACHINE_GIC_BASE + GIC_PRIO_OFF:#x}):"
+                     f" {len(nz)} of {MACHINE_GIC_NUM_IRQ} are not zero"
+                     f"{prio_says}\n")
             fh.write(f"#   CPU interface at {MACHINE_GIC_BASE + 0x10000:#x}, which is"
                      f" where IPA page 0 was aliased: CTLR {gw['GICC_CTLR']:#x}"
                      f" PRIMASK {gw['GICC_PRIMASK']:#x} BPR {gw['GICC_BPR']:#x}"
@@ -1929,45 +2152,89 @@ def main():
                      f" {'on' if gw['GICC_CTLR'] & 1 else 'OFF'}, and an IAR of"
                      f" 0x3ff is the \"no interrupt to give you\" the GICv2 returns,"
                      f" so a value other than that is one the machine had\n")
-            fh.write(f"#   and the board's second window, APSS_GIC500_GICR, which"
+            fh.write(f"#     and PRIMASK is the word that decides whether any of them"
+                     f" can ever be delivered: `gic_update_internal` raises the"
+                     f" CPU's line only when the best priority is below it"
+                     f" (`arm_gic.c:200`), it resets to zero on this machine"
+                     f" because nothing here is the secure side"
+                     f" (`arm_gic_common.c:279-286`), and a non-secure write to it"
+                     f" is refused while it sits in the lower half (`:697-709`) -"
+                     f" so the payload's own ICCPMR 0xff could not repair it. The"
+                     f" non-secure view of the mask is 0xfe when it is 0xff, 0x00"
+                     f" when it is 0 or 0x80, and nothing else, which is why a 0"
+                     f" here is the stop and a 0xfe is not\n")
+            if args.el3_gic_secure and diag is not None:
+                fh.write(f"#   and the same two registers read the other way, by"
+                         f" the stub itself while it was still the secure side and"
+                         f" before SCR_EL3.NS was set, out of its own 0x1f00 slot:"
+                         f" GICD_IGROUPR0 {diag[4]:#x} and GICC_PMR"
+                         f" {diag[5]:#x} - written by the EL3 block this run"
+                         f" assembled in ({igroupr_says}), and the mask"
+                         f" ({pmr_says}). A zero in the non-secure row above with"
+                         f" a value here is the view and the register, side by"
+                         f" side, and not one claim read twice\n")
+            else:
+                fh.write(f"#   and nothing raised that mask from the secure side in"
+                         f" this run, because --el3-gic-secure was not passed: the"
+                         f" two registers are left exactly as the machine's own"
+                         f" non-secure reset leaves them, and the PRIMASK row above"
+                         f" is then a statement about this machine and not about"
+                         f" the payload\n")
+            fh.write(f"#   the board's second window, APSS_GIC500_GICR, which"
                      f" shares the block: {MACHINE_GIC_BASE + 0x60000:#x} holds"
                      f" {gw['GICR window (aliased)']:#010x}, which a GICv2 has"
                      f" nothing at - the redistributor is a GICv3 idea and this"
                      f" machine is a GICv2, so the payload's V2 path never reads it\n")
-            # Three rules for reading the rows above. The first is a limit of the
+            # Four rules for reading the rows above. The first is a limit of the
             # read itself, and it is the one that came out of the first run with
             # real hardware behind these rows: `pmemsave` carries QEMU's
             # unspecified attributes and this machine has the security extensions
             # on, so every word was read as a NON-SECURE access. `GICD_IGROUPR` is
-            # RAZ/WI for such an access by definition, `GICD_ISENABLER0` and
-            # `GICD_ISPENDR0` return only the Group-1 bits and a priority mask in
+            # RAZ/WI for such an access by definition, `GICD_ISENABLER` and
+            # `GICD_ISPENDR` return only the Group-1 bits and a priority mask in
             # the lower half reads zero - so the zeros above are the non-secure view
-            # and not proof that the payload wrote nothing. The second is the one
-            # that matters for the firmware's own claim: `PcdArmArchTimerSecIntrNum`
-            # and `PcdArmArchTimerIntrNum` are 17 and 18 in this platform
-            # (`BitraPkg.dsc.inc:51-52`) while `-M virt` raises its generic timer as
-            # PPIs 13 and 14, INTIDs 29 and 30, so an enabled bit at 17 or 18 with a
-            # pending bit at 29 or 30 is a delivered interrupt the payload did not
-            # register for. The third is a limit of the instrument: reading GICC_IAR
-            # through the monitor is a real read of the register, and on this machine
-            # that acknowledges, so the value above is what was pending when the run
-            # ended and the read itself may have taken one away
-            fh.write(f"#   read with three rules, and the first is the one that"
+            # and not proof that the payload wrote nothing. The second is what makes
+            # the enable set mean anything at all: the Group-1 bits in it are the
+            # payload's own enables only under `--el3-gic-secure`, because until
+            # something groups the interrupts a non-secure enable lands nowhere, and
+            # the row is then empty whatever the payload asked for. The third is the
+            # one that matters for the firmware's own claim:
+            # `PcdArmArchTimerSecIntrNum` and `PcdArmArchTimerIntrNum` are 17 and 18
+            # in this platform (`BitraPkg.dsc.inc:51-52`) while `-M virt` raises its
+            # generic timer as PPIs 13 and 14, INTIDs 29 and 30, so an enabled bit
+            # at 17 or 18 with a pending bit at 29 or 30 is a delivered interrupt
+            # the payload did not register for. The fourth is a limit of the
+            # instrument: reading GICC_IAR through the monitor is a real read of the
+            # register, and on this machine that acknowledges, so the value above is
+            # what was pending when the run ended and the read itself may have taken
+            # one away
+            fh.write(f"#   read with four rules, and the first is the one that"
                      f" decides how the zeros above may be used: `pmemsave`"
                      f" carries QEMU's unspecified attributes while this machine has"
                      f" the security extensions on, so every word above is a"
-                     f" non-secure view - IGROUPR is RAZ/WI for one, ISENABLER0 and"
-                     f" ISPENDR0 return only Group-1 bits, and a priority mask in"
+                     f" non-secure view - IGROUPR is RAZ/WI for one, the enable and"
+                     f" pending sets return only Group-1 bits, and a priority mask in"
                      f" the lower half reads zero, so none of those zeros says the"
                      f" payload wrote nothing; what does say its writes arrived is"
                      f" the pair of words that are non-secure-writable anyway,"
                      f" GICD_CTLR's Group-1 enable and GICC_CTLR's, both of which"
-                     f" read back set. Second: BitraPkg sets"
+                     f" read back set. Second: the enable set's Group-1 bits are the"
+                     f" payload's own enables *only* under --el3-gic-secure, because"
+                     f" until a secure world groups the interrupts a non-secure"
+                     f" enable lands nowhere; without that flag the rows are empty"
+                     f" whatever the payload asked for. Third: BitraPkg sets"
                      f" PcdArmArchTimerSecIntrNum 0x11 and PcdArmArchTimerIntrNum 0x12"
-                     f" while this machine raises its generic timer as the PPIs"
-                     f" 0x1d and 0x1e, so an enable at 17 or 18 with a pending at 29"
-                     f" or 30 is a real interrupt the payload did not register for."
-                     f" Third: reading GICC_IAR is a real read that acknowledges on"
+                     f" while this machine raises its generic timer as the PPIs 0x1e"
+                     f" for the non-secure EL1 physical timer the payload's own"
+                     f" driver programs (USE_PHYSICAL_TIMER = 1), 0x1d for the secure"
+                     f" one, 0x1b for the virtual timer and 0x1a for the"
+                     f" hypervisor's - measured, not inferred from the DTB: a guest"
+                     f" that arms CNTP alone gets INTID 30 and one that arms CNTV"
+                     f" alone gets 27. So an enable at 18 with a pending at 30 is a"
+                     f" real interrupt the payload did not register for, and the 26"
+                     f" and 27 in its enable set are the two timer numbers it did get"
+                     f" right, out of ArmPkg.dec's defaults rather than BitraPkg's."
+                     f" Fourth: reading GICC_IAR is a real read that acknowledges on"
                      f" this machine, so the value above is what was pending when the"
                      f" run ended, not a count of what was raised\n")
         fh.write(f"# region  {name} at {base:#x}, dumping {need:#x} bytes\n")
@@ -2051,7 +2318,7 @@ def main():
                  " - reads as text printed between samples, and the stream is not"
                  " continuous there"))
     if tables:
-        _l1_0, l2, backing, diag = tables
+        _l1_0, l2, backing, diag, _l3 = tables
         wrong = [i for i, pa in sorted(plan.items())
                  if (l2[i] & 0x3) != 0x1
                  or (l2[i] & ~(STAGE2_BLOCK - 1)) != pa]
@@ -2061,43 +2328,66 @@ def main():
         print(f"  as the guest reads them back: VTCR_EL2={diag[0]:#x}"
               f" VTTBR_EL2={diag[1]:#x} HCR_EL2={diag[2]:#x} SCR_EL3={diag[3]:#x}")
     if gic is not None and alias:
-        gw = dict(gic)
-
-        def bits(v):
-            return (", ".join(str(i) for i in range(32) if v >> i & 1)
-                    or "none")
+        gw, gprio = gic
+        en = gic_intids(gw, "ISENABLER")
+        pe = gic_intids(gw, "ISPENDR")
+        nz = [i for i, v in enumerate(gprio) if v]
 
         print(f"gic      the {len(alias)} aliased block(s) are the machine's own"
               f" controller at {MACHINE_GIC_BASE:#x}, not RAM, and it reads back:"
               f" distributor {'on' if gw['GICD_CTLR'] & 1 else 'OFF'}"
               f" (CTLR {gw['GICD_CTLR']:#x} TYPER {gw['GICD_TYPER']:#x} IIDR"
-              f" {gw['GICD_IIDR']:#x}), Group-1 enables below 32 ="
-              f" {bits(gw['GICD_ISENABLER0'])}, Group-1 pending ="
-              f" {bits(gw['GICD_ISPENDR0'])}")
+              f" {gw['GICD_IIDR']:#x}), Group-1 enables"
+              f" {gic_set_words(gw, 'ISENABLER')}, Group-1 pending"
+              f" {gic_set_words(gw, 'ISPENDR')}")
+        print(f"  as interrupt IDs: enabled {intids(en)}; pending {intids(pe)},"
+              f" and {len(nz)} of {MACHINE_GIC_NUM_IRQ} priority byte(s) are not"
+              f" zero")
+        if len(nz) == MACHINE_GIC_NUM_IRQ and len(set(gprio)) == 1:
+            print(f"  and all {MACHINE_GIC_NUM_IRQ} of those bytes hold the SAME"
+                  f" value ({gprio[0]:#04x}), which is a driver's default written"
+                  f" across a range it will never use and not a machine's doing:"
+                  f" the same instrument against a two-instruction kernel reads"
+                  f" this row as all zeros")
         print(f"  CPU interface {'on' if gw['GICC_CTLR'] & 1 else 'OFF'}"
               f" (CTLR {gw['GICC_CTLR']:#x} PRIMASK {gw['GICC_PRIMASK']:#x} BPR"
               f" {gw['GICC_BPR']:#x} IAR {gw['GICC_IAR']:#x} RPR"
               f" {gw['GICC_RPR']:#x} HPPIR {gw['GICC_HPPIR']:#x}); the"
               f" redistributor window reads"
               f" {gw['GICR window (aliased)']:#x}, which a GICv2 has nothing at")
-        print(f"  every word above is a NON-SECURE view - `pmemsave` carries QEMU's"
-              f" unspecified attributes and this machine has the security"
-              f" extensions on - so IGROUPR is RAZ here, the enable and pending"
-              f" sets hold only Group-1 bits, and a priority mask in the lower half"
-              f" reads zero: those zeros say nothing about what the payload wrote,"
-              f" and the two words that are non-secure-writable anyway (CTLR's"
-              f" Group-1 enable in both windows) read back set, which is what says"
-              f" its writes arrived and were refused")
-        if gw["GICD_ISENABLER0"] & ~gw["GICD_ISPENDR0"] & 0xFFFFFFFF:
-            print(f"  enabled and not pending:"
-                  f" {bits(gw['GICD_ISENABLER0'] & ~gw['GICD_ISPENDR0'])} - a line"
-                  f" asked for and not raised is the one thing that separates a"
-                  f" controller that works from a number that does not match")
-        if (gw["GICD_ISPENDR0"] & 1 << 29) or (gw["GICD_ISPENDR0"] & 1 << 30):
-            print(f"  and the pending set includes 29/30, which is this machine's"
-                  f" generic timer, while BitraPkg registers 17 and 18 - the"
+        if diag is not None and args.el3_gic_secure:
+            print(f"  and the stub's own SECURE reads of two of those registers,"
+                  f" out of its 0x1f00 slot: GICD_IGROUPR0 {diag[4]:#08x},"
+                  f" GICC_PMR {diag[5]:#x} - the non-secure zero above and the"
+                  f" register itself, side by side")
+        else:
+            print(f"  every word above is a NON-SECURE view - `pmemsave` carries"
+                  f" QEMU's unspecified attributes and this machine has the"
+                  f" security extensions on - so IGROUPR is RAZ here, the enable"
+                  f" and pending sets hold only Group-1 bits, and a priority mask"
+                  f" in the lower half reads zero: those zeros say nothing about"
+                  f" what the payload wrote, and the two words that are"
+                  f" non-secure-writable anyway (CTLR's Group-1 enable in both"
+                  f" windows) read back set, which is what says its writes"
+                  f" arrived and were refused")
+        if en and not pe:
+            print(f"  enabled and not pending: {intids(en)} - a line asked for"
+                  f" that the machine never raised is the difference between a"
+                  f" controller that delivers and a number that does not match")
+        if any(i in (29, 30) for i in pe):
+            print(f"  and the pending set includes 29/30, the two EL1 physical"
+                  f" timers, of which 30 is the non-secure one this payload's own"
+                  f" driver programs (USE_PHYSICAL_TIMER = 1) while BitraPkg tells"
+                  f" it that interrupt is 18 and ArmPkg's default is 30 - the"
                   f" interrupt is real and its number is not the one the payload"
                   f" asked for")
+        if gw["GICC_PRIMASK"] == 0:
+            print(f"  PRIMASK reads 0, and that is the stop that comes before the"
+                  f" numbering: `gic_update_internal` raises the CPU's line only"
+                  f" when the best priority is below the mask (`arm_gic.c:200`),"
+                  f" so with the mask at zero nothing on this machine is"
+                  f" deliverable whatever the payload enabled and whatever number"
+                  f" it used")
     if seed:
         smem_base, smem_size = seed[1], seed[2]
         if seed_got is None:

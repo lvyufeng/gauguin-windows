@@ -1829,6 +1829,33 @@ Work:
 > `HUB NOTIFY` exactly once at 18.2 s, the wall answered by hand at 43.6 s, digest rows unchanged. SPMI stays blank
 > as the directive said: no SPMI arbiter on `-M virt` to alias to. Nothing was flashed, `UsbConfigDxe.efi` is still
 > `sha256 6943cc61…`. See `docs/08` step 4.204.
+> **4.205: the instrument delivers — one interrupt per leg, INTID 30 for `CNTP` and 27 for `CNTV`, counted by the
+> guest's own handler.** The stub gained a `GIC_SECURE` block (behind the reader's `--el3-gic-secure`, `:792` in
+> `tools/qemu-el3-stub.S`) that runs before `scr_el3` is written and does what `arm_gic_common_linux_init` would do
+> if `virt.c` called it: `0x80` to all 288 priority bytes, `0xFFFFFFFF` to all 9 `IGROUPR` words, `0xff` to
+> `GICC_PMR`, then `dsb sy` and two **secure** read-backs into `s2_diag` words 4 and 5 — never touching `GICD_CTLR`,
+> because the payload's own write is what turns Group-1 forwarding on. A 4,236-byte non-secure EL1 guest
+> (`work/out/qemu-probe-4.205/gic-selfirq.S`) repeats the payload's four writes, enables all four timer PPIs, arms
+> **one** timer, waits masked on the machine's own `GICD_ISPENDR` bit, unmasks, and in its handler reads `GICC_IAR`,
+> writes `GICC_EOIR` and clears the taken INTID's enable. Measured: `ICENABLER0 = 0x2c00ffff` with `pending: 30` on
+> the `CNTP` leg and `0x6400ffff` with `pending: 27` on the `CNTV` leg, i.e. **exactly one delivery per leg**, with
+> the delivered INTID provably the one taken because it is the only INTID the guest enabled that is missing from
+> that leg's Group-1 set; `GICC_PRIMASK 0xfe`, `GICC_PMR 0xff` and `GICD_IGROUPR0 0xffffffff` alongside. **The
+> INTIDs are pinned by measurement**: the DTB's `/timer` order is S_EL1, NS_EL1, VIRT, NS_EL2 (`virt.c:362-378`),
+> `intidbase = NUM_IRQS + i*GIC_INTERNAL` makes `INTID = 16 + PPI` (`virt.c:810-812`) and `[GTIMER_PHYS] =
+> ARCH_TIMER_NS_EL1_IRQ` (`virt.c:817-820`), giving **29 secure EL1, 30 non-secure EL1, 27 virtual, 26 EL2** — which
+> **corrects 4.204's parenthetical**, where 29/30 and 27/26 were swapped. **Why the payload still sees nothing is a
+> number**: its `GICD_ISENABLER0 = 0x0c06ffff` (`0..15, 17, 18, 26, 27`) is precisely `TimerDxe.c:401/409/413/416`'s
+> four registrations, `ArmPkg.dec:264-267` defaults them 29/30/26/27 and `BitraPkg.dsc.inc:51-52` overrides
+> `Sec|0x11` and `Int|0x12`, while `USE_PHYSICAL_TIMER = 1` (`BitraPkg.dsc.inc:10`) makes `TimerDxe.c:161-166`
+> program `CNTP` — the machine raises **30**, a number the payload registered nothing for; the next run changes
+> `PcdArmArchTimerIntrNum` 18 → 30. The enable row is the Group-1-enabled set rather than RAZ, so `ICENABLER0` is
+> the same set printed twice and not its complement (`arm_gic.c:1009-1027`), correcting 4.204's *"only the Group-1
+> bits"* framing; the SGIs 0-15 are a reset default (`arm_gic_common.c:295-299`); an isolation run with no payload
+> reads **0 of 288** priority bytes non-zero, so every `0x80` in the payload run is the payload's own; and the
+> carried open item that the delivery guest's PPI enables *"did not land"* is withdrawn — it was a 16-bit-shifted
+> literal (`0x6C00`) in that file, not a property of the machine. SPMI stays blank, nothing was flashed,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.205.
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

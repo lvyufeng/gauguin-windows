@@ -42645,3 +42645,148 @@ taken from this host at all, and `先读屏，再刷下一次` still forbids boo
 storage was written, so `userdata`, the partition table and the firmware LUN are all as they were. Nothing was
 flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.205 — the machine delivers: a guest that enables the PPIs this machine's own timer raises takes one interrupt per leg and acknowledges it, and the payload's silence is a number rather than a dead controller — its enable set is `TimerDxe`'s four registrations, and the interrupt its own timer raises at 30 is the one it registered at 18
+
+`tools/qemu-el3-stub.S` already carried the secure half (`--el3-gic-secure`, the block at `:792`) and the reader
+already printed the two read-backs it makes; what this step adds is the run that asks the question that half
+exists for. Which one interrupt arrives, and at which number, was open: 4.204 argued from the machine's reset
+behaviour to a controller that cannot deliver, and the payload run it left behind has an enable set and a pending
+set with nothing in common, so it can decide neither half. `work/out/qemu-probe-4.205/gic-selfirq.S` is a
+4,236-byte guest — the payload's own four writes, a vector table, a handler, and a wait — that does what the
+payload's driver does and one thing the payload does not: it enables the four PPIs this machine's own device tree
+names (26, 27, 29 and 30), arms exactly one timer, unmasks, and waits for the interrupt to arrive. Two legs, one
+`--defsym` apart: without `CNTV` it writes `cntp_cval_el0`/`cntp_ctl_el0` (the non-secure EL1 physical timer),
+with it `cntv_cval_el0`/`cntv_ctl_el0` (the virtual one). `run-selfirq.sh` assembles and runs both under
+`--el3-stub --el3-zero-mem --el3-gic-real --el3-gic-secure --seconds 12`, and each leg was run twice with the two
+runs agreeing row for row.
+
+**The guest's result is written where the reader already looks, and it is a trail as well as a result.** The
+distributor's priority bytes are non-secure-writable and a non-secure priority write lands as `0x80 | (v >> 1)`
+and reads back as `v` with its low bit cleared (`gic_dist_set_priority` / `gic_dist_get_priority`,
+`arm_gic.c:664-694`), so an even marker survives a read-back exactly — and `GICD_IPRIORITYR0` was already being
+read 288 bytes wide for this step's own reason (`GIC_PRIO_OFF`, `tools/qemu-panel-read.py:681`). Bytes 8 to 17
+therefore carry: started, 2 × (`CurrentEL >> 2`), `CNTFRQ_EL0` non-zero, `CNTPCT_EL0` non-zero, timer armed, the
+`GICD_ISPENDR` byte for interrupts 24-31 before the arming, the same byte after the wait, then 2 × the delivery
+count and 2 × the first two INTIDs. The isolation run is the control that makes these bytes readable as the
+guest's: a two-instruction kernel on the same instrument reads **0 of 288** priority bytes non-zero with nothing
+pending, so every non-zero byte in a run with this guest in it was written by this guest.
+
+**One interrupt arrived per leg, and both carried the INTID of the timer that was armed.** The physical leg reads
+`ICENABLER0 0x2c00ffff`, `ISPENDR0 0x40000000`, and the trail `8:02 9:02 10:02 11:02 12:02 14:40 15:02 16:3c`; the
+virtual leg reads `ICENABLER0 0x6400ffff`, `ISPENDR0 0x08000000`, and `14:08 15:02 16:36`. Read against the byte
+map above: both ran at **EL1** (`9:02`), both read both counters (`10:02`, `11:02`), both armed a timer (`12:02`),
+neither had anything pending first (`13:00` is absent from the non-zero list), the wait ended with **INTID 30
+pending in the physical leg and 27 in the virtual one** (`14:40` is bit 6 of the 24-31 byte, `14:08` is bit 3),
+the count is **one** (`15:02`), and the first INTID delivered is **30** in one leg and **27** in the other
+(`16:3c` = 2 × 30, `16:36` = 2 × 27). The delivered INTID is the one **missing** from that leg's enable set — 30
+absent from `0x2c00ffff`, 27 absent from `0x6400ffff`, everything else still set — because the handler clears the
+enable of the INTID it took, and the capture's `GICC_IAR 0x3ff` is the "nothing left" the interface returns
+*after* the handler acknowledged it (`GICC_CTLR 0x1 PRIMASK 0xfe`, the secure pair `GICD_IGROUPR0 0xffffffff` /
+`GICC_PMR 0xff` unchanged). Three independent signs of one delivery, none of them a count of what was raised: the
+trail, the cleared enable, and the acknowledged interface.
+
+**So the machine delivers, and the timer numbering is now measured rather than read off the device tree.** `-M
+virt`'s DTB lists `/timer`'s interrupts in the binding's order — secure EL1, non-secure EL1, virtual, EL2 physical
+— as PPIs 13, 14, 11, 10 (`/tmp/virt204.dts`, dumped from this exact machine), and `hw/arm/virt.c:817-820` wires
+the CPU's `GTIMER_PHYS`/`VIRT`/`HYP`/`SEC` outputs to `ARCH_TIMER_NS_EL1_IRQ`, `ARCH_TIMER_VIRT_IRQ`,
+`ARCH_TIMER_NS_EL2_IRQ`, `ARCH_TIMER_S_EL1_IRQ`. With the +16 the DTB's `INTID_TO_PPI` gives INTIDs 29 (secure
+EL1), **30 (non-secure EL1)**, **27 (virtual)** and 26 (EL2 physical) — and the two legs returned exactly 30 for
+`CNTP` and 27 for `CNTV`. 4.204's entry mapped those four numbers the other way round in its parenthetical (`29`
+"non-secure EL1, the one the driver actually programs", `30` "virtual", `26` "secure EL1"); the measurement says
+29 is the secure timer, 30 the non-secure one and 27 the virtual one. Nothing downstream of that sentence changes
+— the payload's pending bit is 30 either way — but the reason it is 30 is now this step's, and it is the number
+ArmPkg ships.
+
+**The payload's enable set is `TimerDxe`'s own four registrations, read back out of the machine.** The payload run
+reads `GICD_ISENABLER0 = 0x0c06ffff` — interrupts 0-15 (the machine's own SGIs, on from reset) plus **17, 18, 26
+and 27** — and `TimerDxe` registers exactly those four: `TimerDxe.c:401` at `PcdArmArchTimerVirtIntrNum`, `:409`
+at `PcdArmArchTimerHypIntrNum`, `:413` at `PcdArmArchTimerSecIntrNum` and `:416` at `PcdArmArchTimerIntrNum`, each
+through `RegisterInterruptSource`, which enables the line in the distributor. `ArmPkg.dec:264-267` defaults those
+four PCDs to **29, 30, 26 and 27** — the machine's numbers, all four — and `BitraPkg.dsc.inc:51-52` overrides two
+of them: `PcdArmArchTimerSecIntrNum|17` and `PcdArmArchTimerIntrNum|18`. So the two registrations that landed on
+this machine's real timer PPIs are the two BitraPkg left alone, and the one interrupt the payload's own timer
+raises was registered under a number the machine never raises. The timer is the physical one and that is platform
+configuration too: `USE_PHYSICAL_TIMER = 1` (`BitraPkg.dsc.inc:10`, `tools/make_uefi_platform.py:187`) resolves
+`ArmGenericTimerCounterLib` to `ArmGenericTimerPhyCounterLib` (`SiliciumPkg.dsc.inc:139-143`), and `TimerDxe` arms
+it through `ArmGenericTimerSetCompareVal` / `EnableTimer` (`TimerDxe.c:161-166`) — `CNTP`, the non-secure EL1
+physical timer, which this machine raises at **30**. The payload's pending set in its own run is `0x00000040` at
+`ISPENDR0`'s fourth byte, which is 30, and 30 is precisely the interrupt `PcdArmArchTimerIntrNum` should have
+said.
+
+**Two claims 4.204 made about the non-secure view are now corrected, and so is one of this project's own carried
+open items.** First: an empty-looking enable set is not a set QEMU empties. `gic_dist_readb`'s Set/Clear Enable
+branch `continue`s each non-Group-1 interrupt and returns `GIC_DIST_TEST_ENABLED` for the rest
+(`arm_gic.c:1009-1027`), and QEMU routes both the Set-Enable and the Clear-Enable windows through that one branch
+— so the row is the Group-1-**enabled** set, and `ICENABLER0` is not its complement but the same word printed
+twice, which is what `0x0c06ffff` and `0xffff060c` are. 4.204's prose called the row "only the Group-1 bits" and
+the set "empty in the non-secure view"; the row was never empty in that run, it names nine of the payload's
+enables, and the reader now prints the non-complementarity as its own header line. Second: the SGI enables in that
+set are the machine's, not the payload's — `arm_gic_common_reset_hold` enables SGI 0-15 and sets them
+edge-triggered while never calling `GIC_DIST_SET_GROUP` (`arm_gic_common.c:295-299`), so they reset into Group 0
+and are invisible in a non-secure read until the payload's own `GICD_CTLR` write turns Group-1 forwarding on.
+Third, and this is this project's own: the carried open item that "the guest's own PPI enables did not land" —
+from this guest's first run, which read an enable set of 0-15 only — was **this file's arithmetic and not the
+machine's**. The enable word at `GICD_ISENABLER0` covers interrupts 0-31, so 26, 27, 29 and 30 are `0x6C000000`,
+and the `0x6C00` that first run wrote named interrupts 10, 11, 13 and 14 — all of them SGIs the machine already
+had enabled, which is why the write looked like it vanished while the payload's identical word write at 17/18
+landed. With the word corrected, all four PPIs land. An instrument that reports a fact about hardware must first
+be able to report a fact about itself, and this one cost a full run to learn.
+
+**What the next step tests, and what would falsify it.** The chain this step leaves is: the payload arms `CNTP`,
+the machine raises 30, `TimerDxe` is registered at 18, so no handler runs for the interrupt that is pending — and
+with no timer interrupt there is no `coreTimerTick`, so no timer event of any kind can fire. The payload's own
+wall is consistent with that: `HUB NOTIFY` fires exactly once (`PollCount 00 → 00` before the routine's own
+increment, so the byte was 01 at the wall) and the poll loop then holds `PollCount = 01` for 25 s with its exit
+test at `>= 6`. The prediction is that changing `PcdArmArchTimerIntrNum` from 18 to 30 in `BitraPkg.dsc.inc` —
+ArmPkg's own value — delivers the tick, and that if the root hub's re-enumeration is driven by a timer event,
+`PollCount` then advances past 01 and the wall opens. The falsifier is the other half of the same run: if the tick
+arrives and the poll still holds, the wall is not timer-driven and the notification that ran once was the last one
+the payload was ever going to get. The phone-side number is architectural rather than this machine's — a GICv3's
+timer PPIs are 26, 27, 29 and 30, which is also what `APSS_GIC600_GICD` at `0x17A00000` is — but that is an
+argument, not a measurement, and it is not made here.
+
+**decides**: that this machine delivers an interrupt to a non-secure EL1 guest once a secure world has grouped the
+interrupts and raised the mask — measured, not argued: one delivery per leg, INTID 30 with `CNTP` armed and 27
+with `CNTV` armed, counted by the guest's own handler, acknowledged through `GICC_IAR`/`GICC_EOIR`, and the
+delivered INTID's enable cleared by that handler (`tools/qemu-panel-read.py`'s rows `enabled in Group 1: 0-15, 26,
+27, 29` / `pending: 30` and `0-15, 26, 29, 30` / `pending: 27`); that the machine's generic-timer PPIs are 29
+(secure EL1), 30 (non-secure EL1), 27 (virtual) and 26 (EL2 physical), measured against the DTB's own order and
+`hw/arm/virt.c:817-820`; that the payload's enable set is `TimerDxe`'s four registrations
+(`TimerDxe.c:401/409/413/416`) against `BitraPkg.dsc.inc:51-52`'s 17 and 18 and `ArmPkg.dec:264-267`'s
+29/30/26/27, and that the interrupt its own physical timer raises at 30 was registered at 18; that the priority
+bytes are a usable record because a non-secure write of an even value reads back exactly (`arm_gic.c:664-694`),
+with the no-payload isolation run reading 0 of 288 as the control; and that the reader's enable row is the
+Group-1-enabled set and `ICENABLER0` is not its complement (`arm_gic.c:1009-1027`). **corrects**: 4.204's
+parenthetical that assigned non-secure EL1 to 29 and virtual to 30 — the measurement puts 30 on the non-secure EL1
+physical timer and 27 on the virtual one; 4.204's claim that the non-secure enable set is "empty" and returns
+"only the Group-1 bits" as though QEMU zeroed the rest; this step's own framing that the payload run could not
+answer the delivery question at all — it could, and the answer is that the two sets are disjoint, with 30 the
+interrupt its own driver asked for; this project's carried open item that the delivery guest's PPI enables "did
+not land", which was a 16-bit-shifted literal in this file and not a property of the machine; the reader's own
+summary sentence that the machine "raises its generic timer as the PPIs 0x1d and 0x1e" (now: 0x1e for the
+non-secure EL1 physical timer this payload programs, 0x1d for the secure one, 0x1b virtual, 0x1a EL2 physical,
+measured two ways); and the reader's `machine_gic` returning a list where every caller indexed by name, which is a
+defect this step introduced and fixed before any row was believed. **does not decide**: whether the payload's hub
+poll is driven by a timer event at all, which is what makes the PCD prediction above testable rather than settled
+— the next run of the payload with the corrected PCD is the experiment; whether the timer PPI numbers on the real
+gauguin GIC-600 are 26, 27, 29 and 30, which is architectural and unmeasured on hardware; whether anything else on
+this payload waits on the timer tick (DXE's event handling, `Stall`, the USB timeouts all route through it, so the
+corrected PCD may move more than the hub); and the frozen-`-S` machine's GDB poke's three values, still carried
+unexplained. **carries the standing limits unchanged**: the thirteen rungs, the SEEDED SMEM word, the AOP
+`0xC3F000C` record and the EL3 stub's three fabricated structures all stand and none of them is touched by this
+step; `0x41E00000` stays retired; the payload is still a **counterfeit** construction-time value, and this step
+changed nothing in it — the payload's bytes, its PCDs and its image are what 4.204 ran; the SPMI window stays
+blank because `-M virt` has no SPMI arbiter to alias to. **not an action**: five runs of the instrument (two
+delivery legs twice, one payload smoke) and no `fastboot` command, no console read from the device, no seed
+written anywhere; the two files this step changed are `tools/qemu-el3-stub.S` (its `.ifndef` defaults and the
+secure block) and `tools/qemu-panel-read.py` (the 288-wide enable and pending sets, the priority range, the secure
+read-back pair and the corrected sentences), and `work/out/qemu-probe-4.205/` holds the guest and its runs.
+**device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+`lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken from
+this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow
+needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb devices` is empty, so no
+screencap can be taken from this host at all, and `先读屏，再刷下一次` still forbids booting the payload before that
+photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
+firmware LUN are all as they were, nothing was flashed, no partition was written, and
+`device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
