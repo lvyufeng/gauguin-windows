@@ -42514,20 +42514,24 @@ write to `GICC_CTLR_EN_GRP1 | EOIMODE_NS`. Both read back as 1, which is the pay
 **The zeros are a non-secure view, and this step had to establish that before they could be read at all.** The
 reader performs its register reads with `pmemsave`, which carries QEMU's unspecified transaction attributes; this
 machine is created with `has-security-extensions` true, because `hw/arm/virt.c:754` sets it from `vms->secure` and
-the command line says `secure=on`. So every word the header prints is read as a **non-secure** access. That the
-read is non-secure is not an assumption: a secure read of `GICD_CTLR` byte 0 returns `s->ctlr` whole (byte 0 alone,
-`arm_gic.c:958-967`), and the payload's non-secure write can only have set bit 1, so a secure read would have
-printed `0x2`. It printed `0x1`. Under that reading the rows say less than they appear to: `GICD_IGROUPR0 = 0x0`
-is **RAZ/WI for a non-secure access by definition** (`arm_gic.c:988-993`, "these RAZ/WI if this is an NS access to
-a GIC with the security extensions") and is not evidence that no interrupt is in Group 1; `GICD_ISENABLER0`,
-`GICD_ISPENDR0` and the active set return **only the Group-1 bits** (`:1019-1022`); and `gic_get_priority_mask`
-(`:712-725`) returns RAZ when the mask sits in the lower half, which is why `GICC_PRIMASK 0x0` is compatible with
-the `0xff` the payload wrote at `ArmGicV2Dxe.c:635`. `GICC_BPR 0x7` is the one of the three CPU-interface words
-that reads back the written value, and the reason is in the same file: BPR is banked and a non-secure read takes
-the non-secure bank (`:1614-1626`), so the `7` the payload wrote at `:632` is what a non-secure read returns. The
-instrument's own comment said `GICD_ISENABLER0` "says *which* interrupts the payload asked for"; on this machine it
-says which *Group-1* interrupts are enabled, and the header, the stdout summary and that comment were corrected in
-this step to say so.
+the command line says `secure=on`. So every word the header prints is read as a **non-secure** access, and so is
+every access the payload itself makes: the stub sets `SCR_EL3.NS` and says why in its own source — "NS=1 so the
+lower exception levels are Non-secure" (`tools/qemu-el3-stub.S:768`, `mov x0, #0x501` at `:777`). The header reads
+that register back as `SCR_EL3=0x531`, whose bit 0 is 1, and bit 0 is the bit `arm_is_secure()` tests. With the
+payload's side pinned that way, the reader's side follows from its own row without assuming it: a non-secure write
+to `GICD_CTLR` byte 0 can only set bit 1, so `s->ctlr` is `0x2`; a secure read returns `s->ctlr` whole (byte 0
+alone, `arm_gic.c:958-967`) and would have printed `0x2`, while a non-secure read returns `extract32(s->ctlr, 1,
+1)`, which is `0x1`. It printed `0x1`. Under that reading the rows say less than they appear to:
+`GICD_IGROUPR0 = 0x0` is **RAZ/WI for a non-secure access by definition** (`arm_gic.c:988-993`: "these RAZ/WI if
+this is an NS access to a GIC with the security extensions") and is not evidence that no interrupt is in Group 1;
+`GICD_ISENABLER0`, `GICD_ISPENDR0` and the active set return **only the Group-1 bits** (`:1019-1022`); and
+`gic_get_priority_mask` (`:712-725`) returns RAZ when the mask sits in the lower half, which is why
+`GICC_PRIMASK 0x0` is compatible with the `0xff` the payload wrote at `ArmGicV2Dxe.c:635`. `GICC_BPR 0x7` is the
+one of the three CPU-interface words that reads back the written value, and the reason is in the same file:
+BPR is banked and a non-secure read takes the non-secure bank (`:1614-1626`), so the `7` the payload wrote at
+`:632` is what a non-secure read returns. The instrument's own comment said `GICD_ISENABLER0` "says *which*
+interrupts the payload asked for"; on this machine it says which *Group-1* interrupts are enabled, and the
+header, the stdout summary and that comment were corrected in this step to say so.
 
 **Why nothing is delivered, with a source for each link.** `-M virt,secure=on` gives the machine a TZ-aware GIC
 (`hw/arm/virt.c:754`), and no secure firmware runs on it. `arm_gic_common_reset_hold` (`arm_gic_common.c:279-286`)
