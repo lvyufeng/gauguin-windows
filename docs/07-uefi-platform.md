@@ -3784,6 +3784,33 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, and no volume with a patched
 > `UsbConfigDxe` has left this host. See `docs/08` step 4.188.
 >
+> **Step 4.189 — the rail vote past the GDSC is `/vcs/vdd_cx`, and it is two registers rather than one.**
+> 4.188 left *"which of the thirteen rail records the FabiaPLL vote belongs to"* **not established**,
+> because `ClockDxe+0x11734` takes its addresses from a **runtime** object while the thirteen static
+> records carry a CC base at `+0x08` and a bitfield at `+0x10`. Reading the object the machine passes —
+> 38e's declared `/pmic/target` suppression kept, one breakpoint at the live `+0x11734` — gives
+> `x0 = 0x9C389598` = `.data` RVA `0x29598`, i.e. **record `0x29590` plus eight**: the caller passes
+> `&record + 8`, past the name slot, and the probe's six qwords are that record's `+0x08`…`+0x30`
+> (`0x100000`, `0x152010`, `1`, `0x2B8D0` relocated to live `0x9C38B8D0`, `0x61`, `0`). Two fields no
+> other record carries pin it — `+0x08 = 0x100000` and `+0x28 = 0x61` each appear exactly once — and the
+> name slot resolves to **`/vcs/vdd_cx`**, the rail string GDSC entry 18 carries at its `+0x48`. The
+> routine sets **bit 0** at `0x152010` (mask = `record+0x18 = 1`; the `w10=0x61` in the probe log is a
+> caller's leftover and is corrected here) and polls **bit 30 of `0x100000`**, 2000 times, via `0x9B00`.
+> Both addresses are in the declared `{"GCC CLK CTL", 0x00100000, 0x00200000}` window and both land in
+> **block 0 → pool `0x40000000`** (`0x100000 → 0x40100000`, `0x152010 → 0x40152010`), and `0x11A004 →
+> 0x4011A004` is 4.188's fabricated word — so **the seed and the failing poll are two offsets in one
+> redirected 2 MB block**, which is the mechanical account of *"the same kind of stop one register down"*.
+> **The caller is named and 4.188 is corrected**: the call is `Clock_SourceOn` at RVA `0x5ECC` through the
+> **trampoline at `0x9A14`** (`[obj+0x18][0x30]` → `0x11734`), one of a family at `0x9A00`/`0x9A14`/`0x9A34`
+> …, so *"no `bl` target is `0x11734`, and none is `0x11E5C`"* is true of `bl` targets and false as a
+> conclusion: an ops-table method is entered by `br`. The 300-second panel reproduces the three rows with
+> the vote breakpoint armed and firing and holds nothing after them, and its header's *328 rows* is 80 too
+> many — rows 83–162 repeat rows 3–82 — so the distinct content is 248 rows against 4.188's 249, agreeing
+> row for row over the tails. **Not established**: whether the bit-30 poll passes on hardware, what
+> `Clock_SourceOn`'s `tbnz` tests, and whether `gNpaClientSS1Bus is NULL` is an absent peer or a second
+> debt. **The next seed is named, not run**: bit 30 at host `0x40100000`. Nothing was flashed, no partition
+> was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.189.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

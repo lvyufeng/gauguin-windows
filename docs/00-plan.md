@@ -1508,6 +1508,44 @@ Work:
 > Which build it is, and why thirteen instruments and not fourteen, are **not established**. See `docs/08`
 > step 4.188.
 >
+> **Step 4.189 — the stop past the GDSC is a rail vote, and 4.188's open question about it is answered.**
+> 4.188 closed with *"which of the thirteen rail records the FabiaPLL vote belongs to"* as **not
+> established**, because the routine at `ClockDxe+0x11734` reads its two addresses out of a **runtime**
+> object (`ldr x8,[x0,#8]`, `ldr w10,[x0,#0x10]`) while all thirteen static records carry a CC-block base
+> at `+0x08` and a bitfield at `+0x10`, so no static field could be matched to the values the routine used.
+> The object the machine passes is read here, with 38e's declared `/pmic/target` suppression kept verbatim
+> and one breakpoint at the live `+0x11734`: `x0 = 0x9C389598` is `.data` RVA `0x29598`, i.e. **the record
+> at `0x29590` plus eight** — the caller passes `&record + 8`, past the name slot, and the probe's six
+> qwords are that record's own `+0x08`, `+0x10`, `+0x18`, `+0x20`, `+0x28`, `+0x30` (`0x100000`,
+> `0x152010`, `1`, `0x2B8D0` relocated to the live `0x9C38B8D0`, `0x61`, `0`). The identification rests on
+> two fields no other record carries — `+0x08 = 0x100000` and `+0x28 = 0x61` each appear exactly once — and
+> the name slot `0x25638` resolves through RVA `0x15774` to **`/vcs/vdd_cx`**, the same rail string the
+> GDSC table's entry 18 carries at its `+0x48`. So the failing rail is the `gcc_usb30_prim_gdsc`
+> descriptor's own rail and the **first of the thirteen**. Disassembled, the vote is **two registers and
+> not one**: it sets **bit 0** at `0x152010` (the mask is `record+0x18 = 1`, *not* the `0x61` the probe log
+> shows in `w10` — that is a caller's leftover, and this is a correction to this step's own log) and then
+> polls **bit 30 of `0x100000`**, from `record+0x08`, 2000 times, through the helper at `0x9B00`. Both
+> addresses are inside the board's declared `{"GCC CLK CTL", 0x00100000, 0x00200000}` and both fall in
+> **2 MB block 0 → pool `0x40000000`** — `0x100000 → 0x40100000`, `0x152010 → 0x40152010`, and `0x11A004 →
+> 0x4011A004`, which is 4.188's fifth fabricated word. **The seed and the poll are two offsets in one
+> redirected block**: the seed sets bit 31 at the first, the GDSC poll passes, the run walks on, and the
+> next bounded poll it makes reads the zero nothing has set, so 4.188's *"one register down"* is now an
+> address. **The caller is named for the first time**, and this **corrects 4.188's *"Nothing in the image
+> calls it"***: the call is `Clock_SourceOn` at RVA `0x5ECC` (`bl 0x9A14`), through a **trampoline family**
+> at `0x9A00`/`0x9A14`/`0x9A34`… that reads one slot of an ops block and `br`s to it (`0x9A14` takes
+> `[obj+0x18][0x30]` = `0x11734`), which is why no `bl` target anywhere in `.text` is `0x11734` — and the
+> same mechanism is how `0x11E5C` is reached, which the run also witnesses (`x0 = 0x9C385410` = `.data`
+> `0x25410`, GDSC entry 18's own `+0x10`). The 300-second panel
+> (`work/out/qemu-panel-4.189-rail.txt`, sha256 `36be5c28…`) reproduces all three rows with the vote
+> breakpoint armed and firing and has **nothing after them**; its header's *328 rows* is 80 too many
+> because rows 83–162 repeat rows 3–82, so the run's distinct content is **248 rows** against 4.188's 249,
+> and the two agree row for row over their tails — which is what makes the reproduction a reproduction.
+> **Not established**: whether the `0x100000` bit-30 poll would pass on hardware; what `Clock_SourceOn`'s
+> `tbnz` tests; whether `gNpaClientSS1Bus is NULL` is an absent peer or a second debt. **The next seed is
+> named and not run**: bit 30 at host `0x40100000`. Nothing was flashed, no partition was written,
+> `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc61…`, and the phone's state is 4.188's (TWRP
+> `d25f844e`, `fastboot devices` empty, no photograph supplied). See `docs/08` step 4.189.
+>
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

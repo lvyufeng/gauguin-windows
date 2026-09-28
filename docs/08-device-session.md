@@ -39477,3 +39477,328 @@ a future step that means to read the clock cluster has to say which instrument i
   reason. Which build this is, and why it carries thirteen instruments rather than fourteen, are **not**
   established.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.189 — the stop past the GDSC is a `/vcs/vdd_cx` rail vote: `Clock_SourceOn` writes bit 0 of `0x152010` and polls bit 30 of `0x100000`, two registers in the same redirected block 4.188's seed already sits in, and the record it uses is the first of the thirteen
+
+### The question
+
+4.188 closed with one item under *not established* that this project could act on: *"Which of the thirteen
+rail records the FabiaPLL vote belongs to."* It could not answer that from the file, and said why: the
+routine reads its two addresses out of a **runtime** object — `ldr x8,[x0,#8]` and `ldr w10,[x0,#0x10]` —
+while all thirteen static records show a CC-block base at `+0x08` and a bitfield at `+0x10`, so no static
+field could be matched to the two values the routine used. The way to answer it is to read the object the
+machine actually passed. This step does that. `work/out/qemu-probe-4.189/railprobe.py` keeps 38e's declared
+`/pmic/target` suppression verbatim — without it the run dies in `AdcDxe` before any clock register is read
+— and adds one breakpoint at ClockDxe's live `+0x11734`, the entry 4.188 identified as
+`HAL_clk_FabiaPLLEnableVote`.
+
+### The object is a static record, and the pointer is that record plus eight
+
+The probe's first and only vote hit, 14.8 s into the run:
+
+```
+@14.8s VOTE #1  x0=0x9c389598  name=None
+        rec: 0000000000100000 0000000000152010 0000000000000001 000000009c38b8d0 0000000000000061 0000000000000000
+        lr=0x9c365ed0  rva=0x5ed0
+        step 0 pc=0x9c371738 x8=0x9c38b8d0 w9=0x20 w10=0x61
+        step 1 pc=0x9c37173c x8=0x9c38b8d0 w9=0x20 w10=0x61
+        step 2 pc=0x9c371740 x8=0x152010 w9=0x20 w10=0x61
+        step 3 pc=0x9c371744 x8=0x152010 w9=0x20 w10=0x61
+```
+
+The single-step PCs fix ClockDxe's live base inside this run rather than by appeal to 4.186's `describe()`:
+`0x9C371734` is `+0x11734` against a base of **`0x9C360000`**. `x0 = 0x9C389598` is then **`.data` RVA
+`0x29598`** — the record at `0x29590` **plus 8**. That is not a copy and not a parallel object: the caller
+passes `&record + 8`, skipping the record's `+0x00` name slot, and every qword the probe read is the
+record's own next field.
+
+| runtime `x0 +` | as read | record `0x29590 +` | in the file |
+|---|---|---|---|
+| `+0x00` | `0x00100000` | `+0x08` | `0x00100000` |
+| `+0x08` | `0x00152010` | `+0x10` | `0x00152010` |
+| `+0x10` | `1` | `+0x18` | `1` |
+| `+0x18` | `0x9C38B8D0` | `+0x20` | `0x0002B8D0` |
+| `+0x20` | `0x61` | `+0x28` | `0x61` |
+| `+0x28` | `0` | `+0x30` | `0` |
+
+`+0x18` is the one field that does not read the same live and in the file, and the difference is exactly
+the image base. The record is relocated at load, and ClockDxe's own `.reloc` carries
+`IMAGE_REL_BASED_DIR64` entries for RVAs `0x29580`, `0x29590` and `0x295B0`, and none for `0x295A0` or
+`0x295A8`. So `+0x00` and `+0x20` are the record's only pointers — the name slot and the ops block — and
+`0x100000`, `0x152010`, `1` and `0x61` are literals the file holds and the machine reads unchanged.
+`name=None` in the log is the probe's two-level name resolution correctly finding nothing: at `x0` the
+first qword is `0x100000`, far past the `0x2D000` bound it tests.
+
+The identification does not rest on the pointer happening to land inside the record, which a relocated
+copy could also produce. It rests on **two fields no other record carries**: of the thirteen, `+0x08 =
+0x100000` appears exactly once and `+0x28 = 0x61` appears exactly once, on this record; the nine records
+whose `+0x28` is `0x20` or `0` are separated by that field alone, and the two others that carry a
+`+0x10 = 0x152010` bitfield (`0x29EB8`, `0x2A390`) have `+0x18 = 0x40` and `0x80` and `+0x28 = 0x21` and
+`0x1` against this one's `1` and `0x61`. Its name slot `0x25638` resolves through RVA `0x15774` to
+**`/vcs/vdd_cx`** — the same rail string the GDSC table's entry 18 carries at its `+0x48` — so the rail
+whose vote fails is the `gcc_usb30_prim_gdsc` descriptor's own rail, and it is the **first of the
+thirteen** by offset and the first whose `+0x10` is a register rather than a zero.
+
+4.188's list of the thirteen record bases is **confirmed**, re-derived this step from the file: the words
+equal to `0x2B8D0` are at `.data` offsets `0x288A8`, `0x28A08`, `0x28C40`, `0x295B0`, `0x297E8`, `0x29ED8`,
+`0x2A3B0`, `0x2A888`, `0x2A938`, `0x2ACF8`, `0x2ADA8`, `0x2B130`, `0x2B330`, and since that word is the
+record's `+0x20` the bases are those offsets **less `0x20`** — `0x28888` … `0x2B310`, with `0x29590`,
+`0x297C8` and `0x29EB8` among them exactly as 4.188 wrote them. The word's offset and the record's base
+are two different numbers `0x20` apart, and that gap is recorded here because reading one for the other
+produces a confident table that is wrong in every row.
+
+### The routine, verbatim
+
+```
+11734: stp  x29, x30, [sp, #-0x10]!
+11738: mov  x29, sp
+1173c: ldr  x8, [x0, #8]           ; x8 = obj[+0x08] = record+0x10 = 0x152010  THE REGISTER WRITTEN
+11740: mov  w2, #0x7d0             ; 2000, the poll's bound
+11744: orr  w1, wzr, #0x40000000   ; bit 30, the poll's mask
+11748: ldr  w9, [x8]               ; read-modify-write...
+1174c: ldr  w10, [x0, #0x10]       ; ...with the mask obj[+0x10] = record+0x18 = 1
+11750: orr  w11, w10, w9
+11754: str  w11, [x8]              ; [0x152010] |= 1
+11758: ldr  x0, [x0]               ; x0 = obj[+0x00] = record+0x08 = 0x100000  THE REGISTER POLLED
+1175c: bl   0x9b00                 ; the bounded poll
+11760: and  w8, w0, #0xff
+11764: cbz  w8, 0x11770            ; the poll returned 0 -> failure
+11768: ldp  x29, x30, [sp], #0x10
+1176c: ret
+11770: adrp x1, 0x1c000 ; add x1, x1, #0x6f8  ; "HAL_clk_FabiaPLLEnableVote Activate Failure"
+11778: orr  w0, wzr, #0x80000000
+1177c: mov  w2, wzr ; w3, wzr ; w4, wzr
+11788: bl   0x8020                 ; the logger, which stamps the caller id
+1178c: adrp x0, 0x1c000 ; add x0, x0, #0x724  ; "HALclkFabiaPLL.c"
+11798: mov  w1, #0xb8              ; 184
+1179c: adrp x2, 0x13000 ; add x2, x2, #0x1d4  ; "0"
+117a0: bl   0x8124                 ; the assert
+117a4: b    0x117a4                ; and the halt
+```
+
+and the poll itself, `0x9B00`, which the record's two literals feed:
+
+```
+9b00: str x21,[sp,#-0x30]! ; stp x20,x19,[sp,#0x10] ; stp x29,x30,[sp,#0x20]
+9b0c: add  x29, sp, #0x20
+9b10: mov  w19, w1                 ; the mask, from the caller
+9b14: mov  x20, x0                 ; the address, from the caller
+9b18: ldr  w8, [x20]               ; <- loop head
+9b1c: mov  w21, w2                 ; the counter, reloaded from w2 on every pass
+9b20: orr  w0, wzr, #1
+9b24: and  w9, w8, w19
+9b28: cbnz w9, 0x9b3c              ; the bit is set -> return 1
+9b2c: bl   0x9aac                  ; the registered delay hook, a no-op when none is registered
+9b30: sub  w2, w21, #1             ; the counter lives in w2, not in w21
+9b34: cbnz w21, 0x9b18
+9b38: mov  w0, wzr                 ; return 0
+```
+
+**The mask is not `0x61`.** It is `ldr w10,[x0,#0x10]` — `record+0x18`, the value `1` — so the vote sets
+**bit 0** and only bit 0. The `w10=0x61` on all four single-step lines is a **leftover in `w10` from the
+caller**: the probe steps four instructions and stops at `0x11744`, while the load that writes `w10` is
+the fifth, at `0x1174C`. The routine never reads `+0x28` at all. This step's own log is corrected here
+rather than quoted as the routine's mask, and the correction is recorded because the coincidence is
+exact — `0x61` *is* a field of the record, one qword past the one the routine reads — so the wrong reading
+is the one the data invites.
+
+**And the vote is two registers, not one.** `0x152010`, from `record+0x10`, is written; `0x100000`, from
+`record+0x08`, is polled, and the routine polls bit 30 of **it** and not of the register it wrote. Both
+sit inside this board's declared `{"GCC CLK CTL", 0x00100000, 0x00200000}` window and both fall in 2 MB
+block 0, whose stage-2 redirect is pool `0x40000000`:
+
+| IPA | where it comes from | redirected block | host |
+|---|---|---|---|
+| `0x100000` | record `+0x08`, polled | block 0 → `0x40000000` | `0x40100000` |
+| `0x152010` | record `+0x10`, written | block 0 → `0x40000000` | `0x40152010` |
+| `0x11A004` | GDSC entry 18's `+0x10` | block 0 → `0x40000000` | `0x4011A004` |
+
+The third row is 4.188's fifth fabricated word. So the seed that carried the run past the GDSC and the
+poll that now stops it are **two offsets in one redirected 2 MB block**: the seed sets bit 31 at
+`0x11A004`, the GDSC routine's own poll passes, the run walks on, and the very next bounded poll it makes
+reads the zero that nothing has set. 4.188's title — *"what lies past it is the same kind of stop one
+register down"* — is this step not a shape but an address, and the address is `0x100000` bit 30.
+
+### The caller, named, and a correction to 4.188
+
+`lr = 0x9C365ED0` is RVA `0x5ED0`, the instruction after the call, so the call is at `0x5ECC`, inside
+`Clock_SourceOn` — the function whose `__func__` string is at RVA `0x1391D` and whose file string
+`ClockSources.c` is at `0x1392C`:
+
+```
+5e04: tbnz w10, #0, 0x5ec8         ; the bit is set -> vote the rail
+...
+5ec0: bl   0x8124                  ; the other arm: assert ("ClockSources.c", 202, "0", "Clock_SourceOn")
+5ec4: b    0x5ec4                  ; and halt
+5ec8: mov  x0, x22                 ; the record plus eight
+5ecc: bl   0x9a14                  ; -> the trampoline
+5ed0: and  w9, w0, #0xff           ; the vote's return value
+5ed4: cmp  w9, #1
+```
+
+and the trampoline, which is why the file shows no caller:
+
+```
+9a14: cbz  x0, 0x9a2c
+9a18: ldr  x8, [x0, #0x18]         ; obj[+0x18] = record+0x20 = the ops block, live 0x9C38B8D0
+9a1c: cbz  x8, 0x9a2c
+9a20: ldr  x1, [x8, #0x30]         ; ops[+0x30] = 0x11734
+9a24: cbz  x1, 0x9a2c
+9a28: br   x1
+9a2c: mov  w0, wzr
+9a30: ret
+```
+
+So the chain is `Clock_SourceOn → 0x9A14 → ops[0x30] → 0x11734`, and the ops block is the one at
+`.data 0x2B8D0` that all thirteen records point at and whose `+0x30` entry 4.188 had already named. **This
+corrects 4.188**, which recorded *"Nothing in the image calls it: no `bl` target in ClockDxe's `.text` is
+`0x11734`, and none is `0x11E5C`."* Both halves are true about `bl` targets and the conclusion is false.
+There is a family of trampolines at `0x9A00`, `0x9A14`, `0x9A34` … each reading one slot of an ops block
+and branching to it — `0x9A00` takes `[x8,#8]`, `0x9A14` takes `[obj+0x18][0x30]`, `0x9A34` takes
+`[obj+0x18][0x38]` — so an ops-table method is entered by `br` and never by `bl`, and a search over branch
+targets cannot see the caller of any of them. The run witnesses both entries: the `+0x11734` breakpoint
+fired with `x0` = the record plus eight and its `+0x18` holding the live ops pointer, and the `+0x11E5C`
+breakpoint fired 0.1 s earlier with `x0 = 0x9C385410` — `.data` RVA `0x25410`, GDSC entry 18's own `+0x10`
+field, whose file value is `0x11A004` and whose `+0x08` is `0`, so the `cbz` at `0x11E60` is taken and the
+`ldr x8,[x0]` path 4.186 described is the one that runs.
+
+### The run, and what the longer window shows
+
+`work/out/qemu-probe-4.189/run-rail.sh` is 4.188's seeded command with the probe swapped and the panel
+window doubled to 300 s, because 4.188's seeded run reached these rows at about 145 s of 150. The run's
+panel `work/out/qemu-panel-4.189-rail.txt` (sha256
+`36be5c28895755a821e23a42658c6554fbfd8b3ed0bd0723ad9cd2a2d5b319a6`) reproduces all three rows with the
+vote breakpoint armed and firing, at rows 323–327, and **nothing follows them**:
+
+```
+323 |DALLOG Device [0x0]: DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v|
+324 |SSUsb1InitCommon: gNpaClientSS1Bus is NULL)|
+325 |HAL_clk_FabiaPLLEnableVote Activate FailureERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1|
+326 |A-8A82-677A683B0D29|
+327 |ASSERT HALclkFabiaPLL.c +184: 0|
+```
+
+**Doubling the window changes the row count and nothing else.** 4.188 read the halt as a self-branch out
+of the file; this step reads it as a wall, from two instruments: 300 s of panel with no row past the
+assert, and the probe's own log, which after the vote at 14.8 s watched for 195 more seconds and wrote
+`@209.9s no stop in this window` — which is what a `b 0x117A4` looks like to a debugger that is not stopped
+at it. The `4DB5DEA6-…` on row 325 is ClockDxe's caller id, the same one Step 4.159 named, stamped by the
+logger at `0x8020` and not by this routine; row 325 is 90 columns and its tail is row 326, while rows 324
+and 327 are 43 and 31 characters and complete as printed, so the two rows that carry the finding are not
+truncated.
+
+One correction to the panel's own arithmetic, before any of its numbers are quoted: the header says
+**328 rows / 4 GAP(s)**, and 328 is 80 more rows than the run has. Rows 83–162 repeat rows 3–82, 79 of the
+80 string for string, which is exactly the case the header's own fourth GAP paragraph describes — *"a row
+the console rewrote in place … appending it repeats the log above the gap instead of extending it."* The
+distinct content is **248 rows**, against 4.188's 150-second panel at 249, and the two agree row for row
+over their tails, which is what makes the three rows above a reproduction and not a new observation.
+
+Everything else the longer window holds, the 150-second panel holds too; it is written down here because
+4.188 did not. The three rails that fail `Failed to get valid RSC address` and then `Unable to init rail`
+— `/c/d_x/c/d_x/c/d_xm.v`, `/c/d_x/c/d_xm.v`, `/c/d_xm.v`, each truncated at 90 columns — are a rail
+driver that cannot obtain an address from a peer this instrument does not have, which is the same shape as
+the rail vote one link later and the same shape as the four words already on this project's list of
+instrument lies; whether it reads the fabricated SMEM or another window is **not established** here. The
+`smem_get_addr: Trying to get addr smem item=603 which is >= max item=498!` pair, with
+`PlatformUpdateSmBiosType17: Failed to get DDR Details! Status = Unsupported` and the same for DDR Speeds,
+is a count read out of the SMEM header **this instrument fabricates** — the panel header's own account of
+the seed says the header, entry, partition tag and table magics in SMEM are this instrument's — so the
+refusal is instrument-attributable; whether real XBL's SMEM carries item 603 is **not established**. The
+`Successfully Mapped RAM Range` rows, `Error: Image at 0009BDA8000 start failed: 00000001`, `K 83 SO 76/69`
+and `P2 DIAG S CB933912-… 00000001` are the same rows 4.187's and 4.188's panels carry and are not new
+content, only newly recorded.
+
+### What this decides, and what it does not
+
+**Decides.** 4.188's open question, in the direction it was asked: the rail is `/vcs/vdd_cx`, the record
+is `.data 0x29590`, and it is the first of the thirteen. 4.188's *"one register down"* is now two specific
+registers and one named caller: `Clock_SourceOn` writes bit 0 at `0x152010` and polls bit 30 at `0x100000`,
+through the trampoline at `0x9A14` and the ops entry `0x2B8D0 + 0x30`. And the next seed is named rather
+than guessed: **bit 30 at host `0x40100000`** — a 4-byte blob carrying `0x40000000` at IPA `0x100000`,
+which is the same kind of fabricated status bit as 4.188's and would carry the run past this poll as that
+one carried it past the GDSC. This step does **not** run it; it is the first move of the next one, written
+down so it is not re-derived.
+
+**Does not decide.** Whether the poll would pass on hardware: `0x100000` is a real GCC register on the
+board, but nothing here says what its bit 30 carries, that a running clock controller sets it, or that it
+does so within 2000 iterations — so the device question 4.186 opened is *moved one link down* and not
+closed. What `Clock_SourceOn`'s `tbnz` tests, and why this run took the vote arm rather than the assert at
+`ClockSources.c +202` on the other arm, are **not established**. Whether `SSUsb1InitCommon`'s
+`gNpaClientSS1Bus is NULL` is an absent peer or a second instrument debt is **not established**, and
+whether the vote would have been reached at all had `gNpaClientSS1Bus` been non-NULL is a question this
+run does not ask. And the one thing about the instrument this step observed and cannot explain stays where
+4.188 left it: the `/pmic/target` suppression fires — the log prints `-> x0 zeroed: this record is not
+published` — and the fault site `DALSys+0x346C` then executes **twice** at 7.8 s with `x21 = 0x9C028838`
+(`/core/hwengines/adc/pmic_0/vadc`) while the run walks on, where five probe-less runs die at that same
+`ELR 0x9C40E46C`. What makes the difference between the site executing and the run dying at it is **not
+established**.
+
+### Rows
+
+- **instrument**: `work/out/qemu-probe-4.189/` — `railprobe.py` (sha256
+  `0a5863bdaeacb377c6ee942aa1f8f88d79594d569f50c6513b6c15da2e67fdb4`), `run-rail.sh` (sha256
+  `72e682826e81979539dbde02c5e84cd444e93cf75966447866b747f7c6123d12`), `rail-run.log` (the probe's
+  transcript, 23 lines, sha256 `62e1b0a31cc2db920e230e122a063be65976761dbd9edce5034cd14bf63ef805`) and
+  `panel4189.log`; panel `work/out/qemu-panel-4.189-rail.txt` (sha256 `36be5c28…`, 328 rows / 300.3 s, of
+  which 248 distinct). The probe is 38e with the same suppression and two breakpoints added; the run is
+  4.188's seeded command with `--seconds 300` and the same five `loader` blobs at `0x46C2000C`,
+  `0x46C20D18`, `0x424A1008`, `0x46D21700` and `0x4011A004`.
+- **shows**: that the stop 4.188 found past the GDSC is `Clock_SourceOn`'s rail vote for **`/vcs/vdd_cx`**,
+  record `.data 0x29590`, the first of the thirteen — and that the vote is **two** registers: bit 0 written
+  at `0x152010`, bit 30 polled at `0x100000`, both in the same redirected pool block as the seed. The chain
+  is read off the machine, not inferred: `x0` is the record plus eight, its `+0x18` is the live ops pointer,
+  the single-step PCs are the routine's own first four instructions, and `lr` is the caller — the first
+  call site this project has for `0x11734`.
+- **adds**: the answer to 4.188's *not established*; the caller and the trampoline mechanism; the two
+  register addresses and the fact that the seed's block and the failing poll's block are one; the
+  next seed's exact address (`0x40100000`, bit 30); and the panel measurement that the terminal state is
+  reached well inside 150 s and does not change out to 300 s, with the run's 328 rows corrected to 248
+  distinct before any of them is quoted.
+- **corrects**: 4.188's *"Nothing in the image calls it"* — `0x11734` is reached, through the trampoline at
+  `0x9A14`, from `Clock_SourceOn` at RVA `0x5ECC`, and the same trampoline family is how `0x11E5C` is
+  reached as well, so neither has a `bl` and neither therefore has a caller a search over `bl` targets can
+  find. It also corrects **this step's own probe log**, where the four `w10=0x61` lines are a caller's
+  leftover and not the routine's mask, and it records the `0x20` gap between the identifying `.data` word
+  and the record's base so that reading one for the other is not repeated.
+- **closes**: 4.188's question of which rail record the vote is, as a question about the *identity* of the
+  stop. It does not close the device question that identity was asked for.
+- **does not close**: whether the `0x100000` bit-30 poll would pass on hardware; what `Clock_SourceOn`'s
+  `tbnz` tests and why the vote arm was taken; whether `gNpaClientSS1Bus` NULL is an absent peer or a
+  second debt; whether the RSC failures and the SMEM `item=603` refusal are the same debt as the vote; and
+  every item 4.188 listed that this step did not touch.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression at
+  `DALSys+0x335C`, which every run that reaches these readings depends on and which this step's probe log
+  shows writing guest state; the seeded SMEM target-info word and the AOP gate word, both fabricated and
+  both flagged in every panel header here; the fifth fabricated word of 4.188, `0x4011A004`, which is the
+  bit that carries the run to this step's stop; the stage-2 redirection of the 55 blocks the platform's 57
+  declared low regions touch; and that this repository has no source for the drivers it reads, so the
+  disassembly is the whole of what is known about them. **No new fabricated word is added by this step**:
+  the sixth one is *named* above and not written, and the run this step reads is the fifth word's run.
+- **a note on the instrument's own data**: the panel's header says *328 rows*, *4 GAP(s)* and *10 row(s)
+  fill all 90 columns* at 68, 148, 162, 258, 261, 264, 277, 279, 289 and **325** — so 325 is one of them
+  and its tail is 326, which is why the two are quoted joined, exactly as in 4.188. The probe's own
+  pre-arm verification printed `WARNING: 0x9c360000 never held fd7bbfa9… at +0x11734 within 90 s` and the
+  breakpoint then fired at 14.8 s, because the probe connects before the payload is in RAM and this
+  gdbstub answers a read of an unmapped address with zeros rather than an error, so a single early read
+  cannot tell "wrong base" from "not loaded yet". **That WARNING line is not evidence the base is wrong**,
+  and the four `Z0` insert packets all returning `OK` plus the fire and the single-step PCs are the
+  evidence that it is right.
+- **not an action**: nothing was flashed and no partition was written by this project, no stub or Microsoft
+  image was changed, and no volume with a patched `UsbConfigDxe` has left this host. This step read the
+  device not at all: every reading in it is QEMU's. `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, and the stock `boot` restore
+  path (`~/backup/gauguin/images/part-boot.img`, sha256
+  `50ef59beb17e75de1e749b7d261eb41a18d9cca025befb3357e43e239de78ef3`) is unchanged from the `EXPECT` pinned
+  at `tools/restore-stock-boot.sh:36`. `userdata` (107 GB, unbacked), the partition table and the firmware
+  LUN remain untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state
+  remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged from 4.188's reading and not re-observed this step. The phone was left in
+  TWRP recovery (`adb devices` = `d25f844e`, `ro.product.board = gauguin`, `adb shell id` = `uid=0(root)`,
+  `2717:ff68` on bus 003) with `fastboot devices` empty, so the P3 `fastboot boot` workflow still needs a
+  physical reboot to the bootloader, and `adb exec-out screencap -p` still returns 53 bytes, so there is
+  still no screenshot route and **no photograph of the 4.187 P3 payload's judgement lines has been
+  supplied**. Two physical actions are outstanding and neither can be taken from this host: reboot to the
+  bootloader, and a screen photograph.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
