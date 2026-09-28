@@ -43391,3 +43391,37 @@ than it was because its payload carries 25 live rows, and which must not be comp
 `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
+
+## Step 4.212 — the P2 block's fork paragraph is annotated in place: 4.211's finding reaches the reader first at `docs/00:70`, one hundred and sixty lines above the note that corrects it, so the two sentences that section drew from 4.166 now carry their own amendment
+
+
+**What this is for.** `docs/00-plan.md`'s *"the one thing blocking progress"* section reaches a conclusion at
+`:73-76` — *"The rows this section has been calling owed are therefore absent from the device's image by
+construction and present in the tree's"* — and draws from it a fork test: *"a payload that prints `P2 WALK` is
+the `usb-host` class and one that prints `Loading driver at` is the phone's"* (`:71-73`). Both were falsified by
+step 4.211, and the note that says so sits at `:231`, under the table. A reader who follows this section's
+argument in order meets the false version first and the correction a hundred and sixty lines later, which is the
+failure mode this project's amendment convention exists to prevent — `:66` and `:73` already carry two
+`**Amended …**` clauses of the same shape, from steps 4.165 and 4.166.
+
+**The amendment.** A third parenthetical is inserted directly after *"so no rebuild is needed to obtain them."*
+and before the physical-stop paragraph, so the correction stands where the claim does: it names the two failures
+(`P2 WALK t=` is literally present in `boot-now-0923.img`, which is neither class, so that half does not
+separate them; and the rows are not absent from the device's image, whose payload is `7c8fdb5a…`, step 4.33's
+digest for the 09-24 15:04 write, and prints 25 of the 36 rows the tree has today); it identifies the 6-of-36
+volume the original sentence was describing as `boot-before-p2walk.img`, three flashes older than what `boot`
+holds; and it points forward to step 4.211. Nothing above it is rewritten, and the sentence it amends is
+preserved verbatim, in the convention the two earlier amendments in this paragraph set.
+
+**decides**: nothing new — this step measures nothing and corrects no reading that 4.211 left wrong. It puts an
+existing correction where the claim it corrects is made. **does not decide**: whether the section's remaining
+conclusions survive; its downstream numbers (`seen` 48 or 49, `DALTLMM` at rank 47, `FeatureEnablerDxe` at 48,
+`SimpleFbDxe` at 49) are about the walk's stopping point and are untouched by anything here. **Not an action**:
+a single text edit to `docs/00-plan.md`, with the replacement's line widths asserted at 78 before the write is
+kept. No build, no instrument leg, no QEMU run, no flash, no `fastboot` command, no partition written, no seed
+written, no console read from the device and no device file opened. **device state**: unchanged and not
+re-measured, and the three physical actions remain outstanding — a reset of the phone, the reboot to the
+bootloader the P3 `fastboot boot` workflow needs, and the screen photograph. `userdata` (107 GB, unbacked), the
+partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+

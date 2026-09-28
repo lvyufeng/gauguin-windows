@@ -74,7 +74,14 @@ phone's, because a literal count over the two inflated volumes finds the phone's
 `P2 WHY`, `P2 ERR`, `P2 FREE`, `P2 WALK`, `P2 APRI`, `P2 RETRY`, `P2 FWHY` and `P2 BIN`. The rows this
 section has been calling owed are therefore absent from the device's image by construction and
 present in the tree's — whose `Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` is byte-identical (`cmp`
-clean) to the `usb-host` volume, so no rebuild is needed to obtain them. And the physical-stop pair
+clean) to the `usb-host` volume, so no rebuild is needed to obtain them. (**Amended
+2026-09-29 by step 4.211:** both halves of that now fail. `P2 WALK t=` is literally present in
+`boot-now-0923.img`, which is neither class, so the fork test does not separate them; and the
+rows are **not** absent from the device's image — the payload in `boot` is `7c8fdb5a…`, step
+4.33's own digest for the 09-24 15:04 write, and against the 36 format strings the tree has
+today it prints **25**, every row named here among them. The 6-of-36 volume this sentence
+describes is `boot-before-p2walk.img`, three flashes older than what `boot` holds. See
+`docs/08` step 4.211.) And the physical-stop pair
 named in the sentence above can now be stated as a DRIVER-rank boundary: `seen` 48 or 49, with
 `DALTLMM` at rank 47 the last entry inside the batch, `FeatureEnablerDxe` at 48 the file between the
 two that is not an Apriori entry, and `SimpleFbDxe` at 49 the lowest unhit one that has a file.
