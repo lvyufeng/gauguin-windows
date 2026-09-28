@@ -177,6 +177,10 @@ OUTDIR="$P2"
 STAGED_BLOBS=""
 REORDERS=0
 SENTINEL=0
+# 1 when this experiment's generation carries `--xhci-host`. It is what tells
+# restore() which platform to put back, and it is the one flag whose absence
+# restore() used to leave behind - see the trap.
+XHCI=0
 # Which instruction `usbcfg-sentinel` rewrites: `host` is the store the gate
 # reads (0x39E4), `loop` is record 0's sentinel (0x3B6C) and is 4.184's build,
 # kept reproducible on purpose. See the header and the tool.
@@ -189,6 +193,7 @@ case "$EXP" in
         ;;
     xhci-host|usbcfg-sentinel)
         GEN_ARGS=(--xhci-host)
+        XHCI=1
         # ORDER_ARGS is left alone: this experiment adds no `!if` to APRIORI.inc,
         # because nothing it adds goes into that file. If that ever changes, the
         # gate below refuses to run rather than guessing the branch.
@@ -238,12 +243,27 @@ esac
 # The tree has to be left the way it was found, including after a failure: this
 # script regenerates the tracked platform package, and a checkout that quietly
 # keeps the experimental order is a checkout that builds a firmware nobody chose.
+#
+# "The way it was found" is the platform THIS RUN was generated from, and that is
+# not the default one for half the experiments here. This trap used to regenerate
+# with no flags at all, which left the tracked `gauguinPkg` declaring
+# `USE_XHCI_HOST_DRIVER = 0` and `APRIORI.inc` in the reference order while the
+# payload the run had just built and copied to `boot` was generated from the
+# opposite of both - so the tree described a firmware nobody had built, and the
+# next incremental build produced one nobody had chosen. That is not a
+# hypothetical: 4.207's first pair of payloads was built from a checkout left in
+# exactly that state, came out 172,032 bytes of inner volume short of the payload
+# of record (XhciPciEmulationDxe, XhciDxe and UsbInitDxe, three modules the
+# probe's own census counts), and stalled before every site the run was written
+# to read - which was then misdiagnosed as a load-address shift. Regenerate with
+# GEN_ARGS and that cannot happen; the flag that was dropped is the whole reason
+# the failure was invisible in a diff.
 restore() {
-    log "restoring the default platform"
-    python3 "$GEN" --display "$DISPLAY" >/dev/null
+    log "restoring the platform this run was generated from"
+    python3 "$GEN" --display "$DISPLAY" "${GEN_ARGS[@]}" >/dev/null
     "$ROOT/tools/sync-uefi-platform.sh" >/dev/null
-    note "uefi/Platforms/Xiaomi/gauguinPkg is back to the reference contents"
-    if [ -n "$STAGED_BLOBS" ]; then
+    note "uefi/Platforms/Xiaomi/gauguinPkg is back to the contents this run was generated from"
+    if [ -n "$STAGED_BLOBS" ] && [ "$XHCI" = 0 ]; then
         # The sibling blobs are the one thing this run puts under uefi/ that the
         # default generation does not. They land in a directory this repository
         # ignores, so git would never show them - but "left the way it was
@@ -256,6 +276,13 @@ restore() {
         # driver set from device/dxe and stages a sibling only when asked, and
         # the DSC line that names them is 0 unless this script wrote a 1 - so
         # this is housekeeping rather than a correctness fix.
+        #
+        # And only when the run did NOT ask for the host stack, because the
+        # regeneration above stages them itself when it does: with XHCI=1 the
+        # guard's own DSC line is a 1 and the three blobs are what that line
+        # names, so deleting them would leave the platform pointing at files
+        # that are not there. `SIBLING_BLOBS` is the generator's table and this
+        # cleanup reads from it, which is what keeps the two in step.
         for rel in $STAGED_BLOBS; do
             rm -rf "$ROOT/uefi/Binaries/gauguin/$rel" "$MU/Binaries/gauguin/$rel"
         done

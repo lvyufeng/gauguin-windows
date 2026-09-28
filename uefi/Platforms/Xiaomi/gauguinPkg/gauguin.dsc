@@ -61,7 +61,7 @@
   #
   # Off by default: nobody has seen these three run on this phone.
   #
-  USE_XHCI_HOST_DRIVER           = 0
+  USE_XHCI_HOST_DRIVER           = 1
 
   #
   # 0 = SM7225 (Snapdragon 750G)

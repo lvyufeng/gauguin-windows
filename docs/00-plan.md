@@ -1883,6 +1883,38 @@ Work:
 > **no `iommus` property**, and there is **no framebuffer route** (`/dev/fb*`, `/proc/fb` and
 > `/sys/class/graphics/` all absent), so `先读屏` stays a photograph. See `docs/08` step 4.193.
 >
+> **4.207: the tick arrives, and the wall 4.200-4.206 measured frozen opens on its own.** The variant is the two
+> PCDs 4.206 predicted — `BitraPkg.dsc.inc`'s `PcdArmArchTimerSecIntrNum` 17 → 29 and `PcdArmArchTimerIntrNum` 18 →
+> 30, i.e. *do not apply the Qualcomm override*, since 27 and 26 are already `ArmPkg.dec`'s defaults and already
+> this machine's lines. Two payloads, one variable, measured rather than asserted: inflating the LZMA FV image
+> section out of each leaves two inner volumes of 7,540,744 bytes differing in **12 bytes over 3 runs** — the two
+> `mov` immediates (`mov w19, #0x1e` / `mov w20, #0x1d` against `#0x12` / `#0x11`) and 8 bytes of RSDS signature.
+> **Both legs, same instrument, same probe, 4.204's own bases, no `MISMATCH` in either**: the control reproduces
+> 4.204 exactly — enable set `0x0c06ffff`, `ICPENDR0 = 0x40000000` (INTID 30 pending, never taken), `HUB NOTIFY`
+> **once** with the routine's own increment not running, the wall reading `PollCount = 01`, still 01 twenty-five
+> seconds later, `THE WALL, AND IT IS UNANSWERED`, and the instrument supplying the byte only then. The variant:
+> enable set `0x6c00ffff`, `ICPENDR0 = 0` — **nothing left pending** — `HUB NOTIFY` **645 times** (a lower bound;
+> the reader's 360 s clock ended the run with the hub still being notified), `PollCount` advancing `01 -> 0xc8` by
+> the routine's own increment, and the instrument never writing the wall byte at all. So 4.200's frozen poll was the
+> instrument's number and nothing else, and the root hub's periodic event is timer-driven. **What the payload then
+> does is fail on the instrument's absent PMIC** — `ConfigUsb: Error - failed to enable the Vbus for the USB core 0:
+> Not Found` ×415, `Usb30EnableVbus … core 1` ×418, `PmicUsbProtocol->GetOtgStatus Not Found` ×416, which are
+> 4.203's rows and 4.203's finding — so the run carries the payload from frozen to running-and-blocked-by-the-model,
+> and the census row that would say more (`pciio`) scrolled off the panel after one sample while the control's calm
+> console left it on screen for 18. **The step's most transferable finding is a script defect it walked into**:
+> `tools/build-apriori-variant.sh`'s `restore()` EXIT trap regenerated the tracked platform with no flags, so the
+> tree declared `USE_XHCI_HOST_DRIVER = 0` while the payload just built had the host stack; the first pair came out
+> **172,032 bytes and three modules short** (`XhciPciEmulationDxe`, `XhciDxe`, `UsbInitDxe`), both legs stalled
+> before every site, and the census's own `discovered=80` against 83 was read as an allocation shift and answered by
+> moving the four probe bases `0x81000` up — which made the sites it *did* reach print `MATCH` and hid the cause.
+> Regenerated with `--xhci-host`, the control's inner volume is **byte-identical** to the 4.204 payload of record's
+> (`691fe90ff781e7c3…`), so the bases were right all along; `restore()` now regenerates with `GEN_ARGS` and deletes
+> the staged sibling blobs only when those flags did not ask for the host stack. **The variant is a counterfactual
+> and must not be flashed**: it carries the `host,index` sentinel *and* two PCDs set for the model, and 4.206
+> measured that the phone's own firmware already registers 18. Nothing was flashed, no partition written, no
+> `fastboot` command run, the payload in `boot` is unchanged, three physical actions still cannot be taken from this
+> host (a reset, a reboot to the bootloader, and the 4.187 P3 payload's screen photograph — `先读屏，再刷下一次` still
+> forbids booting it first), and `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.207.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

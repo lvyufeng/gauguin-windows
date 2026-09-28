@@ -5,6 +5,16 @@
 #  Rewritten to Binaries/gauguin/ and filtered to the drivers this
 #  project actually extracted from the device's own XBL.
 #
+#  --xhci-host: this file also carries the USB host stack, in
+#  `!if $(USE_XHCI_HOST_DRIVER) == 1` above. Those blobs are the
+#  ONE exception to the sentence above - they came from
+#  Binaries/bitra/, not from this device, because this
+#  device's XBL has no host-controller driver to extract. See
+#  SIBLING_BLOBS in tools/make_xbl_binaries.py.
+#    QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf
+#    QcomPkg/Drivers/XhciDxe/XhciDxe.inf
+#    QcomPkg/Drivers/UsbInitDxe/UsbInitDxe.inf
+#
 #  Packaged under Binaries/gauguin/ but NOT in this file, so not in
 #  the firmware volume. The reference has no line for them. Add an
 #  INF line if any turns out to be needed:
@@ -99,6 +109,10 @@
   INF Binaries/gauguin/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf
   INF Binaries/gauguin/QcomPkg/Drivers/DDRInfoDxe/DDRInfoDxe.inf
   INF Binaries/gauguin/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
+!if $(USE_XHCI_HOST_DRIVER) == 1
+  INF Binaries/gauguin/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf
+  INF Binaries/gauguin/QcomPkg/Drivers/XhciDxe/XhciDxe.inf
+!endif
 
   INF MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBusDxe.inf
   INF MdeModulePkg/Bus/Usb/UsbKbDxe/UsbKbDxe.inf
@@ -107,6 +121,9 @@
   INF Binaries/gauguin/QcomPkg/Drivers/UsbMsdDxe/UsbMsdDxe.inf
   INF Binaries/gauguin/QcomPkg/Drivers/UsbDeviceDxe/UsbDeviceDxe.inf
   INF Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.inf
+!if $(USE_XHCI_HOST_DRIVER) == 1
+  INF Binaries/gauguin/QcomPkg/Drivers/UsbInitDxe/UsbInitDxe.inf
+!endif
   INF Binaries/gauguin/QcomPkg/Drivers/HashDxe/HashDxe.inf
   INF Binaries/gauguin/QcomPkg/Drivers/CipherDxe/CipherDxe.inf
   INF Binaries/gauguin/QcomPkg/Drivers/MacDxe/MacDxe.inf

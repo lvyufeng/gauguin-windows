@@ -42919,3 +42919,112 @@ firmware LUN are all as they were, nothing was flashed, no partition was written
 `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
 
+
+## Step 4.207 — the tick arrives: with the two Qualcomm timer numbers replaced by the two this machine raises, the enable set becomes `0x6c00ffff` with nothing left pending, the root hub's periodic callback runs 645 times instead of once, and the poll 4.200-4.206 measured frozen at 01 advances past the wall on its own — the payload's own USB bring-up then runs and fails on this instrument's absent PMIC, which is where the model stops being able to say anything
+
+
+**The variant, and why it is two PCDs.** 4.206 finished the arithmetic: this phone's firmware and its SoC tree
+both put the non-secure EL1 physical timer at **18**, and this instrument raises it at **30**, so
+`BitraPkg.dsc.inc:51-52`'s `PcdArmArchTimerSecIntrNum|17` and `PcdArmArchTimerIntrNum|18` are the phone's numbers
+and the instrument's wrong ones. The variant is therefore *"do not apply the Qualcomm override"*: `Sec 17 -> 29`
+and `Int 18 -> 30`, which is exactly what `ArmPkg.dec:264-267`'s defaults give, and it moves the enable set from
+bits `0..15, 17, 18, 26, 27` (`0x0c06ffff`) to bits `0..15, 26, 27, 29, 30` (`0x6c00ffff`). 27 and 26 are already
+both ArmPkg's defaults and this machine's virtual and hypervisor lines, which is why only the two overrides move;
+4.205's prediction was `Int 18 -> 30` alone, and with all four numbers known the secure one has to move too. Both
+payloads carry the `host,index` sentinel patch and `USE_XHCI_HOST_DRIVER = 1`, and the one-variable claim is
+measured rather than asserted: inflating the LZMA-compressed FV image section out of each payload leaves two inner
+firmware volumes of 7,540,744 bytes differing in **12 bytes over 3 runs** — `0x10c270` (`mov w19, #0x1e` against
+`#0x12`), `0x10c274` (`mov w20, #0x1d` against `#0x11`) and 8 bytes of RSDS PDB signature at `0x10f280`.
+
+
+**The defect in this run, and it cost two instrument legs before it was found.** The first pair of payloads was
+built from a checkout that `tools/build-apriori-variant.sh` had left behind: its `restore()` EXIT trap regenerated
+the tracked `gauguinPkg` with **no flags at all**, so the tree declared `USE_XHCI_HOST_DRIVER = 0` while the
+payload the run had just built was generated from the opposite. Both payloads therefore came out **172,032 bytes
+of inner volume short** — `XhciPciEmulationDxe`, `XhciDxe` and `UsbInitDxe`, the three modules the probe's own
+census counts — and both legs stalled before every site the run was written to read. The census said so in its own
+rows (`discovered=80 apriori=69/70 started=73` against the payload of record's `83/70/76`, `all=136` against 139)
+and it was read as an allocation shift instead, and the four probe bases were moved `0x81000` up to compensate,
+which made the sites the run did reach print `MATCH` and hid the cause. Regenerated with `--xhci-host` the
+control's inner firmware volume is **byte-identical** to the 4.204 payload of record's — 7,540,744 bytes, sha256
+prefix `691fe90ff781e7c3` — so the 0x81000 was this run's own defect, 4.204's bases are the right ones, and the
+fix is in the script: `restore()` now regenerates with `GEN_ARGS`, the same flags the run itself used, and deletes
+the staged sibling blobs only when those flags did not ask for the host stack. **This is the step's most
+transferable finding**: a dropped generation flag produced a payload whose difference from the payload under test
+was invisible in a diff, in a byte count, and in every row the previous step had printed.
+
+
+**What the instrument measured, both legs, same flags, same probe.** Control (`|17`/`|18`, the 4.204/4.205
+configuration) and variant (`|29`/`|30`) ran on `--el3-stub --el3-zero-mem --el3-gic-real --el3-gic-secure
+--el3-seed-smem --el3-seed-aop`, 4.204's seven fabricated loaders, the same probe and the same probe flags, at
+4.204's own four bases. No site printed `MISMATCH` in either leg. The control reproduces 4.204: enable set
+`0x0c06ffff` and `ICPENDR0 = 0x40000000` — **INTID 30 pending and never taken** — `HUB NOTIFY` exactly **once**
+with the routine's own increment not running (`PollCount BEFORE 00, AFTER 00`), the wall reading `PollCount = 01`,
+still 01 twenty-five seconds later, reported `THE WALL, AND IT IS UNANSWERED`, and only *then* did the instrument
+supply the byte. The variant: enable set `0x6c00ffff`, `ICPENDR0 = 0` — **nothing left pending** — `HUB NOTIFY`
+**645 times** (a lower bound: the reader's own 360 s clock ended the run while the hub was still being notified,
+and the probe serviced every one), with `PollCount` advancing `01 -> 0xc8` by the routine's own increment and the
+instrument never writing the wall byte at all. So all three predictions written into the harness before the run
+land as written, and the fourth question — which leg the tick lands on — is answered: the NS-EL1 physical timer at
+30, with the secure registration at 29 accepted and harmless, because a secure world exists on this machine and
+has grouped every interrupt into Group 1.
+
+
+**And what the payload does once the tick arrives, which is the boundary.** The variant's console fills with
+`Usb30EnableVbus: Failed to initialize VbusSS for core 1` (418 rows), `UsbEnableVbus: ConfigUsb: Error - failed to
+enable the Vbus for the USB core 0: Not Found` (415) and `PmicUsbProtocol->GetOtgStatus Not Found` (416) — the
+`ConfigUsb` retry loop running continuously where 4.200-4.206 measured it never entered. Those are 4.203's rows,
+and 4.203 settled what they mean: this instrument's own stage-2 map produces *"PMIC was not detected"* with no
+device involved, and `XhciDxe` at `0x33d0` is the caller that prints the `GetOtgStatus` line. So the run moves the
+payload from **frozen** to **running and failing on a hardware absence the instrument models**, which is as far as
+this machine can carry it. One consequence to state rather than hide: the variant's `P2 USB` census row was
+sampled **once**, early, at `pciio=0 usb2hc=0`, and then scrolled off the panel by that flood — the reader caught
+1696 rows over 1430 screens and never re-sampled it — while the control's calm console left the same row on screen
+to be sampled 18 times at `pciio=1 usb2hc=1`. The two legs' downstream USB rows are therefore **not** comparable,
+and the control's are not even clean: from the instrument's wall write onward its enumeration is downstream of one
+store the instrument made, which is the cost the harness header states. The rows the two legs *are* compared on
+are the ones the hardware returned and nothing supplied — the enable set, the pending set, the notification count
+and `PollCount`'s own advance. Both legs read `P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success`, which is
+the sentinel gate's own row and is the same in both, as it must be: the sentinel was not the variable.
+
+
+**decides**: that replacing the two Qualcomm timer PPI numbers with the two this machine raises is *sufficient*
+for the tick to be delivered — the enable set becomes `0x6c00ffff` and `ICPENDR0` comes back 0, so the machine
+delivered what it raised and left nothing pending, where the control leaves INTID 30 pending and untaken; that the
+root hub's periodic callback is timer-driven, because it runs 645 times on the variant against exactly once on the
+control, and the same payload's own `PollCount` increment executes 00 -> 0xc8 after 4.200-4.206 measured it never
+executing; that `tools/build-apriori-variant.sh`'s `restore()` trap was leaving the tracked platform declaring the
+opposite of the payload it had just built, and that this is what produced 4.207's first pair of payloads — 172,032
+bytes and three modules short of the payload of record, with the control's inner firmware volume byte-identical to
+the record's once regenerated with `--xhci-host`; and that the payload's USB bring-up, once the tick reaches it,
+fails on the instrument's absent PMIC rather than on anything about the timer. **corrects**: this step's own first
+two instrument legs, which read a three-module module-set difference as an allocation shift and moved the four
+probe bases `0x81000` up on the strength of a real exception dump from a payload that was itself wrong — the
+`MATCH` rows those bases produced were the instrument agreeing with a mistaken premise; and 4.206's closing *"the
+prediction is that the tick arrives and, if the root hub's re-enumeration is driven by a timer event, `PollCount`
+advances past 01 and the wall opens"*, whose conditional is now discharged in the affirmative and whose *"the
+phone's tick has still never been observed in a console"* stands unchanged. **does not decide**: whether the
+variant's payload would enumerate a USB device, because the census row was scrolled off the panel and the
+instrument has no PMIC to enable a Vbus; whether anything else in the payload waits on the tick; whether the
+phone's own tick has ever actually been delivered, which still rests on 4.206's two declarations and no console;
+and whether the virtual and hypervisor numbers matter, since 4.206's candidate edit (`Virt|19`, `Hyp|16`) is still
+offered and still not made and `USE_PHYSICAL_TIMER = 1` means only `CNTP` is ever armed. **carries the standing
+limits unchanged**: the thirteen rungs, the SEEDED SMEM word, the AOP `0xC3F000C` record and the EL3 stub's three
+fabricated structures all stand and none is touched; `0x41E00000` stays retired; the SPMI window stays blank
+because `-M virt` has no SPMI arbiter to alias to; and the payload in `boot` is unchanged and is still the
+4.204/4.205 image. **not an action**: the variant is a counterfactual and must not be flashed to the boot
+partition — it carries the `host,index` sentinel (one rewritten instruction per site in a Qualcomm-signed driver,
+so the host-client record holds values no device produces) *and* two PCDs set for the model rather than the phone,
+and 4.206 measured that the phone's own firmware already registers 18. No `fastboot` command, no flash, no
+partition written, no seed written to the device and no console read from it; what ran was two builds and two
+instrument legs, `sh work/out/qemu-probe-4.207/run-hand14.sh <tag> <payload.raw>`, and the only file changed under
+version control is `tools/build-apriori-variant.sh`'s `restore()`. **device state**: unchanged and not re-measured
+this step; the device was still not enumerating when 4.205 last looked. Three physical actions remain outstanding
+and none can be taken from this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3
+`fastboot boot` workflow needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb
+devices` is empty, so no screencap can be taken from this host at all, and 先读屏，再刷下一次 still forbids booting the
+payload before that photograph exists. Nothing on the device's storage was written, so `userdata`, the partition
+table and the firmware LUN are all as they were, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+
