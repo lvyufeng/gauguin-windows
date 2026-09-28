@@ -1660,7 +1660,29 @@ Work:
 > block at the DWC3 base `0x0A600000` = guest IP `0x41A00000`; `0x0A60C100` is the block *after* xHCI
 > (`DWC3_GLOBALS_REGS_START`), and the instrument's zero model is what makes the byte zero. 4.192's probe
 > asked its question of the identity address — which the redirect answers with the zero model — and its
-> pool reads came back `unreadable`, a method defect now recorded.) **One map gap named**: the platform's own
+> pool reads came back `unreadable`, a method defect now recorded.) **4.196: the seed 4.195 named was
+> written, and it moved the stop.** One added loader line puts a **fabricated** xHCI capability block
+> (CAPLENGTH `0x20`) at pool `0x41A00000`, the guest IP the redirect serves the DWC3 base from, and the
+> `ASSERT XhciReg.c:121` row **disappears from the panel** (349 rows, ending on UsbConfigDxe's Vbus trio)
+> while the run goes free after the same nine `ClockDxe` answers; the register block then reads
+> `USB30_PRIM 0x0A600000 = 20001001`, which is that blob's own first four bytes `20 00 10 01` printed in
+> memory order, against `00000000` in the control — 4.192's redirect claim shown by changing the value.
+> The break-in PC is not a stop at all: `0x9c4b7c10` is `MetronomeDxe+0x2C10`, the `ret` of `ArmReadCntPct`,
+> and the twenty-step trace is a byte-exact four-module chain — bitra XhciDxe `0x4918` `blr` `gBS->Stall`
+> → `CoreStall` (`DxeCore+0xCC00`) → `CoreInternalWaitForTick` (`DxeCore+0xCBA0`) → `WaitForTick`
+> (`MetronomeDxe+0x123C`, returning `EFI_SUCCESS`) → `MicroSecondDelay` (`MetronomeDxe+0x16FC`) — so the
+> wall past the assert is the xHCI poll's own 1 µs stall loop, with a `Timeout × 1000` =
+> 10 000 000-iteration bound that a block of pool RAM can only ever reach. The poll helper `0x48AC` has
+> exactly two callers: a per-port PORTSC routine in `Xhci.c` waiting for bit 21 **set** and
+> `XhcDisableAllDeviceSlotsAndPorts` (`0xAA2C`, its own `%a` name and `Failed to disable port %d` format in
+> the image's rodata) waiting for bit 9 (PP) **clear**. The next experiment — pre-set the bit the poll
+> waits on, the mirror of 4.190's trick — is named and **not run**. (4.197, the control: the same run with
+> that one loader line deleted reproduces 4.192 instruction for instruction, `pc=0x9be09e24`, `rva=0xfe24`,
+> twenty steps over two alternating PCs, the assert back at panel row 359 — so the assert's disappearance
+> is the seed's doing; and three runs holding three different subsets of `{K24, K25, K26}` with the fully
+> lost gaps every panel reports makes 4.196's row-163 difference sampling loss, not an effect of the blob.
+> A panel read is destructive (`efi_panic_clear()`) and cannot settle what the guest executed; the CPU can.)
+> **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts
 > `/soc/qusb@88e3000` and `/soc/ssphy@88e8000` (`/proc/iomem` confirms `088e3000-088e33ff :

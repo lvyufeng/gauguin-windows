@@ -41012,3 +41012,269 @@ not a reading either.
   photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
   firmware LUN are all as they were.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.196 — the `CapLength` assert really was the wall: seed it and the stop moves to the xHCI poll's own `gBS->Stall`, read off the machine as a four-module call chain
+
+**The question.** 4.195 ended by naming both the missing experiment and the address the *machine* had pointed
+at rather than the tree had guessed: `CapLength` is BAR0 byte 0, BAR0 is the DWC3 base `0x0A600000`, that
+address is a declared region, and under the 55-block plan it is served by pool block `0x41A00000`. This step
+writes that block and asks the question `run-hand7.sh` writes down before the run: *"with CapLength non-zero
+the assert cannot fire, and the next wall is structural rather than a value … If that row appears where the
+assert row used to be, then the instrument cannot host the USB bring-up at all and no further blob will
+change that; if the host controller is created instead, the guess above is wrong about something and the
+console will say what."*
+
+**The run.** `run-hand7.sh` (`sha256 06eb42ab8fcc2d2e…`, 4,636 B) is 4.192's command line with **one line
+added**: `--extra=-device "--extra=loader,file=/tmp/xhci-cap.bin,addr=0x41a00000,force-raw=on"`. The six
+fabricated loaders stand where they stood, the EL3 flags are the same four, and `hand7probe.py`
+(`sha256 30a4e441d8ff2430…`, 22,079 B) arms the same six `Z0` sites with the same twelve arguments as 4.192.
+The new block is 4,096 B of **fabricated** xHCI registers (`sha256 d92559090d42f685…`): CAPLENGTH `0x20`,
+HCIVERSION `0x0110`, HCSPARAMS1 with MaxSlots 32 / MaxIntrs 8 / MaxPorts 2, HCCPARAMS1 with AC64 and
+ExtCapReg `0x20` pointing at `0x80` where a zero dword ends the extended-capability walk, DBOFF `0x1000`,
+RTSOFF `0x2000`, USBCMD 0, USBSTS with HCHalted set, PAGESIZE 1. **None of it is a reading**: 4.193 measured
+the phone's DWC3 in *device* mode with no host instance, so no live CAPLENGTH exists to copy and the number is
+invented.
+
+**The handshake, and then the run goes free.** The six sites, the `/pmic/target` suppression, the two DALSys
+faults, the GDSC and both vote records all reproduce 4.192's — and then **9 answers**, each
+`wrote 0x0 through the stub (b'OK') -> reads back 0x0` at `x19 = 0x11A01C`, `0x11A034`, `0x11A060`, one of
+them carrying `[x19+4] = 0x105`: the three `ClockDxe` rails 4.190 and 4.191 answered, answered again. Then
+`@41.4s nothing stopped in 25s after 9 answer(s) -- the guest is free`. That is the first run in this family
+where the wall had to be found by breaking in rather than by waiting for it — which is itself the first
+result, because 4.192's assert *was* a stop.
+
+**The console.** Panel `work/out/qemu-panel-4.196-trace.txt` (349 rows, 5 gaps, weakest margin 1.00 of 60
+sub-blocks; `sha256 7e58049fd61284ac…`) holds **no `CapLength` row and no `ASSERT XhciReg.c` row at all**,
+where 4.192's holds one at panel row 396/399 and 4.197's — the control in the next step — holds one at
+359/362. Its last rows are UsbConfigDxe's Vbus trio, twice, which no run that halts on the assert ever
+prints: `Usb30EnableVbus: Failed to initialize VbusSS for core 1`,
+`UsbEnableVbus: ConfigUsb: Error - failed to enable the Vbus for the USB core 0: Not Found`,
+`PmicUsbProtocol->GetOtgStatus Not Found` (panel rows 343–348).
+
+**The seed reached the address the guest reads, and the probe's own print says how.** The register block reads
+`USB30_PRIM 0x0a600000 = 20001001` and `+4 = 20080002`. The probe prints those as **bytes in memory order**
+(`out("%-22s = %s" % (nm, b.hex() if b else "unreadable"))`, `hand7probe.py:453`), so the four bytes are
+`20 00 10 01` — **equal to the first four bytes of `/tmp/xhci-cap.bin`**, CAPLENGTH `0x20` and HCIVERSION
+`0x0110` in the leading dword. The control (4.197) reads `00000000` at the same address through the same code
+path. That two-run contrast is the strongest statement this project holds that a fabricated block is what the
+guest sees; it is also the first time 4.192's claim — *this address is served by the redirect and its zero is
+the instrument's* — has been shown by **changing** the value rather than by arguing about it. The companion
+lines `pool 0x41a00000 = unreadable` and `pool 0x41c00000 = unreadable` are **not** findings: `mem()` reads
+host physical memory and this host has nothing mapped there, so reading the pool from the host is retired as a
+method — the guest's own address is the one the probe serves.
+
+**The break-in PC is a `ret` inside a counter leaf.** `THE WALL: pc=0x9c4b7c10  bytes at the wall:
+c0035fd600e138d5c0035fd6404238d5`, `lr=0x9c4b6754`, `sp=0x3140`. The page walk puts `MZ` at `0x9c4b5000` two
+pages down, `rva = 0x2c10`, `e_lfanew = 0x78`, 5 sections, `SizeOfImage = 0x9000`. That is this tree's own
+**`MetronomeDxe.efi`**, and its headers say so exactly — `llvm-objdump -h` gives `.text` VA `0x1000` VSZ
+`0x202c`, `.rdata 0x4000`, `.data 0x5000`, `.pdata 0x7000`, `.reloc 0x8000`, and `RVA 0x8000 + 0xc` rounds to
+the log's `SizeOfImage 0x9000`. The module's own `.map` then names the address: RVA `0x2c0c` is
+**`ArmReadCntPct`** (`mrs x0, CNTPCT_EL0` / `ret`), so the wall PC **is its `ret`**, and the four eight-byte
+leaves around it are `ArmReadCntFrq` `0x2bfc`, `ArmReadCntHctl` `0x2c04`, `ArmReadCntPct` `0x2c0c` and
+`ArmReadCntkCtl` `0x2c14`. **A break-in between two `ret`s is a machine caught mid-flight, not a machine
+stopped**, and the trace says which flight.
+
+**The trace is a four-module call chain, and all twenty steps are byte-checked.** Every reported `pc` and its
+reported byte column agree with the tree's own image at `base + RVA`, with no offset anywhere in the twenty:
+
+| reported pc | module (base) | RVA | the trace's byte column | the tree's bytes there |
+| --- | --- | --- | --- | --- |
+| `0x9c4b6754` | MetronomeDxe `0x9c4b5000` | `0x1754` | `080014cb08dd4092` | `MicroSecondDelay+0x58` |
+| `0x9c4b6748` | MetronomeDxe | `0x1748` | `f40300aaf50000b4` | `MicroSecondDelay+0x4c` |
+| `0x9c4b6764` | MetronomeDxe | `0x1764` | `f9ffff17e00313aa` | `MicroSecondDelay+0x68` |
+| `0x9c4b6778` | MetronomeDxe | `0x1778` | `c0035fd6f353baa9` | `MicroSecondDelay`'s `ret` |
+| `0x9c4b625c` | MetronomeDxe | `0x125c` | `e0031faafd7bc1a8` | `WaitForTick+0x20`, `mov x0,xzr` |
+| `0x9c4b6264` | MetronomeDxe | `0x1264` | `c0035fd6f353bda9` | `WaitForTick`'s `ret` |
+| `0x9cca2c9c` | DxeCore `0x9cc96000` | `0xcc9c` | `e0031faaff430091` | `CoreStall+0x9c`, `mov x0,xzr` |
+| `0x9cca2cac` | DxeCore | `0xccac` | `c0035fd6f353bea9` | `CoreStall`'s `ret` |
+| (every `lr` down to) `0x9bdfe91c` | bitra XhciDxe `0x9bdfa000` | `0x491c` | — | the instruction after `blr x8` at `0x4918` |
+
+The module bases are the run's own: the page walk found `MZ` at `0x9c4b5000`, and the panels print
+`Loading DxeCore at 0x009CC96000` in all three runs. The names come from the trees' own `.map` files, not from
+guesswork: `MetronomeDxe.map` gives `WaitForTick` `0x123c`+`0x2c` and `MicroSecondDelay` `0x16fc`+`0x80`;
+`DxeCore.map` gives `CoreStall` `0xcc00`+`0xb0` and `CoreInternalWaitForTick` `0xcba0`+`0x60`. The chain the
+trace walked is therefore:
+
+    XhciDxe+0x4918  blr x8            (gBS->Stall, offset 0xF8 of the boot-services table)
+      → CoreStall            DxeCore+0xCC00        at 0xCC98 calls 0xCBA0
+        → CoreInternalWaitForTick  DxeCore+0xCBA0  tail-branches  br x2  to gMetronome->WaitForTick
+          → WaitForTick      MetronomeDxe+0x123C   at 0x1258 calls 0x16FC
+            → MicroSecondDelay  MetronomeDxe+0x16FC
+
+Every link is a real call or a real tail branch, and the innermost bytes are the loop
+`0x1748 mov x20,x0` / `0x174c cbz x21,0x1768` / `0x1750 bl 0x2c0c` / `0x1754 sub x8,x0,x20` /
+`0x1758 and` / `0x175c subs` / `0x1760 csel` / `0x1764 b 0x1748`, exited at `0x1768 mov x0,x19` — **one
+completed iteration of an architectural-timer delay, not a stuck one**. `WaitForTick`'s own source is in this
+tree (`Mu_Basecore/EmbeddedPkg/MetronomeDxe/Metronome.c`: `MicroSecondDelay (TickNumber * gMetronome.TickPeriod
+/ 10); return EFI_SUCCESS;`), and the disassembly is that line: `adrp x8,0x6000` / `ldr w8,[x8,#0x4d8]` /
+`mul w8,w8,w1` / `udiv w0,w8,#10` / `bl 0x16fc`, then `mov x0,xzr` — the `EFI_SUCCESS` a return at `0x125c`
+cannot fail to produce.
+
+**The poll helper, disassembled, and both of its call sites named.** RVA `0x48ac` takes an 80-byte frame and
+computes its bound as `mul w25,w4,w8` with `w8 = 0x3e8`: **Timeout in milliseconds × 1000**. `mov w23,wzr` is
+the counter, `and w24,w3,#0xff` the expected value, and `mov x20,#0x12` + `movk x20,#0x8000,lsl #48` is
+`0x8000000000000012` = `EFI_TIMEOUT`. The loop at `0x48f0` reads the register (`bl 0x4310`, `XhcReadOpReg`),
+tests `bics wzr,w19,w0` / `cset w9,eq` / `cmp w9,w24` / `b.eq 0x492c` (which zeroes `x20`, so the success arm
+returns `EFI_SUCCESS`) and otherwise calls `gBS->Stall(1)` (`orr w0,wzr,#1`) and increments. It has **exactly
+two callers** — one `bl 0x48ac` scan finds `0x3720` and `0xaa2c` and nothing else — and both pass
+`w4 = 0x2710`:
+
+- `0x3720`, inside a routine in `Xhci.c` (its own assert operands are the file string `Xhci.c` at RVA
+  `0x10538` and `CR has Bad Signature` at `0x1053f`). It strides the operational register block's per-port
+  registers, `ldrb w8,[x20,#268]` bounded and `w21 = 0x400 + 0x10·port`, reads the port's PORTSC
+  (`bl 0x4310`), switches on its link state through a jump table at RVA `0x10458`, writes link-state values
+  with bit 16 (`0x10000`, the Link State Write Strobe in the xHCI layout) and, after `bl 0x4a4c` — an
+  `XhcIsHalt`-shaped read of USBSTS bit 0 — and `bl 0x4b80` (offset 0, bit 0, expect clear, i.e. run the
+  controller), writes `w23 | 0x10` into PORTSC and waits for **bit 21 to read set**.
+- `0xaa2c`, inside **`XhcDisableAllDeviceSlotsAndPorts`** — the name is the image's own, at RVA `0x1229f`,
+  passed as the `%a` argument of the format `%a: Failed to disable port %d\n` at `0x12280`, which is exactly
+  the row that prints on failure (`orr w0,wzr,#0x80000000`, `EFI_D_ERROR`, then `bl 0xd1d4`). It walks ports
+  the same way (`w22 = 0x400`, `add w22,w22,#0x10`), **clears** bit 9 through `bl 0x4870` and waits for bit 9
+  to read **clear** — in the xHCI layout bit 9 of PORTSC is PP, so this powers a port off and waits for the
+  power to drop.
+
+**What the stop now is, and how it differs from 4.192's.** In 4.192 and in 4.197 the guest executes the
+assert's halt at `XhciDxe+0xFE04`: `str xzr,[sp,#8]` at `0xFE20`, then the two alternating PCs `0x9BE09E24` /
+`0x9BE09E28` (`ldr x8,[sp,#8]` / `cbz x8,0xfe24`) with `lr = 0x9BE09E20` and `x8 = 0`, reproduced byte for
+byte. In 4.196 those PCs are absent; the machine is inside the two-instruction body of the poll's 1 µs stall,
+one frame deep in `gBS->Stall`, and the assert row is gone from the panel. That is the **structural wall** the
+run's header predicted, and 4.196 states it sharper than 4.195 could: a poll's only two exits are the driver's
+own writes and the ten-million-iteration timeout, so in a register block made of pool RAM the `XhcCreateUsbHc`
+bring-up can only ever reach its timeout, and no further fabricated capability block changes that. What a
+*different* seed could do is the mirror of 4.190's trick — the poll waits on a **bit**, and pre-setting the
+target bit (or clearing it, for the expect-clear site) makes the first pass succeed. That is the next
+experiment this step names and does not run.
+
+**What it does not decide.** (a) *Which* of the two poll sites the guest was in: the trace carries `x0` and
+`x8`, not `w1`/`x21`, and both sites pass the same 10 000 ms. A break-in that also dumped `w1`, or a `Z0` at
+`0x48f0` reading it, names the register — a probe change, not a device change. (b) Whether the poll ended
+`EFI_TIMEOUT` or success: the seeded guest *did* get past the assert and print the Vbus rows the halting
+control never reaches, but no `XhcCreateUsbHc: Failed to reset the host controller` row is in the panel
+either, and **neither the presence nor the absence of a row is that verdict** — a panel sample is destructive
+(`efi_panic_clear()` wipes the buffer before the rows that follow print) and is taken at 0.25 s. (c) Whether
+the three extra `K` rows this panel prints mean three extra dispatched modules; 4.197 answers that one.
+
+**Rows.**
+
+- **artifacts**, all host-side and none of them a device read: `work/out/qemu-probe-4.196/run-hand7.sh`
+  (`06eb42ab8fcc2d2e…`, 4,636 B), `hand7probe.py` (`30a4e441d8ff2430…`, 22,079 B), `hand7-run.log`
+  (`f326f5432cd1d752…`, 7,676 B), `panel4196.log` (`9e82d1ff07bb3ca9…`), `work/out/qemu-panel-4.196-trace.txt`
+  (`7e58049fd61284ac…`, 28,327 B); the fabricated block `/tmp/xhci-cap.bin` (4,096 B,
+  `d92559090d42f685…`); one `llvm-objdump -h` and one RVA read each of `MetronomeDxe.efi` and `DxeCore.efi`
+  from the gauguin build, plus their `.map`s; and one caller scan of `/tmp/xhci-bitra.asm`. Nothing was
+  written outside `docs/` and `work/` (gitignored).
+- **shows**: the run went free with the three `ClockDxe` rails answered and no stop after them; the panel has
+  no `CapLength`/`ASSERT` row and ends on the Vbus triple at rows 343–348; the four bytes at `0x0A600000` are
+  the fabricated block's own first four, in memory order; the break-in PC is the `ret` of `ArmReadCntPct`; and
+  the twenty-step trace is a byte-exact `XhciDxe+0x4918` → `CoreStall` → `CoreInternalWaitForTick` →
+  `WaitForTick` → `MicroSecondDelay` chain, each link named by this tree's own `.map`.
+- **decides**: the seed reaches the address the guest reads (this run's `20 00 10 01` against the control's
+  zero, same probe, same path); the assert's disappearance is the seed's doing (by 4.197's contrast); and the
+  stop past the assert is not a halt but the xHCI poll's 1 µs stall loop, with a ten-million-iteration bound —
+  4.195's prediction, confirmed this time at runtime and not only at the instruction level.
+- **corrects**: the byte-identity note carried out of 4.195 that the trace's reported `pc` sits `0x1c` above
+  the byte block it belongs to. There is no offset: all twenty steps' byte columns equal this tree's bytes at
+  `base + RVA`, and the wall's sixteen bytes equal `MetronomeDxe.efi` at RVA `0x2c10`. The `0x1c` was this
+  author's arithmetic about a module base. Also corrected from the first reading of this run: the wall PC is
+  not inside a timer delay *routine* called from an unknown place — it is a leaf's `ret`, and only the trace
+  names the caller. And the neighbouring leaves are `CntFrq`/`CntHctl`/`CntPct`/`CntkCtl`, not the
+  `CntPct`/`CntVct` pair a first glance at the byte pattern suggested.
+- **corrects, second**: neither branch of `run-hand7.sh`'s written prediction occurred. The panel has no
+  `XhcCreateUsbHc: Failed to reset the host controller, Status = Timeout` row where the assert row used to be
+  — it has Vbus rows there instead — so the prediction is confirmed in its *reasoning* (the next wall is
+  structural) and falsified in its *letter* (the row it named never printed).
+- **does not decide**: which poll site; whether the poll timed out; whether the payload would ever create a
+  host controller under this instrument (the poll's bound says it cannot, and that is an argument from the
+  module, not a reading of the run); and still nothing about the live phone's own capability block, because no
+  host instance exists there to read one from.
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
+  fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and
+  the EL3 stub's three fabricated structures all stand, and the panel's own header says so. The fabricated
+  xHCI block is a fourth lie of that family and is named as one where it is used.
+  `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5` and was read, not written.
+- **not an action**: no `fastboot` command, no console read from the device, and no seed written anywhere but
+  the QEMU command line. The porting goal is unchanged and unmet — no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state remains
+  a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+  `lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken
+  from this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot`
+  workflow needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out
+  screencap -p` still returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that
+  photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
+  firmware LUN are all as they were.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.197 — the control: without the one seed the assert is back and the halt is byte-identical, so the row-163 difference is the sampling
+
+**What a control is for here.** 4.196's panel differs from 4.192's at exactly two places: the assert row is
+gone, and panel row 163 reads `K 24/25/26 Ss 24/25/26/69` where 4.192 reads `K 23 Ss 23/69` straight to
+`K 27 Ss 27/69`. No xHCI register is read that early in the dispatch, so the seed cannot be the cause of the
+second difference — and if the run had been left as one measurement, that difference would have been recorded
+as a second, unexplained effect of a 4 KB fabricated block. This step is the same run with the block removed
+and nothing else changed. `run-hand8.sh` (`sha256 5f5b5df8b49e2b86…`, 3,601 B) is `run-hand7.sh` with the
+`xhci-cap` line deleted; `diff` says so — one functional delta plus the file's own 4196→4197 and hand7→hand8
+renames — and `hand8probe.py` (`sha256 89cd81094d0f10cb…`, 22,079 B) differs from `hand7probe.py`
+(`30a4e441d8ff2430…`) in those same two strings and nothing else. A control is not an experiment: it asks the
+machine nothing 4.196 did not already ask.
+
+**The result: 4.192 reproduced, wall and all.** `hand8-run.log` (`sha256 77d3004ab1277795…`, 7,372 B) reaches
+`@41.7s nothing stopped in 25s after 9 answer(s) -- the guest is free` on the same nine answers, and then
+`THE WALL: pc=0x9be09e24  bytes at the wall: e80740f9e8ffffb4fd7b41a9ff830091`, `lr=0x9be09e20`, and
+`MODULE: MZ at 0x9bdfa000 after 15 page(s); rva = 0xfe24`, with a twenty-step trace alternating over
+**exactly two PCs**, `0x9be09e24` / `0x9be09e28`, `x0 = x8 = 0` on every step — 4.192's wall, byte for byte
+and register for register. Both code words are bitra XhciDxe's own: `0xfe20 str xzr,[sp,#8]`,
+`0xfe24 ldr x8,[sp,#8]`, `0xfe28 cbz x8,0xfe24`. The panel
+(`work/out/qemu-panel-4.197-trace.txt`, 363 rows, 6 gaps, weakest margin 1.00; `sha256 1465ddadf5ebb48f…`)
+has the assert back: row 359 `…/XhciDxe/XhciReg.c:121 ASSERT: (Xhc->CapLength != 0`, row 362
+`|ASSERT XhciReg.c +121: 0|` as its last — the two rows 4.192's panel ends on. The register block reads
+`USB30_PRIM 0x0a600000 = 00000000` where 4.196 reads `20001001`, from the same probe through the same code
+path, and it prints **0** `Usb30EnableVbus` rows and **0** `GetOtgStatus` rows where 4.196 prints two of each.
+
+**And therefore the row-163 difference is the sampling.** Three runs of the same payload under this
+instrument now hold three different subsets of `{K24, K25, K26}`: 4.192 none of them (`K 23` at row 162, `K 27`
+at 163), 4.196 all three (rows 163–166), 4.197 **`K24` alone** (row 163, `K 27` at 164). Ordering forbids the
+"printed but not shown" reading — a `K 27` row can only be printed after the `K 24/25/26` rows have been — so
+the rows existed on the screen in all three runs and were lost between samples in two of them. The loss is
+measurable in each panel's own header: the gaps whose screen holds **0** rows the stream already holds are
+the ones where text printed between two samples and nothing recovers it, and every run has them — 4.192
+`96.57s 4/0` and `102.57s 3/0` (7 rows), 4.196 `96.80s 3/0` and `103.06s 4/0` (7 rows), 4.197 `96.82s 1/0`
+and `103.32s 4/0` (5 rows). A three-row window is exactly the size that disappears into one of those. The
+control is what turns that from a plausible mechanism into the explanation, because **the same difference
+appears without the seed** — which is the trap the run was built to avoid.
+
+**The method limit this leaves standing, stated as a rule.** No panel read can settle what the guest
+executed, because reading is destructive: `efi_panic_clear()` wipes the panic buffer before the rows that
+follow it print, so a module load that prints both a `K` row and a `P2 SUPP` row keeps only the later one; and
+the panel is a *reconstruction* from 1,199 samples, so rows can be lost and rows can be joined (4.192's row
+148 shows two screen lines in one). The three panels are three samples of one stream. The instrument that
+answers *what did the guest do* is the CPU — a break-in, a byte-checked trace and `lr` — and 4.196's trace is
+the first time that has been used here to read a **call chain** rather than a stop.
+
+**Rows.**
+
+- **artifacts**, all host-side: `work/out/qemu-probe-4.197/run-hand8.sh` (`5f5b5df8b49e2b86…`, 3,601 B),
+  `hand8probe.py` (`89cd81094d0f10cb…`, 22,079 B), `hand8-run.log` (`77d3004ab1277795…`, 7,372 B),
+  `panel4197.log` (`89a7fe4d40955958…`), `work/out/qemu-panel-4.197-trace.txt` (`1465ddadf5ebb48f…`); one
+  `diff` of the two run files and one of the two probe files; and the three panels' gap headers read side by
+  side for the `{K24, K25, K26}` census. Nothing was written outside `docs/` and `work/` (gitignored).
+- **shows**: with the one loader removed and nothing else changed, the run reproduces 4.192's stop
+  instruction for instruction and register for register; the assert row returns at the same stream position
+  it held in 4.192; and the `{K24, K25, K26}` set differs across the three runs in a way that tracks the gaps
+  and not the seed.
+- **decides**: the assert's disappearance in 4.196 is attributable to the seed, by a two-run contrast whose
+  only variable is the seed; the row-163 difference is sampling loss and not an effect of the seed; and
+  4.192's published reading of the stop — a `CpuDeadLoop` past the assert — is reproducible rather than one
+  run's luck.
+- **does not decide**: whether the panic buffer's *content* ever varies between runs for a reason other than
+  sampling (three samples cannot separate "the guest printed the same stream" from "the guest printed
+  different streams"); and nothing about the phone, the payload's other walls, or the xHCI bring-up beyond
+  what 4.196 already recorded.
+- **carries the standing limits unchanged**, exactly as 4.196 lists them, including the fabricated-block
+  inventory and `device/dxe/UsbConfigDxe.efi` at
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, read and not written.
+- **not an action**: no `fastboot` command, no console read from the device, no device write of any kind. The
+  porting goal is unchanged and unmet, and the three physical actions outstanding from 4.196 — a physical
+  reset of the phone, a reboot to the bootloader, and a photograph of the 4.187 P3 payload's screen — are
+  still outstanding and still cannot be taken from this host.

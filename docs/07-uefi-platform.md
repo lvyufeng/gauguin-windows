@@ -3947,6 +3947,58 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > block 83's first word non-zero) is **not** made. Nothing was flashed, no partition was written,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.195.
 >
+> **Step 4.196 — the seed 4.195 named is written, and it moves the stop: the assert goes, and the machine is
+> caught inside the xHCI poll's own `gBS->Stall`.** One line is added to 4.192's command line —
+> `loader,file=/tmp/xhci-cap.bin,addr=0x41a00000,force-raw=on`, 4,096 B of **fabricated** xHCI registers
+> (CAPLENGTH `0x20`, HCIVERSION `0x0110`, MaxPorts 2, AC64, DBOFF/RTSOFF, USBSTS halted) — and nothing else
+> changes. The run goes **free** after the same nine answers (`@41.4s nothing stopped in 25s`), and its
+> 349-row panel has **no `CapLength` row and no `ASSERT XhciReg.c` row at all**, ending on UsbConfigDxe's
+> Vbus trio at rows 343–348 where 4.192 and 4.197 end on the assert. The seed reached the address the guest
+> reads: `USB30_PRIM 0x0a600000 = 20001001`, printed as bytes in memory order (`hand7probe.py:453` prints
+> `b.hex()`, no swap), equal to the blob's own first four bytes `20 00 10 01` — against `00000000` in the
+> control through the identical path, which is 4.192's redirect claim shown by **changing** the value. The
+> `pool 0x41…` reads that came back `unreadable` are a probe artifact (`mem()` reads host physical memory)
+> and are retired as a method. **The break-in PC is a `ret`, not a stop**: `pc=0x9c4b7c10` is
+> `MetronomeDxe.efi+0x2C10`, the `ret` of `ArmReadCntPct` (module base `0x9c4b5000` from the page walk; the
+> image is this tree's own `MetronomeDxe.efi` — `.text 0x1000`+`0x202c`, 5 sections, `SizeOfImage 0x9000`).
+> **The twenty-step trace is a four-module call chain, byte-exact at every step**: bitra XhciDxe `0x4918`
+> `blr` `gBS->Stall` → `CoreStall` (`DxeCore+0xCC00`, its `mov x0,xzr` at `0xCC9C`) → `CoreInternalWaitForTick`
+> (`DxeCore+0xCBA0`, `br x2`) → `WaitForTick` (`MetronomeDxe+0x123C`, `mov x0,xzr` at `0x125C` = the
+> `EFI_SUCCESS` of `Metronome.c`) → `MicroSecondDelay` (`MetronomeDxe+0x16FC`, the timer loop
+> `0x1748`–`0x1764`, exited normally at `0x1768`). Every name is from the tree's own `.map`s and every
+> reported byte column equals the file's bytes at `base + RVA` **with no offset** — which retires the `0x1c`
+> readback-offset note carried out of 4.195 as this author's own arithmetic error. The poll helper `0x48AC`
+> computes `Timeout × 1000` iterations, returns `0` or `EFI_TIMEOUT 0x8000000000000012` through a normal
+> epilogue, and has **exactly two callers**: `0x3720`, a per-port PORTSC routine in `Xhci.c` (MaxPorts at
+> `+268`, offset `0x400 + 0x10·port`, link-state writes with bit 16, waits for bit 21 **set**, 10 000 ms), and
+> `0xAA2C` inside **`XhcDisableAllDeviceSlotsAndPorts`** (its own `%a` name at RVA `0x1229F`, format
+> `%a: Failed to disable port %d`), which **clears** bit 9 (PP) and waits for it to read **clear**, 10 000 ms.
+> So the wall past the assert is structural and quantified: the bring-up can only reach the timeout, and the
+> one seed that could pass it is the mirror of 4.190's trick — pre-set the bit the poll waits on. **Named,
+> not run.** Neither branch of `run-hand7.sh`'s written prediction occurred (no `XhcCreateUsbHc: Failed to
+> reset the host controller` row either), so it is confirmed in reasoning and falsified in letter. Nothing
+> was flashed, no partition was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step
+> 4.196.
+>
+> **Step 4.197 — the control: the assert comes back, the halt is byte-identical, and the row-163 difference
+> is the sampling.** 4.196's panel differed from 4.192's in two places, and the second — panel row 163
+> reading `K 24/25/26 Ss 24/25/26/69` where 4.192 reads `K 23 Ss 23/69` straight to `K 27 Ss 27/69` — cannot
+> be the seed, since no xHCI register is touched that early in the dispatch. So the run was repeated with
+> **one line deleted** (`run-hand8.sh` = `run-hand7.sh` minus the `xhci-cap` loader; the probe differs only
+> in its two rename strings), and the result is 4.192 reproduced exactly: the same nine answers and free run,
+> `pc=0x9be09e24` with bytes `e80740f9e8ffffb4fd7b41a9ff830091`, `lr=0x9be09e20`, `MZ` at `0x9bdfa000` after
+> 15 pages, `rva = 0xfe24`, twenty steps over exactly two alternating PCs with `x0 = x8 = 0` (§
+> `0xfe20 str xzr,[sp,#8]` / `0xfe24 ldr x8,[sp,#8]` / `0xfe28 cbz x8,0xfe24`), the 363-row panel's assert
+> back at row 359 with `|ASSERT XhciReg.c +121: 0|` last, and `USB30_PRIM 0x0a600000 = 00000000`. Three runs
+> now hold three different subsets of `{K24, K25, K26}` — 4.192 none, 4.196 all three, 4.197 `K24` alone —
+> and ordering settles it: a `K 27` row cannot precede a `K 24` row, so the rows were on the screen and were
+> lost between samples, exactly the size of the fully-lost gaps every panel already reports (4.192 `4/0`+`3/0`,
+> 4.196 `3/0`+`4/0`, 4.197 `1/0`+`4/0`). **The rule this leaves standing**: a panel read is destructive
+> (`efi_panic_clear()`) and reconstructed from 1,199 samples, so it can never settle what the guest executed;
+> the CPU can, and 4.196's trace is the first use of it here to read a call chain rather than a stop. Nothing
+> was flashed, no partition was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step
+> 4.197.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
