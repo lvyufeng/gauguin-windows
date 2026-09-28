@@ -4126,6 +4126,24 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77` in all four runs; passes 2-19 read
 > `pciio=1 usb2hc=1 usbio=0 blkio=0 fs=0`, so the machine publishes the USB bus protocols with nothing behind
 > them. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.201.
+> **Step 4.202 — the gate four steps called shut is open in every payload this family ran.** `P2 GATE2` reads
+> `w88=00000000 w8c=00000001` on every pass of both 4.201 runs, and those are exactly the two words
+> `tools/patch-usbcfg-sentinel.py`'s `SITES` table rewrites (`0x39D8` pristine `orr w9, wzr, #0x1`; `0x39E4`
+> pristine `orr w10, wzr, #0x10000`), so the payload carries the paired `host,index` patch — as every run script
+> in this family says it does (`--kernel /tmp/xhci-sentinel-pair.raw`; `build-apriori-variant.sh:297`) — and the
+> instrument's own write ledger (nine answers at the wait, two at the xHCI polls, one at the wall) excludes
+> itself as the writer. 4.181's, 4.182's and 4.183's shut-gate readings are readings of the **pristine** binary:
+> both on-disk copies are still pristine and git-ignored, so `device/dxe` is untouched. With the gate open the
+> chain assembles — `P2 SUPP BEB12BEE-…` (`XhciPciEmulation`) `s=Success` at `106.06s`, `P2 SUPP B7F50E91-…`
+> (`XhciDxe`) `s=Success` at `107.06s`, the two `XhcDriverBindingStart` polls, the root hub's one notification,
+> the wall, and `usb2hc` 0 → 1 — and it stops where 4.200 said it must, at a root hub waiting for an interrupt
+> the instrument's zeroed GIC block cannot deliver. 4.201's two open items are decided from the same panels:
+> the one-shot `P2Reconnect` is the only connect (`cc=2`, both its own; the panel lost the second `h=` row to a
+> wipe, which is not a row never printed), and the machine would run all 41 digest passes, because not one
+> counter the digest prints moves across the eighteen the window captured (12.4435 s a pass, the 41st near
+> `631.5s`; `--seconds 360` closed the record and not the machine). The patched payload is a **counterfeit**
+> construction-time value — record 1 with record 0's index — and the patcher's own cost paragraph is carried
+> with it. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.202.
 >
 
 ### What exists and what is missing, so the next session starts from the right

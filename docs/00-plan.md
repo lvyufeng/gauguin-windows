@@ -1774,6 +1774,19 @@ Work:
 > in all four runs; passes 2-19 read `pciio=1 usb2hc=1 usbio=0 blkio=0 fs=0`, so this machine publishes the USB
 > bus protocols and has nothing behind them. Nothing was flashed, `UsbConfigDxe.efi` is still
 > `sha256 6943cc61…`. See `docs/08` step 4.201.
+> **4.202: the gate four steps called shut is open in every payload this family ran, and with it open the USB
+> chain assembles.** `P2 GATE2` reads `w88=00000000 w8c=00000001` on every pass of both 4.201 runs, and those
+> are exactly the two words `tools/patch-usbcfg-sentinel.py`'s `SITES` table rewrites, so the payload carries
+> the paired `host,index` patch and the instrument did not write them (its ledger is nine answers at the wait,
+> two at the xHCI polls, one at the wall). 4.181's/4.182's/4.183's shut-gate readings are readings of the
+> pristine binary; both on-disk copies are still pristine and git-ignored, so `device/dxe` is untouched. With
+> the gate open, `P2 SUPP BEB12BEE-…` (`XhciPciEmulation`) `s=Success` at `106.06s` and `P2 SUPP B7F50E91-…`
+> (`XhciDxe`) `s=Success` at `107.06s`, and `usb2hc` goes 0 → 1 — so the emulated controller is published and
+> bound, and the chain stops only at the root hub's wait for an interrupt the instrument cannot deliver (4.200).
+> 4.201's two open items are decided without a run: `P2Reconnect` is the only connect (`cc=2`, both its own),
+> and all 41 digest passes would run, because no counter the digest prints moves across the eighteen the window
+> captured. The patched payload is a **counterfeit** construction-time value and the patcher's cost paragraph is
+> carried with it. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.202.
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

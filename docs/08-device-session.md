@@ -42122,3 +42122,150 @@ returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the pa
 Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
 they were. Nothing was flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.202 — the gate four steps called shut is **open** in every payload this family ran: `XhciPciEmulation` answers `Success`, `XhciDxe` answers `Success` a second later, `usb2hc` goes 0 → 1, and the chain stops only where 4.200 said it must — a root hub waiting for an interrupt the instrument cannot deliver
+
+Step 4.201 closed with two questions it could not answer and one sentence it read off pass 1 alone: *"the state at
+the end of this machine's DXE dispatch is 139 handles … and **no** handle carrying `PciIo`, `Usb2Hc`, `UsbIo`,
+`BlockIo` or `SimpleFileSystem`."* That sentence is true of pass 1 and false of the run, and the panels say so in
+rows 4.201's write-up never quoted. This step reads those rows, settles both open items from sources already in
+hand, and corrects the standing account of the gate. **Nothing was run for it and no instrument was changed.**
+
+**The gate is open, and it has been open in every run of this family.** `P2UsbGate` prints four words of the
+`E722B03F` interface and the two of them the emulation's `Supported` actually tests. In `panel4201` they read, on
+**every** pass from `133.82s` to `357.70s`:
+
+    133.82s  P2 GATE  h=9C028D98 i=9BECC3B8 w00=00010004 w04=00000000
+    133.82s  P2 GATE2 w80=9BEBC650 w88=00000000 w8c=00000001
+
+and `panel4201-a`, the first attempt, the same pair on every pass from `148.83s` to the end of its window. The
+shipped `UsbConfigDxe` cannot produce either number, and `tools/patch-usbcfg-sentinel.py`'s own `SITES` table
+names the stores and their pristine encodings: `0x39D8` `orr w9, wzr, #0x1` writes `iface+0x88 = 1`, and `0x39E4`
+`orr w10, wzr, #0x10000` writes `iface+0x8C = 0x00010000`. The emulation's second clause asks for exactly `1`,
+and `ConfigUsb`'s entry guard refuses index `1` (`0x2ea4: cmp w8, #0x1 ; b.hs`). The run reads `0` and `1`. So the
+payload under the watch carries the **paired `host,index` patch** — and it carries it because the build put it
+there: every run script in this family, `run-hand7.sh` through `run-hand11.sh`, names
+`--kernel /tmp/xhci-sentinel-pair.raw`, and `tools/build-apriori-variant.sh:297` applies `host,index` to the volume
+it builds. The instrument did not write those words. `hand11-run.log`'s ledger of every store the probe made is
+nine answers at the wait (`0x11A01C`, `0x11A034`, `0x11A060`), two at the xHCI polls (`0xA600020`, `0xA600024`)
+and one at the wall (`0x9BE13CE1`), and nothing at `0x9BECC3E8` or `0x9BECC3EC`.
+
+**What that corrects is a reading four steps wide.** 4.181 found the gate shut at `0x00010000`, and 4.182, 4.183
+and 4.184 built on it: 4.183 measured that the emulation's `Supported` answers `EFI_UNSUPPORTED` when the handle
+is offered to it after dispatch, and 4.184 rewrote the loop's store and left `w8c=00010000` on all 23 passes. All
+three are readings of the **pristine** binary. Both on-disk copies are still pristine and the check says so by
+name —
+
+    device/dxe/UsbConfigDxe.efi                                          pristine  (6943cc61…)
+    uefi/Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.efi  pristine  (6943cc61…)
+
+— the second byte-identical to the first and ignored by git (`.gitignore:22`, `uefi/Binaries/`), so the device copy
+is untouched and the patched one exists only inside a scratch payload image. But from 4.185 on, no run in this family has been made against the
+pristine binary, and the `P2 GATE2` row is the proof the patch is live in the run. The sentence to carry forward
+is not *the gate is shut*. It is: **the gate is shut in the shipped binary, this project's patch opens it, and
+every panel from 4.185 on is a reading of the patched one.** Anything read off those panels about the gate, about
+`ConfigUsb`, or about what the USB chain does has to be read as a property of the patched payload.
+
+**And with the gate open the chain assembles.** The `P2 SUPP` rows are the run's own transcript of
+`CoreConnectSingleController` offering the handle, and in `panel4201` they come back in the order the port needs:
+
+    106.06s  P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success   ; XhciPciEmulation
+    107.06s  P2 SUPP B7F50E91-A759-412C-ADE4-DCD03E7F7C28 s=Success   ; XhciDxe
+
+`BEB12BEE` is `XhciPciEmulation`'s firmware-file GUID — the one 4.181 named and 4.183 found answering
+`Unsupported` — and `B7F50E91` is `XhciDxe`'s, from `uefi/Binaries/gauguin/QcomPkg/Drivers/XhciDxe/XhciDxe.inf`
+and every `Binaries/<soc>` sibling. Both are loaded long before either is asked: `K 73 Ss 67/69 free=1024
+BEB12BEE…` and `K 74 Ss 68/69 free=1024 B7F50E91…` in all four panels of this family, the same slots in
+the same two-second neighbourhood (`102.31s`–`102.81s`), and 4.182's dispatch order held. What follows the second `Success` is the driver chain in its own order:
+`XhcDriverBindingStart`'s two host-controller polls at `17.1s`/`17.2s` on the probe clock — about `107.1s` on the
+panel's, the load offset of 4.201 held — then `UsbRootHubEnumeration`'s one notification at `18.2s`, the wall at
+`18.7s`, and from pass 2 on `pciio=1 usb2hc=1`. `usb2hc` is the USB2 host controller protocol on a handle, and the
+only driver in this build that installs it is `XhciDxe`. So the number pass 1 reads as `0` and pass 2 reads as `1`
+is a driver having bound an emulated controller and started it — which is what 4.198 and 4.199 were looking at
+from the other end, one poll at a time.
+
+**The cost is in the same rows and is not hidden.** `F056673C-EC45-5D81-B2B0-848EBF31C42F` is `UsbfnDwc3Dxe`, the
+*device*-mode controller (`uefi/Binaries/gauguin/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf`), and it answers
+`Unsupported` when the handle is first offered at `100.05s`/`106.06s` and `Access Denied` at `106.81s`/`107.06s`
+— the moment the record it opens reads host. That is the patcher's own cost paragraph arriving as a row: the same
+word is an index *and* a mode, `0x5034` writes `0x10000` to mean "this core is unassigned", `UsbStopController`
+compares the word against a target mode, and with these patches a record that was never started reads as started.
+The pair describes record 1 with record 0's index, a construction-time value no device would produce, and none of
+this may be read as a device-side repair. The row is recorded here as observed; what makes the device-mode driver
+change its answer between two offerings one second apart is named and not decided.
+
+**4.201's first open item, decided — which connect published `usb2hc`.** The patch answers it without a run.
+`P2Reconnect` is one-shot (`if (mP2ReconnDone) { return; }` at its head) and it prints `P2 RECONN h=%p s=%r`
+**inside** the per-handle loop, so the panel's single `h=9C028D98` row is one of the handles that loop walked and
+not the whole call. How many it walked is `P2 CONN`'s first field: `cc=` counts `CoreConnectController` calls made
+against a controller carrying `E722B03F`, and it reads `cc=2` in the row's first appearance and `2` on every one
+of the nineteen passes after. The one-shot call therefore made both connects, one per config handle, and the
+second handle's `h=` row is a row the screen wiped and not a row that was never printed — which is exactly the
+distinction 4.201 raised. The ordering then decides the question, and it is the ordering inside `P2UsbCensus`:
+the `P2 USB` row is printed **before** `P2Reconnect` and `P2UsbGate`/`P2Conn` **after** it, so pass 1's
+`pciio=0 usb2hc=0` is the interface as DXE dispatch left it and pass 2's `pciio=1 usb2hc=1` is the interface that
+same call produced. `P2 RECONN sup=949+32 cfg=7+32` is that call's own deltas — 32 `Supported` calls and 32
+config accesses — and neither counter moves again in the 220 s that follow. There is no *other* connect for the
+wall to have been inside: `cc=2` is every connect against this handle that the whole boot made, and both are the
+instrument's own.
+
+**4.201's second open item, decided — how many of the 41 passes the machine would reach.** It is decidable from
+the panels and needs no longer run, because nothing the digest prints changes between passes. Over passes 2
+through 19 (`146.16s` → `357.70s`) every row is byte-identical: `P2 USB n=N all=139 pciio=1 usb2hc=1 usbio=0
+blkio=0 fs=0 cfg=1 loaded=77` for N = 2…19; `P2 CONN cc=2 sup=981 cfg=39 all=170`; `P2 RCNN rc=1 re=Success ru=32
+rf=32 es=20 er=Success`; `P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0`; `P2 FREE largest=4096
+pages`; and the same two `P2 GATE` rows. The only things that advance are `n=` and the sampler's clock. At the
+measured cadence of 12.4435 s a pass — 211.54 s over seventeen intervals — the 41st lands at about `631.5s` of
+panel time, and the record stops at pass 19 because the run's `--seconds 360` ends at `357.95s`, not because the
+machine does; `panel4201-a`, whose window is shorter, stops at 8 for the same reason. The answer is 41, and it is
+worth stating that it needs no new run, because the obvious next experiment was "run it longer" and the panels
+already contain its result.
+
+**What it leaves.** The instrument's own problem is 4.200's and this step does not touch it: the stage-2 plan
+redirects both GIC windows into one 2 MB block of zeroed pool RAM, no interrupt can be delivered to this guest,
+and everything past the root hub's first wait is instrument arithmetic. What changes is *where* the USB thread's
+remaining question sits. Before this step the chain's failure read as *the emulated controller is never published*
+— 4.181's sentence, with `pciio=0` on every pass. In the payload this family actually runs, the emulated
+controller **is** published, `XhciDxe` **does** bind it, `usb2hc` **does** become 1, and the run stops at a root
+hub waiting for a notification the instrument cannot deliver. That is 4.200's finding and not a binding failure,
+and the two questions separate cleanly on the device: the shipped `UsbConfigDxe` writes `0x10000` because the only
+caller that ever replaces it, `UsbStartController`, never runs, and it never runs because its own bring-up fails
+first — `UsbPwrCtrlLib_Init Initialize Hardware Configuration Error[Access Denied]` and `UsbConfigInit: Failed to
+attach USB Arid 0x0 HAL IOMMU domain`, both present at about `99s` in every panel of this family. That is a
+payload failure on real hardware, it is what the device copy of `UsbConfigDxe` is waiting on, and it is named here
+rather than answered.
+
+**decides**: that the payload under the watch carries the paired `host,index` patch to `UsbConfigDxe`, by the two
+words it was written to change (`w88=00000000`, `w8c=00000001`) read against the patcher's own pristine
+encodings, with the instrument's complete write ledger excluding itself as the writer; that `XhciPciEmulation`'s
+`Supported` answers `Success` and `XhciDxe`'s answers `Success` a second later, so the emulated controller is
+published, the controller is bound, and `usb2hc` goes 0 → 1 as the result of the one-shot connect; that the
+one-shot connect made both of its connects, `cc=2`, and that it is the only connect against this handle in the
+boot; and that the machine would run all 41 digest passes, because no counter the digest prints moves across the
+eighteen passes the window captured.
+**corrects**: 4.181's and 4.182's carried sentence that the gate is shut, and 4.183's that the emulation's
+`Supported` answers `Unsupported` — all three are readings of the pristine binary, and no run in this family since
+4.185 has been made against one. It also corrects 4.201's own closing paragraph, which read pass 1's `usb2hc=0`
+as the state of the machine and did not quote the `P2 SUPP` and `P2 GATE2` rows that say what happened next.
+**does not decide**: what makes `UsbfnDwc3Dxe` answer `Unsupported` at one offering and `Access Denied` at the
+next; whether the published-but-unbound device-mode controller and the bound host-mode one are two views of the
+same record or two records; and the two things 4.200 left open, the seed/redirect byte-order question and whether
+`XhcDriverBindingStart` returned success.
+**carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the fourteen-rung
+ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and the EL3 stub's
+three fabricated structures all stand. The patched payload is a **counterfeit** construction-time value and the
+patcher's cost paragraph is carried with it: a record that was never started reads as started, so
+`UsbStopController` and `UsbStartController` would take the wrong branch on a device where they run — which is
+exactly why none of these patches is a device-side repair and why they live in a scratch payload image rather than
+in `device/dxe`.
+**not an action**: no `fastboot` command, no console read from the device, no seed written anywhere, no instrument
+changed and no run made. The files this step read are the four panels, the run scripts, the patcher and the two
+`UsbConfigDxe` copies, all of which were already on disk.
+**device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+`lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken from
+this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow
+needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out screencap -p` still
+returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that photograph exists.
+Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
+they were. Nothing was flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
