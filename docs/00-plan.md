@@ -1653,13 +1653,18 @@ Work:
 > `On`, and `/sys/kernel/debug/usb/xhci/` is **empty**, so every value is the *device-mode* profile of a
 > DRD core with no host instance to read. **So this oracle cannot answer 4.192's open question** —
 > whether a real capability block at `0x0A60C100` holds a non-zero `CapLength` — and the honest statement
-> is that no reading exists, not that a reading disagrees. **One map gap named**: the platform's own
+> is that no reading exists, not that a reading disagrees. (4.194: `0x0A60C100` is `USB30_PRIM + 0xC100`,
+> the project's own arithmetic, not a read; the live tree claims that window as `dwc3@a600000`'s global
+> register block, and 4.192's probe pins the `CapLength` read at `0x0A600000` and pool `0x41A00000`.) **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
-> `0x18280000`, and **nothing at `0x088E3000` or `0x088E8000`**, where the live tree puts
+> `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts
 > `/soc/qusb@88e3000` and `/soc/ssphy@88e8000` (`/proc/iomem` confirms `088e3000-088e33ff :
-> qusb_phy_base`); under `--el3-zero-mem` a block is redirected only if the platform declares a region
-> in it, so those two fall through to the identity map and read RAM this instrument does not control.
-> A candidate edit — add both to `MemoryMapLib.c` — is **offered and not made**. `ufshc@1d84000` carries
+> qusb_phy_base`). **Corrected in 4.194**: the missing *name* is not a missing *region* — the same file
+> declares `{"PERIPH_SS", 0x08800000, 0x00200000}`, whose 2 MB block 68 covers both addresses, and
+> `l2_plan()` redirects every block a declared region touches, so those registers **are** served by the
+> zero model; the 4.193 sentence that they "fall through to the identity map" is withdrawn. A candidate
+> edit — add finer `PERIPH_SS` sub-regions so each live tenant has a name — is **offered and not made**.
+> `ufshc@1d84000` carries
 > **no `iommus` property**, and there is **no framebuffer route** (`/dev/fb*`, `/proc/fb` and
 > `/sys/class/graphics/` all absent), so `先读屏` stays a photograph. See `docs/08` step 4.193.
 >

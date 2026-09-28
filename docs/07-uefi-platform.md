@@ -3895,12 +3895,15 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `GSNPSID = 0x5533330a`, a DRD core with a GEN1 SuperSpeed PHY and BC/OTG3/ADP/HNP/SRP all absent in
 > capabilities — but it is in **`device`** mode with an empty `/sys/kernel/debug/usb/xhci/`, so there is
 > no host-mode profile to read and **the `CapLength` question 4.192 left open stays open for want of a
-> reading, not against evidence**. The map gap: `Platforms/Xiaomi/gauguinPkg/…/MemoryMapLib.c` declares
-> `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at `0x18280000`, and **nothing at
-> `0x088E3000` or `0x088E8000`**, where the live tree puts `qusb@88e3000` and `ssphy@88e8000`
-> (`/proc/iomem`: `088e3000-088e33ff : qusb_phy_base`); those two blocks are therefore outside the
-> `--el3-zero-mem` redirection and read plain RAM. A candidate edit to add them is **offered and not
-> made**. Also `ufshc@1d84000` carries no `iommus` property, and there is no framebuffer route at all,
+> reading, not against evidence**. The map gap — **corrected in Step 4.194**: `Platforms/Xiaomi/gauguinPkg/…/MemoryMapLib.c`
+> declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at `0x18280000`, and **no row
+> *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts `qusb@88e3000` and `ssphy@88e8000`
+> (`/proc/iomem`: `088e3000-088e33ff : qusb_phy_base`). It does declare `{"PERIPH_SS", 0x08800000,
+> 0x00200000}`, and the redirection is per 2 MB block, so both addresses sit in block 68 — a redirected
+> block — and this step's earlier claim that they are "outside the `--el3-zero-mem` redirection and read
+> plain RAM" is withdrawn. What 4.192's probe pins the `CapLength` read at is `0x0A600000` and pool
+> `0x41A00000`, not `0x0A60C100`; the live tree claims `0x0A60C100` as `dwc3@a600000`'s global register
+> block, where the kernel's regdump reads `GSNPSID = 0x5533330a`. Also `ufshc@1d84000` carries no `iommus` property, and there is no framebuffer route at all,
 > so `先读屏` remains a photograph. Nothing was flashed, no partition was written,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.193.
 >

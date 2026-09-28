@@ -40493,21 +40493,27 @@ There is no host-side route to read it, so the console row `Failed to Get Shared
 still has no machine-side answer — and 4.187's finding, that the run's UFS path goes through the door that
 never reads IMEM, is unaffected by either reading.
 
-**One map gap, named by the machine.** The instrument's zero-map is built from the platform's own
-`Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c`, and that file declares
-`USB30_PRIM 0x0A600000 + 0x200000`, `USB_RUMI 0x0A720000 + 0x10000`, `USB30_SEC 0x0A800000 + 0x11B000`
-and the four `*_CLK_CTL` at `0x18280000`, `0x18282000`, `0x18284000` and `0x18286000` (4 KB each). **It
-declares nothing at `0x088E3000` or `0x088E8000`, and neither does any other entry in the map.** The live
-device tree, meanwhile, puts two nodes there — `/soc/qusb@88e3000` and `/soc/ssphy@88e8000` — and
-`/proc/iomem` confirms the first is real and claimed: `088e3000-088e33ff : qusb_phy_base`. The same tree
-adds `ssusb@a600000` with `reg-names = core_base`, its `dwc3@a600000` child with `dr_mode = drd`, and
-`ufshc@1d84000`, which carries **no `iommus` property at all** — so the running DT attaches UFS to no
-apps-smmu stream, which bears on 4.187's `ARID 0x0` attach without by itself explaining it.
-**What this is worth**: under `--el3-zero-mem` a 2 MB block is redirected only if the platform declares a
-region in it, so an access to `0x088E3000` or `0x088E8000` is *not* given the zero model — it falls
-through to the identity map and reads plain RAM this instrument does not control. **What it is not**: a
-proven cause of any stop in this project's record. Nothing here shows the payload reads either address,
-and this is a map gap offered for a later step to test rather than a diagnosis.
+**One map gap, named by the machine — and mis-called for one step.** The instrument's zero-map is built
+from the platform's own `Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c`, and that file
+declares `USB30_PRIM 0x0A600000 + 0x200000`, `USB_RUMI 0x0A720000 + 0x10000`,
+`USB30_SEC 0x0A800000 + 0x11B000` and the four `*_CLK_CTL` at `0x18280000`, `0x18282000`, `0x18284000`
+and `0x18286000` (4 KB each). **It declares no entry *named* for `0x088E3000` or `0x088E8000`**, and
+neither does any other row. The live device tree, meanwhile, puts two nodes there — `/soc/qusb@88e3000`
+and `/soc/ssphy@88e8000` — and `/proc/iomem` confirms the first is real and claimed:
+`088e3000-088e33ff : qusb_phy_base`. The same tree adds `ssusb@a600000` with `reg-names = core_base`,
+its `dwc3@a600000` child with `dr_mode = drd`, and `ufshc@1d84000`, which carries **no `iommus` property
+at all** — so the running DT attaches UFS to no apps-smmu stream, which bears on 4.187's `ARID 0x0`
+attach without by itself explaining it.
+**Correction (Step 4.194): this paragraph first read the missing name as a missing region, and that is
+wrong.** `MemoryMapLib.c` *does* declare a region covering both addresses — `{"PERIPH_SS", 0x08800000,
+0x00200000}` at line 60 of the file — and the instrument assigns redirection **per 2 MB block**:
+`l2_plan()` maps every block that any declared region touches, and `0x08800000 // 0x200000` is **block
+68**, so `0x088E0000`, `0x088E1018`, `0x088E2000`, `0x088E3000`, `0x088E7000` and `0x088E8000` all fall
+in a redirected block and are served from the pool, `0x40000000 + 68 * 0x200000`-adjacent, not from the
+identity map. **What the map lacks is a *name* for the sub-blocks, not coverage.** The 4.193 paragraph
+also said nothing shows the payload reads either address; the 4.194 census shows it reads **five
+registers in that window**, `0x088E1018`, `0x088E2000`, `0x088E3210`, `0x088E8010` and `0x088E9C00`, all
+from `UsbConfigDxe`'s HS and SS PHY init, and two of them are claimed by name on the live phone.
 
 **The real SMMU, and the display route that is not there.**
 
@@ -40547,10 +40553,17 @@ and this is a map gap offered for a later step to test rather than a diagnosis.
   whether this DWC3 can be switched to host mode from the payload; what the Shared IMEM cookie page at
   `0x146BF000` holds; whether `SSUsb1InitCommon: gNpaClientSS1Bus is NULL` is an absent peer or an
   instrument debt; and whether the `F056673C` `Unsupported` → `Access Denied` pair is a second debt.
-- **a map gap offered, not applied**: `MemoryMapLib.c` declares no region covering the live tree's
-  `qusb@88e3000` or `ssphy@88e8000`, so those two blocks are outside the zero model. A candidate edit —
-  add both to `MemoryMapLib.c` so the zero-map covers them — is **not made** here, and is recorded as the
-  first thing a later step should test rather than as a fix.
+  **Corrected in Step 4.194**: `0x0A60C100` is not an address this step read — it is `USB30_PRIM
+  0x0A600000 + 0xC100`, this project's own arithmetic — and the live tree claims that exact window as
+  `0a60c100-0a60dfff : dwc3@a600000`, the DWC3's global register block, where the kernel's own regdump
+  reads `GSNPSID = 0x5533330a`; while 4.192's own probe pins the `CapLength` read the assert is about at
+  `0x0A600000` and the pool block `0x41A00000`, not at `0x0A60C100`.
+- **a map gap offered, not applied — retracted in Step 4.194**: `MemoryMapLib.c` declares no region
+  *named* for the live tree's `qusb@88e3000` or `ssphy@88e8000`, but it does declare `PERIPH_SS
+  0x08800000 + 0x00200000`, whose 2 MB block 68 covers both, and `l2_plan()` redirects every block a
+  declared region touches — so those registers *are* served by the zero model. A candidate edit — add
+  finer `PERIPH_SS` sub-regions so each live tenant has a name — is **not made**, and is offered as a
+  naming change, not as a coverage fix.
 - **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
   fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed
   and the EL3 stub's three fabricated structures all still stand.
@@ -40564,4 +40577,256 @@ and this is a map gap offered for a later step to test rather than a diagnosis.
   `adb exec-out screencap -p` still returns 53 bytes, so **no photograph of the 4.187 P3 payload's
   judgement lines has been supplied**. Two physical actions are outstanding and neither can be taken from
   this host: reboot to the bootloader, and a screen photograph.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.194 — the census that was missing its own half: five USB PHY registers the payload really reads, three of them named by the live phone, and the 4.193 map gap retracted
+
+**The question.** 4.193 left two things behind that it could not settle from where it stood: a "map gap" it
+said put `0x088E3000` and `0x088E8000` outside the zero model, and a pair of in-range constants
+(`0x088E1018`, `0x0A600000`) that it could only *locate*. Both are answerable from this host, because the
+instrument's zero-map is arithmetic over the platform's own `MemoryMapLib.c` and the payload's address list
+is in its own `.text`. This step does that arithmetic and that census, reads `UsbConfigDxe`'s SS PHY init in
+full, and puts the live phone's claims next to the payload's addresses.
+
+**The census, and the bug in it that mattered.** `/tmp/adrp-census.py` scans PE32+ images for 64-bit
+`MOVZ`/`MOVK` chains and for `ADRP`+`ADD` pairs, with no disassembler. Its `MOVZ` mask is `0xD2800000` —
+the **64-bit** form. Mu-Silicium builds MMIO addresses in both forms, and `usb_shared_ss_phy_init` uses the
+32-bit one (`mov w20, #0x9c00; movk w20, #0x88e, lsl #16` is opcode `0x52800000`, not `0xD2800000`).
+Over the 86 `.efi` files in `device/dxe` that have a `.text`, the 64-bit-only scan finds **two** distinct
+values inside the four windows this project cares about — `0x088E1018` at two sites and `0x0A600000` at
+one — and that is exactly the pair 4.193 called "in-range"; accepting both widths finds **ten**. What the
+payload materialises, re-measured:
+
+| window | value | where |
+| --- | --- | --- |
+| PERIPH_SS, USB PHY | `0x088E1018` | `UsbConfigDxe` `0x6e3c`, `0x6e44`, `0x6e60`, `0x6e94`, `0x6e9c` |
+| | `0x088E2000` | `UsbConfigDxe` `0xcb24`, `UsbDeviceDxe` `0x576c`, `UsbfnDwc3Dxe` `0xdf84` |
+| | `0x088E3210` | `UsbConfigDxe` `0xc6a4` |
+| | `0x088E8010` | `UsbConfigDxe` `0xca80` |
+| | `0x088E9C00` | `UsbConfigDxe` `0xca74` |
+| USB30_PRIM | `0x0A600000` | `UsbConfigDxe` `0x7138`, `0x8ef8` |
+| | `0x0A6F8810` | `UsbfnDwc3Dxe` `0xed78`, `0xeda8` |
+| GCC, GDSC page | `0x0011A000`, `0x0011A004` | `UsbConfigDxe` `0x6b18`, `0x6c08`, `0x7e94`, `0x7544`, `0x7f5c` |
+| | `0x0011A058` | `UsbConfigDxe` `0x8f28` |
+| efuse (`0x0780xxxx`) | *nothing* | — |
+
+**So the 4.193 sentence "nothing here shows the payload reads either address" is wrong twice over**: the
+payload reads five registers in the `0x088Exxxx` window, all from `UsbConfigDxe`'s HS and SS PHY init, and
+the register it does *not* read is the qusb efuse address (`0x07800268`) the live node declares — that
+constant appears in none of the 86 images, which is a blind spot if `qusb@88e3000`'s init sequence ever runs.
+Two honest limits on the method, both measured. The scan merges `MOVK`s into a register across up to twelve
+instructions without checking for intervening writers, so it also emits one composite that is not an
+address — `0x0A600005` at `UsbConfigDxe@0x712c` — and *this* step's matcher, unlike the original, also
+accepts a following `MOVZ` as a chain continuation even though a `MOVZ` zeroes the register, which is how
+the composite arises: `mov w10, #5` at `0x712c` (which stores to `[x8, #112]`) merged with the
+`movz w10, #0xa600, lsl #16` at `0x7138`. The disassembly shows the real value at `0x7138` is
+`0x0A600000`, exactly as the table carries it. And the table's site lists are per *constant
+materialisation*, not per *use*: a constant built once and kept in a callee-saved register appears once.
+
+**The map gap was a naming gap.** The correction, in the instrument's own arithmetic. `MemoryMapLib.c`
+line 60 is `{"PERIPH_SS", 0x08800000, 0x00200000, …}` — one row covering `0x08800000`–`0x08A00000`.
+`qemu-panel-read.py`'s `l2_plan()` maps **every 2 MB block that any declared region touches**, densely,
+sorted: `0x08800000 // 0x200000` is **block 68**, so `0x088E0000`, `0x088E1018`, `0x088E2000`,
+`0x088E3000`, `0x088E7000` and `0x088E8000` are all in a redirected block and read from the pool, exactly
+as `0x0A60C100` does (block 83, also redirected). The 4.193 passage in this file, in `docs/00` and in
+`docs/07` said those two addresses "fall through to the identity map and read plain RAM"; **all three are
+now corrected in place**, and what remains true is narrower: the map has no *name* for the sub-blocks, so a
+reader looking for `88E3000` in it finds nothing. The document's own recomputation line already agreed —
+`57 regions below 0x40000000`, transferred to `55` redirected 2 MB blocks.
+
+**The live phone names three of the five registers.** `/proc/iomem` on the real device, in the window the
+payload reads:
+
+```
+08804000-08804fff : hc_mem
+088e0000-088e1fff : eud_base
+088e2000-088e2003 : eud_enable_reg
+088e3000-088e33ff : qusb_phy_base
+088e7000-088e705f : refgen-regulator@88e7000
+0a60c100-0a60dfff : dwc3@a600000
+```
+
+- **`0x088E2000` is `eud_enable_reg`.** The register `usb_eud_is_active` (RVA `0xcb18`) reads it and tests
+  bit 0; on the live phone it is a claimed four-byte register with a kernel name. `UsbDeviceDxe` carries the
+  same check at `0x576c` — read `0x088E2000`, `and w19, w8, #1`, return if bit 0 is clear, else print at
+  error level — and `UsbfnDwc3Dxe` materialises the address too. The device tree calls the region
+  `eud_mode_mgr2` (`0x088E2000 + 0x1000`); `/proc/iomem` names the first four bytes `eud_enable_reg`.
+- **`0x088E1018` is inside `eud_base`** (`088e0000-088e1fff`), at `+0x1018`. The node carries two `reg`
+  entries — `0x088E0000 + 0x2000` as `eud_base` and `0x088E2000 + 0x1000` as `eud_mode_mgr2` — plus
+  `qcom,secure-eud-en` (empty, i.e. true); exactly where `+0x1018` sits inside that pair is not settled
+  here.
+- **`0x088E3210` is `qusb_phy_base + 0x210`, and `0x210` is the node's own number**: it is the third entry
+  of the live `qcom,qusb-phy-reg-offset` list (`0x240, 0x1a0, 0x210, 0x230, 0xa8, 0x254, 0x198, 0x27c,
+  0x280, 0x284`) and the second word of both `qcom,qusb-phy-init-seq` and `qcom,qusb-phy-host-init-seq`.
+  The payload does not merely name it: `0xc6a4`–`0xc6bc` is `ldr w8, [x22]`, `orr w9, w8, #1`,
+  `str w9, [x22]` — set bit 0 of that register — followed by the same DAL blob write (`bl 0xc7a4`) the SS
+  path does. So the HS PHY init sets a bit in a register the board's own phandle declares.
+- **`0x088E8004`, `0x088E8010`, `0x088E9C00` and `0x088E9D74` are all inside the live `ssphy@88e8000`**,
+  which is `compatible = "qcom,usb-ssphy-qmp-dp-combo"`, `reg-names = "qmp_phy_base"`, and
+  **`reg = 0x088E8000 + 0x3000`** — the raw bytes are `08 8e 80 00 00 00 30 00`, so the `0x300000` carried
+  in 4.193's notes was a byte-order misread of `0x3000`. The kernel claims nothing at `088e8000-088eafff`,
+  consistent with a QMP PHY the running ROM has not brought up: the clock summary already showed
+  `gcc_usb3_prim_phy_pipe_clk` at 0 Hz.
+
+**`usb_shared_ss_phy_init` read whole, this time with a disassembler.** `device/dxe/UsbConfigDxe.efi` keeps
+`.text` at VA `0x1000` with RAWPTR `0x1000`, so raw offset == RVA and `aarch64-linux-gnu-objdump -D -b
+binary -m aarch64` reads the image as-is; every address below is a byte of the file, decoded rather than
+hand-read out of an encoding. Entry `0xc958`, `mov w19, w0` (the lane argument). Then, in order: `0xc980`
+prints `usb_shared_ss_phy_init: ++`; `0xc98c` prints `usb_lane` **with `w1 = w19`**, the lane; `0xc9a8`
+reaches `DALSYS_GetDALPropertyHandleStr` with `x0 = "QUSB_PORT_PRIM"` (`0x10849`) and `x1 = sp`; on failure
+`0xc9c4`/`0xc9c8` prints `ss … DALSYS_GetDALPropertyHandleStr Failed` (`0x10a03`) and jumps to a shared tail
+at `0xca44`. On success `0xc9d0` reaches the property getter for `ss_phy_cfg_addr` (`0x109c0`, output at
+`sp+0x20`) and `0xca0c` for `ss_phy_cfg_val` (`0x109d0`, output at `sp+0x10`); each failure prints its own
+row (`0x10a41`, `0x10a73`) and jumps to the same tail. That tail prints at error level and returns **0**
+(`0xca4c`: `mov w0, wzr`). The working half at `0xca64` then does, in this order:
+
+1. `bl 0xc7a4` with `x0 = [sp,#40]` (the address the DAL named), `x1 = [sp,#24]` (the value), `w2 = 0` and
+   `w3 = 0xc8` — the same DAL blob write the HS path performs at `0xc6c8`, where that last argument is
+   `0xc`.
+2. `[0x088E8010] = (read & ~1) | (lane & 1)` — the `bfxil w8, w19, #0, #1` — and then immediately
+   `|= 2`, with no delay between the two stores.
+3. `delay(100)` through the helper at `0xcb58`, which computes `w0 * 10` and calls through the protocol
+   table at `0x11000 + 1424`, slot `+248` — so these `100`s are 1000 units.
+4. `[0x088E8004] = 0`, `[0x088E9C00] = 0`, `[0x088E9C08] = 3`, then another `delay(100)`.
+5. Poll `0x088E9D74` (that is `[0x088E9C00 + 372]`) **bit 6 until it reads clear**, up to 101 tries:
+   `mov w21, #-1`, then `ldr w11, [x20, #372]` and `tbz w11, #6, 0xcb04` — so a clear bit 6 on the first
+   read is an immediate pass. Exhaustion prints `ssusb_phy_init_timeout` (`0xcaf4`) and returns **0**; the
+   clear read prints `usb_shared_ss_phy_init: --` (`0xcb04`) and returns **1**.
+
+Every failure path in the function returns 0, and the two DAL-property getters are the same pair of
+functions `usb_shared_hs_phy_init` uses three of (`0xc3d0` for the handle, `0xc3f0` for a property).
+
+**Two print levels, and the reason a row's absence means something.** The `++`/`--` banners are emitted
+through the helper at `0xcb70` with `w0 = 0x40` — **`EFI_D_INFO`** — while `usb_lane: 0`, the three failure
+rows and the timeout row go through the helper at `0xcb88` with `w0 = 0x80000000` — **`EFI_D_ERROR`**.
+That is not a guess about the panel reader: **no console artifact in this repository contains
+`usb_shared_ss_phy_init: ++`**, in any run, while the `usb_lane` row four instructions later is one every
+run reaching the function does print. The payload's own debug mask filters the banners. So, for ERROR-level
+rows at least, absence is evidence — and it says:
+
+- **4.184 reached the DAL lookup and failed it.** `usb_lane: 0` at 9.25 s, the `DALSYS…Failed: -1` row at
+  9.50 s, `InitSSUSBPhy: Init SSUSBPhy Enable Error` at 9.50 s — the row order the code prints, one row
+  after the other.
+- **4.191 and 4.192 reached the same `usb_lane: 0` (106.07 s) and did *not* fail it.** No failure row of
+  any of the four and no timeout row; the console goes on 0.25 s later to the P2 SUPP rows and `XhciReg.c:121`.
+  So in those two runs `usb_shared_ss_phy_init` **succeeded** — passed the property lookups, wrote
+  `0x088E8010`/`0x088E8004` and `0x088E9C00`/`0x088E9C08`, and found bit 6 of `0x088E9D74` clear inside its
+  101 tries. Which run got which DAL state, and why answering the ClockDxe wait moved it, is **not settled
+  here**.
+- **`usb_lane: 0` is not a DAL property.** It is printed *before* the DAL handle exists, from the
+  function's own argument, and its value is the lane number.
+
+**`0x0A60C100` is the project's arithmetic, not a reading.** It appears in this repository **only** in
+4.193's own prose: it is not a constant in any of the 86 DXE images (the census over `0x0A600000`–`0x0A6FFFFF`
+returns `0x0A600000` and `0x0A6F8810` and nothing else), it is not in `uefiplat.cfg`, it is not in either
+platform's `MemoryMapLib.c`, and no grep finds it in `tools/`. It is `USB30_PRIM + 0xC100`, written by hand.
+And 4.192's own probe says where the assert's read actually goes: `IPA_XHCI = 0x0a600000`, "the read is
+expected at IPA 0x0A600000 and pool 0x41A00000". The live tree, however, does claim that window —
+`0a60c100-0a60dfff : dwc3@a600000` — and that is the DWC3 **global** register block, whose first word on
+the live phone is `GSNPSID = 0x5533330a` (from the kernel's own regdump, read in 4.193), i.e. the byte at
+`0x0A60C100` is `0x0A`. So the honest position on 4.192's `CapLength` question is now sharper: the address
+the *assert* is about is `0x0A600000`, the address 4.193 named is the DWC3 global block, and neither is a
+reading of a `CapLength` byte.
+
+**And `0x0A600000` is a value this image stores in a struct of its own.** At `0x712c`–`0x7150` the driver
+fills a structure it has just built: `[x8, #112] = 5` (`mov w10, #5`), `[x8, #120] = 0x0A600000`
+(`movz w10, #0xa600, lsl #16` — the 32-bit form, opcode `0x52a14c0a`, not the 64-bit form the 4.193 notes
+implied), `[x8, #128] = 7`. The gate at `0x8ef8` then compares exactly that field at exactly that offset
+against exactly that constant: `cmp w10, #0x10` first, and when the class word is not `0x10`,
+`ldur x9, [x29,#-8]`, `ldr x9, [x9, #120]`, `cmp x9, #0xa600000`, `b.eq` on to the `0x0011A058` pulse,
+otherwise `EFI_UNSUPPORTED`. The two sites are in different functions roughly `0x7DC0` apart, so this is a
+shape argument and not a traced data flow — but by shape, the word `InitSSUSBPhy`'s gate tests is one the
+same image wrote, not one it read from the hardware.
+
+**`InitSSUSBPhy`'s first act, named from the live tree.** The pulse at RVA `0x8f28` is bit 0 of
+`0x0011A058`, cleared and then set. That address is inside the 4 KB GCC page the live tree gives to exactly
+one node: of the **16** `qcom,gdsc@*` nodes, `qcom,gdsc@11a004` is the only one in it
+(`reg = 0x0011A004 + 4`, `regulator-name = "gcc_usb30_prim_gdsc"`), and the nearest other GCC GDSC is
+`gcc_ufs_phy_gdsc` at `0x0013A004`. So the register the payload's SS PHY init pulses is in
+`gcc_usb30_prim_gdsc`'s page, and the payload touches `0x0011A000`, `0x0011A004` and `0x0011A058` there.
+What it is *not*: the register the live rail driver reads. That driver's own regmap
+(`/sys/kernel/debug/regmap/11a004.qcom,gdsc`, `name = gdsc`, `range = 0-0`, `count = 1`) is one register
+wide and reads **`0xf822f000`** — bit 31 set, bit 0 clear, i.e. powered — and its window stops at
+`0x0011A008`. **`0x0011A058` is in the rail's page and outside its window**, and no live node names it.
+
+**The instrument and the payload agree about the platform, from opposite sides.** One more reading fell out
+of the same peek: the live GCC regmap names itself **`gcc-lagoon`**
+(`/sys/kernel/debug/regmap/100000.qcom,gcc`, `range = 0-bf030`), which is the ROM's own word for the SoC
+family — SM7225, the same platform the project's Bitra finding is built on.
+
+**An incident: the phone left the USB bus during a read.** Honesty first, because this project's device
+discipline depends on it. Probing further than 4.193 did, this step wrote *one value to a debugfs file* —
+`echo 0x1a004 > /sys/kernel/debug/regmap/100000.qcom,gcc/address`, which sets a kernel offset and touches
+no hardware, and the file read back `0x0001a004` — and then **read** the neighbouring `data` file, whose
+read path performs a register read through the kernel's GCC regmap. The `data` read returned nothing, and
+the next `adb shell` failed with `adb: no devices/emulators found`. From 19:51 on the phone is absent from
+`lsusb` entirely: no `adb`, no `fastboot`, no Qualcomm or Xiaomi USB device id, and a 15-minute poll
+(`work/out/device-oracle/phone-return-poll.txt`) shows it does not come back. The host's own kernel log
+shows only the dock's familiar `0000:6c:00.0` flapping, nothing about the phone. **What was written:
+nothing to any partition, nothing to a register the code path below debugfs would not have read anyway, and
+no `fastboot` command.** Reading GCC offset `0x1a004` is reading absolute `0x0011A004`, the same register
+the `11a004.qcom,gdsc` regmap had read as `0xf822f000` a minute earlier through a different regmap
+instance. The phone now needs a physical reset. Whether the register read hung the kernel on a gated AHB
+port, or the phone dropped for a reason of its own, **is not known from this host**, and the lesson worth
+keeping is the narrow, usable one: **the regmap debugfs route is treated as write-class from here on** —
+it is not needed for anything this project has asked the phone, since `/proc/iomem`, the device tree,
+`clk_summary`, `regulator_summary` and `cmd_db` answered without it.
+
+**Rows.**
+
+- **artifacts**: `work/out/device-oracle/phone-return-poll.txt` (the return poll, written live); the census
+  is `/tmp/adrp-census.py` — as it stood, with the 64-bit-only `MOVZ` mask — plus `/tmp/census2.py`, which
+  imports it and re-runs it with both widths over the same four windows and prints the two results side by
+  side, which is where the two-versus-ten count in the table above comes from. No instrument source changed
+  this step, so `uefi/patches/mu-basecore-local.patch` is untouched.
+- **shows**: `PERIPH_SS 0x08800000 + 0x00200000` puts every `0x088Exxxx` address the payload uses in
+  redirected block 68, so the 4.193 claim that they read plain RAM is wrong and is retracted in three
+  documents; the payload reads **five** registers in that window and does not read the qusb efuse; the
+  live phone names `0x088E2000` (`eud_enable_reg`), `0x088E1018` (`eud_base + 0x1018`) and `0x088E3210`
+  (`qusb_phy_base + 0x210`, a number the node itself declares); `ssphy@88e8000` is a
+  `qcom,usb-ssphy-qmp-dp-combo` at `0x088E8000 + 0x3000`; and `usb_shared_ss_phy_init` returns 1 on
+  success — which 4.191 and 4.192 got, and 4.184 did not.
+- **corrects 4.193's body**: the console row `DALLOG Device [0x0]: DALLOG Device VCS: Unable to set
+  rail[/c/d_x/c/d_xm.v` was read there as a DAL device-path lookup. `DALSys.efi`'s string pool puts
+  `QUSB_PORT_PRIM` among the PMIC **rail** names (`/pm/ldoa2`, `/node/ldoa2`, `mode`, `on_off`,
+  `/pmic/client/usb_hs1`, `/pmic/client/usb_ss1`, `/dev/i2c11`, `/icb/arb`, `SMMU`, `/pmic/target`), and the
+  only matching string in the whole DXE FV is `Unable to set rail[%s` — so it is a rail service failure,
+  not missing DAL config, and `/c/d_x/c/d_xm.v` is the rail path built at runtime.
+- **and one correction this step had to make to itself**: the first draft of this section recorded
+  `0x088E1018` as a *struct field*, on the strength of the x-then-w register build at its five sites. The
+  disassembly above says otherwise, and 4.193 was right: `0x6e3c`–`0x6e74` is a 32-bit read-modify-write
+  at `0x088E1018` (`ldr w9,[x10]`, `tbz w9,#0`, `and w8,w8,#0xfffffffe`, `str w8,[x9]`), the 64-bit `x8`
+  build is only the compiler spilling the address to a local (`stur x8,[x29,#-8]`), and the
+  `mov x0, #0x3e8` at `0x6e5c` *is* this site's delay — it is passed through the protocol's `+248` before
+  the bit-0 set at `0x6e94`. So the field-versus-register reading is withdrawn, the delay is restored to
+  this site, and what the register *means* is still open.
+- **reads, and does not write, with the one exception recorded above**: the phone was readable throughout
+  except for the regmap `data` peek, which took it off the USB bus at 19:51 and left it there. No partition
+  was written, no `fastboot` command was issued, and `userdata` is untouched.
+- **decides**: the map gap was a naming gap; `usb_lane: 0` is an argument and not a DAL property; the
+  `DALSYS_GetDALPropertyHandleStr` row of 4.184 and its absence in 4.191/4.192 are both real, because the
+  console this project reads carries `EFI_D_ERROR` rows and filters `EFI_D_INFO` banners; `0x0011A058` is
+  in `gcc_usb30_prim_gdsc`'s page; `0x0A60C100` is arithmetic, not a reading.
+- **does not decide**: why the DAL handle was there in 4.191/4.192 and not in 4.184; what the live value of
+  `0x0011A058` is (the route that would have answered it is the one that took the phone off the bus);
+  whether the instrument's zero model makes `0x088E9D74` bit 6 read clear the way the two passing runs did;
+  what `eud_base + 0x1018` is for; whether `SSUsb1InitCommon: gNpaClientSS1Bus is NULL` is an absent peer
+  or an instrument debt; and still the `CapLength` byte itself.
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
+  fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed
+  and the EL3 stub's three fabricated structures all still stand; `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+- **not an action**: no QEMU run was made and no console was read this step; the porting goal is unchanged
+  and unmet — no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and
+  P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.
+- **device state**: **changed by this step, and not by a write to storage.** At 19:51, mid-peek, the phone
+  dropped off the USB bus and has not returned; `adb devices` is empty, `fastboot devices` is empty, and
+  `lsusb` shows no Xiaomi or Qualcomm id. It needs a physical reset by hand before anything else can be
+  done with it. Three physical actions are now outstanding and none can be taken from this host: the reset,
+  the reboot to the bootloader that the P3 `fastboot boot` workflow needs, and a **screen photograph** of
+  the 4.187 P3 payload's judgement lines — `adb exec-out screencap -p` still returns 53 bytes, and
+  `先读屏，再刷下一次` still forbids booting the payload before that photograph exists. Nothing on the
+  device's storage was written, so `userdata`, the partition table and the firmware LUN are all as they
+  were.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
