@@ -43028,3 +43028,108 @@ table and the firmware LUN are all as they were, and `device/dxe/UsbConfigDxe.ef
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
 
+
+## Step 4.208 — the PMIC wall is the instrument's, measured from both sides: the tool's own `REAL_REGIONS` points exactly one window at hardware and it is the GIC, everything else the platform declares below 0x40000000 keeps the zeroed pool — and the phone's own bootloader tree carries `qcom,spmi@c440000`, `qcom,spmi-pmic-arb`, five register ranges that all land inside the window `MemoryMapLib.c` reserves, and seven PMICs behind it
+
+
+**What was open.** 4.203 ended on a fork it could not decide from inside the instrument: `PmicDxe: PMIC was not
+detected` could be *"producible by this instrument alone"*, because `-M virt` has no SPMI arbiter to alias to
+and the window reads whatever the RAM model holds — or it could be that the phone's own PMIC is silent for its
+own reasons, in which case the row would be a finding about the board and not about the model. 4.207 walked into
+the same wall from the other side: once the tick arrived and the payload's USB bring-up actually ran, it died on
+the same row (`ConfigUsb: failed to enable the Vbus for the USB core 0: Not Found` x415,
+`PmicUsbProtocol->GetOtgStatus Not Found` x416) and the step's `does not decide` clause named the gap verbatim —
+*"whether the variant's payload would enumerate a USB device, because ... the instrument has no PMIC to enable a
+Vbus"*. This step closes that fork with retained artifacts only: no device, no build, no instrument leg.
+
+
+**The instrument's side is stated by the tool's own source, and it is one entry long.**
+`tools/qemu-panel-read.py` builds its stage-2 map from two tuples. `REAL_REGIONS` (line 160) is
+`(("APSS_GIC600_GICD", MACHINE_GIC_BASE),)` — *one* board window that is pointed at the machine's own device
+instead of at the pool — and `REAL_PAGES` (line 177) is `((0x00000000, 0x08010000,
+"PcdGicInterruptInterfaceBase"),)`, the single 4 KB page that could not ride along with its block. The file says
+what the rest of the map is in its own comment at lines 141-146: *"Everything else this platform declares below
+`LOW_MMIO_LIMIT` keeps the RAM model"*, where `LOW_MMIO_LIMIT = 0x40000000` (line 109) and the pool those blocks
+are pointed at begins at `ZERO_MEM_POOL_BASE = 0x40000000` (line 115) at `STAGE2_BLOCK = 0x200000` (line 118).
+So `MemoryMapLib.c:75`'s `{"PMIC ARB SPMI", 0x0C400000, 0x02800000, ...}` — the 40 MiB from `0x0C400000` to
+`0x0EC00000` — is 20 stage-2 blocks, 98 through 117, every one of them pointed at zeroed pool RAM. There is no
+arbiter there to answer and none was ever claimed; both drivers load ahead of the row — 4.163's control trace
+has `Loading driver at 0x0009C3CD000 EntryPoint=0x0009C3CE000 SPMI.efi` and `Loading driver at 0x0009C1E7000
+EntryPoint=0x0009C1E8000 PmicDxe.efi` two rows before `PmicDxe: PMIC was not detected` — and the read comes back
+zero because nothing wrote it.
+
+
+**The phone's side is the phone's own bootloader tree, dumped from the running phone.** `~/backup/gauguin/dt/`
+is a raw `/proc/device-tree` dump taken from the phone on 2026-09-22 17:15 — XBL's own device tree, which is why
+every node carries the `qcom,` prefix XBL gives them. It contains `dt/soc/qcom,spmi@c440000/` with, decoded
+property by property: `compatible = "qcom,spmi-pmic-arb"`; `reg = <0x0C440000 0x1100 0x0C600000 0x2000000
+0x0E600000 0x100000 0x0E700000 0xA0000 0x0C40A000 0x26000>`; `reg-names = "core", "chnls", "obsrvr", "intr",
+"cnfg"`; `interrupt-names = "periph_irq"`; `interrupts-extended = <0x26 0x01 0x04>`; `qcom,ee = 0`;
+`qcom,channel = 0`; `cell-index = 0`; `#address-cells = <2>`; `#interrupt-cells = <4>`; `name = "qcom,spmi"`;
+and **no `status` property at all**, which is the enabled default. Behind it are **seven** PMIC devices —
+`qcom,pm6150l@4`, `qcom,pm6150l@5`, `qcom,pm6350@0`, `qcom,pm6350@1`, `qcom,pm7250b@2`, `qcom,pm7250b@3`,
+`qcom,pmk8350@6` — and the tree's `qcom,msm-id` `<0x1b2 0x10000 0x1cb 0x10000>` and `qcom,board-id` `<0x23
+0x00>` are this board's, matching `work/out/gauguin.dts:10-11` word for word. **The address arithmetic was
+checked rather than asserted**: all five of the arbiter's ranges fall inside the window the firmware's own
+memory map reserves — `core` `[0x0C440000, 0x0C441100)`, `chnls` `[0x0C600000, 0x0E600000)`, `obsrvr`
+`[0x0E600000, 0x0E700000)`, `intr` `[0x0E700000, 0x0E7A0000)` and `cnfg` `[0x0C40A000, 0x0C430000)`, each with
+slack to `0x0EC00000` of `0x27BEF00`, `0x600000`, `0x500000`, `0x460000` and `0x27D0000`. So the board's
+bootloader, whose successor is the very firmware under test, has the arbiter in its tree at the address the
+firmware reserves.
+
+
+**And the tree the payload carries has the same node, which is the cross-check that makes this a measurement and
+not one file agreeing with itself.** `work/out/sm7225-xiaomi-gauguin.dtb` (87,594 bytes) and its copy at
+`work/uefi/Mu-Silicium/Resources/DTBs/gauguin.dtb` (87,594 bytes) both expand to a `spmi@c440000` node at line
+2229 carrying `compatible = "qcom,spmi-pmic-arb"` and the same seven PMICs, and the kernel-side tree on disk
+names the same bus at the same address — `work/out/gauguin.dts:2229` `spmi@c440000`, `:2516` `pmic@2` =
+`qcom,pm7250b`, and `:2522` `usb-vbus-regulator@1100` with `status = "okay"`, `regulator-min-microamp =
+<0x7a120>` and `regulator-max-microamp = <0x16e360>` (500 mA to 1.5 A). Two trees of independent provenance —
+XBL's, off the phone, and the platform's own DTB source — agree on the address, the arbiter and the devices.
+**The payload's failing call has a named target there**: `XhciDxe`'s `PmicUsbProtocol->GetOtgStatus Not Found`
+is asking for the USB Vbus path, and the live tree puts `qcom,usb-pdphy@1700` and `qcom,qpnp-smb5` on
+`qcom,pm7250b@2`, with the kernel tree naming the regulator explicitly at USID 2 register 0x1100.
+
+
+**The causal chain is visible in the traces, from the zeroed window to 4.207's flood, and one row in it prints
+the zero.** 4.163's `setup` trace, three rows apart and in order, has `UsbConfigDxe.efi` loading, then
+`UsbConfigLibOpenProtocols: gPmicNpaClientSS1 cannot be created`, then `UsbConfigLibOpenProtocols: failed to
+locate PMIC version protocol`, then `UsbConfigLibOpenProtocols: PMI version (0x0)` — the payload printing the
+PMIC version *it read*, which is the zeroed word — and then `UsbConfigInit: Failed to attach USB Arid 0x0 HAL
+IOMMU domain Result = (0x4)`. Both 4.207 legs carry the same `failed to locate PMIC version protocol` row three
+times each, and `PmicDxe: PMIC was not detected` is in 4.161's trace three times and 4.163's `setup` trace seven
+times — so the chain predates the timer work by more than forty steps and does not depend on the timer variable,
+and its first link is a read of zeroed pool RAM rather than a fact about the board.
+
+
+**decides**: that 4.203's alternative is falsified — the phone's own bootloader device tree declares the SPMI
+arbiter at `0x0C440000` with five register ranges and seven PMIC devices, every range inside the 40 MiB window
+`MemoryMapLib.c:75` reserves for it, and the device tree the payload itself carries declares the same node — so
+`PmicDxe: PMIC was not detected` is producible by this instrument alone and the wall 4.207 reached is the
+machine's fabrication and not a property of the phone; and that the chain from that zeroed window to the
+`GetOtgStatus` flood runs through `PmicDxe` installing no protocols, which is visible as
+`UsbConfigLibOpenProtocols: failed to locate PMIC version protocol` in every leg including the ones where the
+timer never fired. **does not decide**: whether the phone's arbiter actually answers a read — what is measured
+here is a declaration by the phone's bootloader and by the payload's own DTB, corroborated by the phone booting
+Android with working display, charging and thermal, and **no retained artifact contains a register read from the
+SPMI window**; nor whether the payload's USB bring-up would succeed on the phone once such a read did answer.
+**carries a consequence for the plan rather than for the model**: continuing the PMIC chain on the instrument is
+off the critical path, because it would mean modelling `qcom,spmi-pmic-arb` closely enough for Qualcomm's signed
+`PmicDxe` binary to detect a device behind it — there is no `PmicDxe.c` anywhere in the tree, only
+`PmicDxeLa.inf` metadata under `Binaries/<platform>/QcomPkg/Drivers/PmicDxe/`, and the probe has no seeding
+option to put an answer in the window even if one were decoded — in exchange for a model of hardware the phone
+demonstrably has. **corrects**: nothing measured earlier; this step adds the missing half of 4.203's fork and
+leaves every row it read standing. **carries the standing limits unchanged**: the thirteen rungs, the SEEDED
+SMEM word, the AOP `0xC3F000C` record and the EL3 stub's three fabricated structures all stand and none is
+touched, and `0x41E00000` stays retired. **not an action**: read-only — no build, no instrument leg, no flash,
+no `fastboot` command, no partition written, no seed written, no console read from the device and no device file
+opened. What ran was file reads, `strings`, `od`, `grep` and one arithmetic check. **device state**: unchanged
+and not re-measured this step. Three physical actions remain outstanding and none can be taken from this host:
+**a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow needs, and a
+**screen photograph** of the 4.187 P3 payload's judgement lines — `adb devices` is empty, so no screencap can be
+taken from this host at all, and 先读屏，再刷下一次 still forbids booting the payload before that photograph exists.
+Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
+they were, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+

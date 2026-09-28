@@ -1915,6 +1915,40 @@ Work:
 > `fastboot` command run, the payload in `boot` is unchanged, three physical actions still cannot be taken from this
 > host (a reset, a reboot to the bootloader, and the 4.187 P3 payload's screen photograph — `先读屏，再刷下一次` still
 > forbids booting it first), and `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.207.
+> **4.208: the PMIC wall is the instrument's, and that closes the fork 4.203 could not decide from inside.**
+> `PmicDxe: PMIC was not detected` had two readings — producible by the instrument's zeroed stage-2 map, or the
+> phone's own PMIC being silent — and 4.207 walked into the same wall from the other side once the tick let the
+> payload's USB bring-up run. It is the first reading, and the evidence is one entry long on each side. **The
+> instrument states it in its own source**: `tools/qemu-panel-read.py`'s `REAL_REGIONS` (`:160`) points exactly
+> *one* board window at real hardware — the GIC — and `REAL_PAGES` (`:177`) exactly one 4 KB page, and the file's
+> comment at `:141-146` says *"Everything else this platform declares below `LOW_MMIO_LIMIT` keeps the RAM
+> model"*; so `MemoryMapLib.c:75`'s `PMIC ARB SPMI 0x0C400000+0x02800000` is 20 stage-2 blocks, 98-117, every one
+> of them pointed at zeroed pool RAM. **The phone states it in its own bootloader tree**:
+> `~/backup/gauguin/dt/soc/qcom,spmi@c440000/` — a raw `/proc/device-tree` dump taken from the phone on 2026-09-22
+> — carries `compatible = "qcom,spmi-pmic-arb"`, `reg = <0x0C440000 0x1100 0x0C600000 0x2000000 0x0E600000
+> 0x100000 0x0E700000 0xA0000 0x0C40A000 0x26000>`, `reg-names = "core","chnls","obsrvr","intr","cnfg"`, `qcom,ee
+> = 0`, no `status` property at all, and **seven** PMICs behind it (`pm6150l@4`, `@5`, `pm6350@0`, `@1`,
+> `pm7250b@2`, `@3`, `pmk8350@6`), with `qcom,msm-id` and `qcom,board-id` matching `work/out/gauguin.dts:10-11`
+> word for word. All five arbiter ranges were checked to fall inside the window the firmware reserves, and the
+> tree the payload itself carries (`Resources/DTBs/gauguin.dtb`, 87,594 bytes) has the same node at its line 2229
+> — two trees of independent provenance agreeing — while the payload's failing call has a named target there,
+> since `work/out/gauguin.dts:2522` puts `usb-vbus-regulator@1100` on `pm7250b` with `status = "okay"`. The chain
+> is in the traces too, and one row in it prints the zero: 4.163's `setup` trace runs `UsbConfigDxe.efi` loading
+> -> `UsbConfigLibOpenProtocols: gPmicNpaClientSS1 cannot be created` -> `UsbConfigLibOpenProtocols: failed to
+> locate PMIC version protocol` -> `UsbConfigLibOpenProtocols: PMI version (0x0)` -> `UsbConfigInit: Failed to
+> attach USB Arid 0x0 HAL IOMMU domain Result = (0x4)`, with `PmicDxe: PMIC was not detected` in 4.161's trace
+> three times and 4.163's `setup` trace seven times and the `failed to locate PMIC version protocol` row in both
+> 4.207 legs — so the chain predates the timer work by more than forty steps and does not depend on the timer
+> variable. **The consequence is for the plan, not the model**: pushing the PMIC chain further on the instrument
+> is off the critical path, because it means modelling `qcom,spmi-pmic-arb` well enough for Qualcomm's signed
+> `PmicDxe` binary to detect a device behind it, against no `PmicDxe.c` anywhere in the tree and a probe with no
+> seeding option, to model hardware the phone has. **What it does not decide, stated plainly**: whether the
+> phone's arbiter answers a read is a declaration by its bootloader and not a register read — no retained artifact
+> reads the window on the phone — and nothing here says the payload's USB bring-up would succeed there. **Not an
+> action**: read-only, no build, no instrument leg, no flash, no partition written, no `fastboot` command; the
+> payload in `boot` is unchanged, three physical actions still cannot be taken from this host (a reset, a reboot
+> to the bootloader, and the 4.187 P3 payload's screen photograph — `先读屏，再刷下一次` still forbids booting it first),
+> and `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.208.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
