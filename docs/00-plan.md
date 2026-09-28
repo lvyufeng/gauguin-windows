@@ -1704,6 +1704,33 @@ Work:
 > sharper mirror of 4.190's: seed **both** polled bits — HCRST clear at `0x0A600020` *and* HCHalted clear at
 > `0x0A600024` — after which the two polls pass on their first try and the run tests what lies downstream of
 > a reset that reads as successful, rather than only what the driver prints.)
+> **4.199: the poll is answered instead of seeded, and the wall is another driver's.** 4.198's named follow-up
+> — seed both polled bits — is impossible with a loader: the block behind `0x0A600000` is pool RAM
+> (`ZERO_MEM_POOL_BASE = 0x40000000`), so the driver's own `USBCMD.HCRST` store sticks and real hardware's
+> self-clear has no counterpart there. So the probe writes at the same entry it used to read at
+> (`--xanswer 16`; `new = (val & ~w2) | (w2 if want else 0)`, put back with `mwrite` and read straight back),
+> with the answer's shape taken from the helper's own `bics/cset/cmp/b.eq`. Both entries fired 0.1 s apart
+> (4.198: 13.4 s), so the first poll's bound was never spent, and both readbacks took — the falsifier in the
+> runner's header did not occur. The run then stops in `UsbBusDxe`'s `UsbRootHubInit`: `pc = 0x9BF9EEF4`,
+> `ldrb w8,[x19,#201]` / `cmp w8,#6` / `b.cc`, i.e. `PollCount` on a pool `HubIf` spun until 6. The module is
+> this tree's own build (`SizeOfImage 0x10000`, 5 sections, the pattern once at file `0x42F4` = rva `0x4EF4`,
+> the machine's `x22` equal to the built code's `adrp` operand — the Qualcomm prebuilt has neither the pattern
+> nor the string), the routine is named by its own `DEBUG_INFO` string at rva `0xA090` and by its
+> `CreateEvent`/`SetTimer (TimerPeriodic, 0xF4240)` arguments and struct offsets, and the wait is
+> `UsbHub.c:1002`–`1020`'s `// MU_CHANGE Add USB Hub Enumeration delay` — 6 and 200 (`UsbBus.h:61`, `:67`), a
+> block upstream edk2 does not have, satisfiable in principle (6 ≤ 200) but reading **1** at the break-in, which
+> is what the immediate `SignalEvent` gives and no evidence that the armed 100 ms timer ever ran (only the
+> interrupt path can advance it — not a TPL effect, since DxeCore dispatches timer notifications at
+> TPL_HIGH_LEVEL from its own tick). The wall did move, and the two late samples bracket it: 4.198's
+> `pc=0x9c4b7c10 lr=0x9c4b6754` is `ArmReadCntPct`'s `ret` under `MetronomeDxe+0x1754` =
+> `MicroSecondDelay+0x58` — the leaf of the `Stall(1)` the xHCI poll helper calls each iteration — so 4.198's
+> guest was still inside its run poll at 55.1 s and had not reached `UsbBusDxe` at all. The console's row set is unchanged from 4.198, so the answering changed
+> nothing printed. What the guest's position does prove is the chain `UsbRootHubInit` → `mUsbRootHubApi.Init`
+> (`UsbBus.c:1178`) → `UsbBusBuildProtocol` → `OpenProtocol (gEfiUsb2HcProtocolGuid)` (`UsbBus.c:1304`): **the
+> USB2_HC protocol was published**, and the only other holder of that GUID is the bitra `XhciDxe.efi` itself.
+> The next experiment is named and not run: a `Z0` at `UsbBusDxe+0x658C` to count whether the periodic callback
+> is ever delivered, or answer `[x19+201]` with 6 the way this step answered the xHCI polls, which carries the
+> run into `UsbBus->Devices[0] = RootHub` and real device enumeration.)
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

@@ -41511,3 +41511,281 @@ tests whether anything downstream of the reset depends on the block being real.
   photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
   firmware LUN are all as they were.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.199 — the poll is answered at its own entry instead of seeded, and the guest stops in a different driver: `UsbBusDxe`'s `UsbRootHubInit` spins on a Mu-Silicium-local delay waiting for a timer notification that the counter says never comes
+
+**The question, and why the experiment 4.198 named had to change shape.** 4.198's own write-up named its
+successor as *"seed **both** polled bits — HCRST clear at `0x0A600020` and HCHalted clear at `0x0A600024` —
+and the two polls succeed on their first pass instead of spinning."* No loader can do that, and the reason is
+in the instrument rather than in the driver. The block the stage-2 plan puts behind `0x0A600000` is plain pool
+RAM — `tools/qemu-panel-read.py`'s `ZERO_MEM_POOL_BASE = 0x40000000` and its `block_for_ipa()`, which dies with
+`block not in the plan` for anything the declared regions do not cover — so the driver's **own** store of
+`USBCMD.HCRST` at `XhciDxe+0x4AF8` sticks there and nothing put in that word earlier can survive it. Real
+hardware self-clears `HCRST` a millisecond after the write; RAM does not. The reset poll is therefore
+unsatisfiable by *any* fabricated block, and only an instrument that answers the poll **read** can carry it.
+That is this step's one change of shape: 4.198 read the arguments at the poll helper's entry, 4.199 writes the
+polled word there.
+
+**The instrument, and the prediction written before the run.** `work/out/qemu-probe-4.199/hand10probe.py`
+(`sha256 915bf4e02f18907b…`, 26,748 B) differs from `hand9probe.py` (`0d648e21a40cbb49…`, 29,026 B) in one
+flag, one print and one write, and is otherwise the same file. The flag is
+
+    --xanswer 16   poll-entry hits at which the polled word is set to the state the poll wants; past this
+                   the word is left as the guest left it, so that a driver which settles into a retry loop
+                   is seen to do it rather than being carried through
+
+and the write is 14 lines in the existing poll-entry handler: it computes `a = IPA_XHCI_BAR + cap + w1` — the
+same address 4.198 read the driver's own values from — reads the dword, prints what the poll wants, then
+
+    new = (val & ~w2) | (w2 if want else 0)
+
+and puts it back with the probe's `mwrite`, reading it straight back. **The shape of the answer is not chosen
+here; it is the helper's own arithmetic**, read off `/tmp/xhci-bitra.asm` at `0x48FC`–`0x4908`:
+`bics wzr,w19,w0` / `cset w9,eq` / `cmp w9,w24` / `b.eq 0x492C`, i.e. success iff `(read & w2) == w2` when the
+expect byte is 1 and `(read & w2) == 0` when it is 0. Both call sites pass `w3 = 0`, so both want the masked
+bits **clear**; the answer clears exactly those bits and leaves the rest of the word as the guest left it.
+`run-hand10.sh` (`551cb200f5091742…`, 5,661 B) is 4.198's `run-hand9.sh` (`4b61771dc27e4ddb…`, 4,718 B) line for
+line — the same seven fabricated loaders including the `USB30_PRIM` block at pool `0x41A00000` whose seeded
+`USBSTS = 1` is the faithful post-reset value, the same four EL3 flags, the same six `ClockDxe` sites, the same
+answer logic at the wait — plus `--xanswer 16`. The cost is in the runner's own header rather than hidden:
+*"this is no longer a controller that completed one reset, it is a driver talking to a register block that
+always agrees with it"*, and past sixteen hits the word is left as the guest left it so a retry loop is seen and
+not carried.
+
+The prediction is in that header, written before the run: the reset poll's first read is 0 after the answer, so
+the helper returns at `0x492C` within one `Stall(1)` of entering — *"the ninth run's second entry came 13.4 s
+after the first, and this run's second entry should come within a second of the first, because the first poll's
+million-iteration bound is never spent"* — the same for the run poll, and then either a third entry from a later
+poll of the driver's own or the console's next row, which is where `XhcDriverBindingStart` gets to once the
+controller answers. The falsifier is stated the same way: *"if instead the entry fires and the two entries are
+still 13 s apart, the write did not reach the helper's read and the stub's write path is not the guest's read
+path after all — the ninth run's readbacks would then have been reading a copy."*
+
+**The reading, verbatim from `hand10-run.log`** (`sha256 52d8daab07cee9f0…`, 8,973 B, 144 lines; the stdout log
+is byte-identical, as 4.198's were):
+
+    @16.7s xHCI POLL ENTRY #1  x0=0x9bd60018  x30=0x9bdfb64c
+            entry word fa67bba9  (the tree's helper starts a9bb67fa at rva 0x48ac)
+            w1 offset=0x0  w2 mask=0x2  w3 expect=0x0  w4 timeout=0x3e8 ms -> bound 1000000
+            CALLER: 0x9bdfb64c -> MZ at 0x9bdfa000 after 1 page(s); rva = 0x164c  (= this tree's bitra XhciDxe + 0x164c)
+            POLLED: BAR CapLength 0x20 + offset 0x0 = IPA 0xa600020, reads 0x2
+            WANTS (read & 0x2) == 0x2 if the expect byte is 1, == 0 if it is 0 -- expect byte 0x0, so the first pass fails and the poll spins
+            ANSWER #1: [0xa600020] 0x2 -> wrote 0x0 through the stub (b'OK') -> reads back 0x0
+    @16.8s xHCI POLL ENTRY #2  x0=0x9bd60018  x30=0x9bdfb684
+            w1 offset=0x4  w2 mask=0x1  w3 expect=0x0  w4 timeout=0x2710 ms -> bound 10000000
+            CALLER: 0x9bdfb684 -> MZ at 0x9bdfa000 after 1 page(s); rva = 0x1684  (= this tree's bitra XhciDxe + 0x1684)
+            POLLED: BAR CapLength 0x20 + offset 0x4 = IPA 0xa600024, reads 0x1
+            WANTS (read & 0x1) == 0x1 if the expect byte is 1, == 0 if it is 0 -- expect byte 0x0, so the first pass fails and the poll spins
+            ANSWER #2: [0xa600024] 0x1 -> wrote 0x0 through the stub (b'OK') -> reads back 0x0
+    @41.8s nothing stopped in 25s after 9 answer(s) -- the guest is free
+
+The first entry is the reset poll and the second the run poll, the same two sites and the same arguments 4.198
+read; the `WANTS` line is the corrected wording (4.198's `hand9probe.py:414` printed the mask where the
+expected value belonged, and this probe prints the sentence instead). **The prediction held on both counts
+that matter**: the second entry came **0.1 s** after the first (4.198: 13.4 s), so the reset poll's
+million-iteration bound was never spent — the answer arrived before the first `Stall(1)` had finished; and both
+answers read back `0x0`, which is the direct refutation of the stated falsifier: the write reaches the same
+word the helper's next `bl 0x4310` fetches, so the stub's write path is the guest's read path and 4.198's
+readbacks were readings, not copies.
+
+**The wall, at `pc = 0x9bf9eef4`, and the module named by its own address arithmetic.**
+
+    THE WALL: pc=0x9bf9eef4  bytes at the wall: 682643391f190071c3ffff54bf1600f1
+        lr=0x9bf9eef4  sp=0x9be0f138
+        x2  = 0x00000000000f4240      x8  = 0x0000000000000001      x9  = 0x0000000000000004
+        x19 = 0x000000009be13c18      x21 = 0x0000000000000004      x22 = 0x000000009bfa7000
+    MODULE: MZ at 0x9bf9a000 after 4 page(s); rva = 0x4ef4
+        coff: machine=0xaa64 sections=5 stamp=0x0 sizeopt=0xf0 chars=0x2022
+        SizeOfImage=0x10000
+    TRACE: 20 single steps from the break-in -- 20 step(s), 3 distinct pc(s): 0x9bf9eef4 0x9bf9eef8 0x9bf9eefc
+
+The three addresses' bytes disassemble, with `aarch64-linux-gnu-objdump -D -b binary -m aarch64`, to a
+three-instruction loop and nothing else in it:
+
+    9bf9eef4:  39432668  ldrb  w8, [x19, #201]
+    9bf9eef8:  7100191f  cmp   w8, #0x6
+    9bf9eefc:  54ffffc3  b.cc  0x9bf9eef4
+
+i.e. an 8-bit field at offset 201 of the structure in `x19` spun until it reaches **6**, with `lr == pc` and
+`sp` unchanged across 20 steps because there is no call inside it. `x19 = 0x9BE13C18` is not in the module's own
+image (`0x9BF9A000`–`0x9BFA9FFF`) but below it, in the region the panel's own memory map lists as free RAM
+(`Memory Allocation 0x00000007 0x9B800000 - 0x9DB5FFFF`), so the structure is a pool allocation. The module is
+**`Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/UsbBusDxe.efi`** (`sha256 57fc986a5ff9a093…`, 52,736 B), and not by
+its name but by four independent facts that agree: its `SizeOfImage` is `0x10000` and it has 5 sections
+(`machine 0xaa64`) exactly as the machine's header reports; the wall's own 16 bytes occur **once** in it, at
+file offset `0x42F4`; `.text` maps `vma 0x1000 / raw 0x400`, so that file offset **is** rva `0x4EF4`, the rva
+the probe page-walked out of the machine; and the register file's `x22 = 0x9BFA7000` is exactly the `adrp x22`
+target the built image's own code at this site loads, which the machine could only hold if it executed those
+instructions. The Qualcomm prebuilt `Binaries/bitra/QcomPkg/Drivers/UsbBusDxe/UsbBusDxe.efi` is excluded by
+the same walk: 77,824 B, 3 sections, `SizeOfImage 0x13000`, and it contains neither the wall's byte pattern nor
+the routine's string. That resolves an open item carried into this step — **the payload's `UsbBusDxe` is this
+tree's build**, not Qualcomm's.
+
+**The routine, read out of the same image.** Dumping rva `0x4DC0`–`0x4F40` of that file and disassembling it
+identifies the function unambiguously, because the function names itself through its own string reference:
+
+| rva | instruction / datum | what it is |
+| --- | --- | --- |
+| `0x4DD4` | `stp x19,x20,[sp,#-48]!` | the routine's entry |
+| `0x4DF0`–`0x4E08` | `UsbHcGetCapability (HubIf->Device->Bus, &MaxSpeed, &NumOfPort, &Support64)` | three output bytes on the stack at `sp+0xF`, `sp+0xE`, `sp+0xD` |
+| `0x4E24`–`0x4E38` | `mov w0,#0x40` (DEBUG_INFO), `adrp x1`+`add #0x90` → rva `0xA090`, `DebugPrint` | the routine's own `DEBUG_INFO` row, **behind a level test** (`bl 0x…3F8`, `tst w0,#0xff`, `b.eq`) |
+| `0x4E3C`–`0x4E60` | `str x9,[x19,#160]`, `strb w8,[x19,#153]`, `strb w9,[x19,#200]`, `strb w10,[x19,#168]`, `str xzr,[x19,#184]` | `HubApi`, `IsHub = 1`, `MaxSpeed`, `NumOfPort`, `HubEp` |
+| `0x4E70`–`0x4E94` | `CreateEvent` via `[gBS,#80]`, args `0x80000200`, `w1=8`, `x2 = base+0x658C`, `x3 = HubIf`, `x4 = &HubIf->HubNotify` | `EVT_TIMER|EVT_NOTIFY_SIGNAL`, `TPL_CALLBACK`, the callback |
+| `0x4E9C`–`0x4EA8` | `SignalEvent` via `[gBS,#104]` | the immediate signal the source comments about |
+| `0x4EAC`–`0x4EC4` | `SetTimer` via `[gBS,#88]`, `w1=1`, `w2=0xF4240` | `TimerPeriodic` at 1,000,000 × 100 ns = **100 ms** |
+| `0x4ED4`–`0x4EF0` | `RaiseTPL` via `[gBS,#24]` with `w0=0x1F`, then `RestoreTPL` via `[gBS,#32]` with `w0=4` | the Mu patch's TPL pair, old TPL kept in `x21` |
+| `0x4EF4`–`0x4EFC` | the three instructions above | the delay loop itself, empty |
+| `0x4F00`–`0x4F14` | `cmp x21,#5` / `b.cc` / `RaiseTPL(x21)` | `if (OldTpl > TPL_APPLICATION)` of the same patch |
+
+and the `.rdata` at rva `0xA090` is the string `UsbRootHubInit: root hub %p - max speed %d, %d ports\n`. The
+`gBS` the routine uses is the module's own pointer variable at rva `0xD688` (`ldr x8,[x22,#1672]` with the
+`adrp` page being base+`0xD000`), and the routine sits in the module's function-pointer table at rva `0xD5B0`,
+whose **first** entry is `0x4DD4`. Every one of those offsets matches the source: `UsbBus.h` declares
+`IsHub`, `HubApi`, `NumOfPort`, `HubNotify`, `HubEp`, `ChangeMap`, `MaxSpeed` and, last, `volatile UINT8
+PollCount` — which is why `ldrb w8,[x19,#201]` is `PollCount` and the `strb w9,[x19,#200]` just above it is
+`MaxSpeed`. The routine is `UsbRootHubInit` (`UsbHub.c:942`).
+
+**The loop is a Mu-Silicium patch, and it is satisfiable in principle.** `UsbHub.c:1002`–`1020` is the
+`// MU_CHANGE Add USB Hub Enumeration delay` block: an `else` branch on `SetTimer`'s success that raises the
+TPL and then
+
+    while (HubIf->PollCount < USB_ENUM_POLL_MINIMUM_ATTEMPTS) {
+      // wait for a minimum of USB_ENUM_POLL_MINIMUM_ATTEMPTS * (USB_ROOTHUB_POLL_INTERVAL 100 ms)
+      // with the asynchronous periodic timer interrupt that checks for hub enumeration
+      // and updates PollCount on each timer trigger
+    }
+
+with `USB_ENUM_POLL_MINIMUM_ATTEMPTS 6` and `USB_ENUM_POLL_MAXIMUM_ATTEMPTS 200` both marked `// MU_CHANGE`
+(`UsbBus.h:61`, `:67`). **Upstream edk2 has none of it**: the master copy of `UsbHub.c` fetched for this step
+(`/tmp/upstream-usbhub.c`, 34,689 B) ends the same routine `if (EFI_ERROR (Status)) { gBS->CloseEvent
+(HubIf->HubNotify); }` and `return Status;`, with no `PollCount` field, no define and no wait — so this wall is
+this tree's own doing and not Qualcomm's or edk2's. Because 6 ≤ 200 the two constants are consistent and the
+loop *is* satisfiable: six notifications at 100 ms each, ~600 ms. The only writer of the byte is
+`UsbRootHubEnumeration` (`UsbEnumer.c:1084`), `if (RootHub->PollCount < USB_ENUM_POLL_MAXIMUM_ATTEMPTS) {
+RootHub->PollCount++; }` at `:1097`, and it is the same function the routine passes to `CreateEvent` — rva
+`0x658C`, which is where the callback pointer in the table above points.
+
+**The reading that matters: the counter is at 1.** At the break-in `x8 = 1` on every one of the 20 single steps,
+and the loop re-loads it on every iteration, so the value is live rather than stale: `PollCount` is **1**, not
+6, at 41.8 s — twelve seconds after the routine armed a 100 ms periodic timer and 0.1 s after the driver's own
+polls were answered. One increment is exactly what `gBS->SignalEvent (HubIf->HubNotify)` at `0x4EA8` produces,
+which is the immediate signal the source comments about; there is **no evidence the armed periodic timer's
+notification ever ran**. The consequence is sharp, and it is what the next experiment has to attack: the loop
+calls nothing and returns nowhere, so no mainline dispatch can advance the byte, and the only path left is the
+periodic interrupt. **This also corrects a mechanism that is easy to adopt and wrong**: a `TPL_CALLBACK`
+notification is *not* blocked by the spin — DxeCore dispatches a timer event's notification from its own timer
+tick, at TPL_HIGH_LEVEL, regardless of the TPL the mainline sits at. The question the reading leaves is whether
+the tick is being delivered to DxeCore at all in this instrument, which is a different question and a cheaper
+experiment.
+
+**The console, and what it does not show.** Panel `work/out/qemu-panel-4.199-trace.txt` (`sha256
+8f2f03581ef7a375…`, 28,259 B) is **348 rows** from 1,199 screens, weakest margin 1.00, 60,907 characters under
+1.5, 9 rows filling all 90 columns, and **5 gaps** (90.80 s 6 rows/2 held, 94.80 s 70/65, 96.80 s 2/0,
+103.06 s 1/0, 103.81 s 12/8). Compared row-for-row against 4.198's 281-row panel, the *set* of console text is
+**the same**: four rows occur only in 4.199 (`smem_get_addr: SMEM get addr failed! smem_type=402`,
+`K 25 Ss 25/69 free=1024 1FA1F39E-…`, `LoadSys TIME 435ms`, `ISENSE TOTAL TIME 621ms`) and two only in 4.198
+(the same two `TIME` rows at `418ms`/`601ms`), so answering the two polls changed nothing the machine printed;
+the row-count difference is the panel's own sampling, as 4.198 recorded, and 4.199's trace keeps an older copy
+of the boot banner for the same reason. Zero rows match `ASSERT`, `CapLength`, `Xhci`/`XHCI`, `root hub`,
+`UsbBus` or `Poll`. **The routine's own `DEBUG_INFO` row is absent from that panel and that is not evidence
+about the routine** — the disassembly above shows the print guarded by a level test inside the same function
+(`mov w0,#0x40`, `bl 0x…3F8`, `tst w0,#0xff`, `b.eq`), so a masked `DEBUG_INFO` and a lost sample are
+indistinguishable here, and the pc is the evidence. Two further rows are worth naming because they are in
+**both** panels and are therefore not effects of this step: `XN: 0x000000009BD50000--0x0000000000010000
+[Failed]` and `XN: 0x000000009C27B000--0x0000000000082000 [Failed]`, whose printer the payload's own strings
+name as `UncachedMemoryAllocationLib.c` (`XN: 0x%016lx--0x%016lx [Failed]\n`), i.e. a memory-attribute
+application failing on two ranges — one of them the 64 KB window immediately below the xHCI instance at
+`0x9BD60018`. And `pool 0x41a00000` / `pool 0x41c00000` read **unreadable in all four** of 4.196, 4.197,
+4.198 and 4.199 (checked in each log), so that is a constant of the instrument rather than a change this step
+introduced, and a suspicion carried into it can be dropped.
+
+**The wall moved, and each run's late sample says where its guest was.** 4.198's break-in was `pc =
+0x9c4b7c10` with `lr = 0x9c4b6754` — the `ret` of `ArmReadCntPct`, called from `MetronomeDxe+0x1754` =
+`MicroSecondDelay+0x58`, which is the leaf of the `gBS->Stall(1)` the xHCI poll helper calls once per iteration
+(4.196's own write-up identified that module and those frames, and it is why 4.198's register file carried the
+helper's bound, counter and expect byte). So in 4.198 the guest was still **inside the run poll** when sampled:
+at 55.1 s it had spent 1,883,502 of that poll's 10,000,000 iterations, 25 s into a bound 4.198's own
+arithmetic put at ≈163 s — and it had not reached `UsbBusDxe`, which is reached only after the routine it was
+spinning in returns. In 4.199 the polls are answered, and the sample at 41.8 s is in `UsbBusDxe` instead: the
+wall is genuinely another driver's. What that placement proves is worth stating because it is the first
+positive evidence of its kind in this family: the guest is inside a routine that can only be entered after the
+xHCI controller protocols were published, and the chain is three links long with every link in the tree's
+source — the guest is inside `UsbRootHubInit` (`UsbHub.c:942`), whose only call site is
+`mUsbRootHubApi.Init (RootIf)` (`UsbBus.c:1178`, confirmed by grep — one call site, and the table at rva
+`0xD5B0` whose first entry is this routine), inside `UsbBusBuildProtocol` (`UsbBus.c:1051`), which is reached
+only from `UsbBusDriverBindingStart` after it opens `gEfiUsb2HcProtocolGuid` on the controller
+(`UsbBus.c:1304`, which returns before line 1424 on failure). So the USB2_HC protocol **was** published on this
+run, and the only other holder of that GUID in the payload's build set is the bitra `XhciDxe.efi` itself (a
+census of the GUID's 16 bytes: `DxeCore.efi` and `UsbBusDxe.efi` in the 48-file `Build/…/AARCH64` set, and
+`XhciDxe.efi` plus a stale `UsbBusDxe.efi` under `Binaries/bitra/` — none of the 86 binaries in `device/dxe/`).
+The reset 4.198 watched fail through fabricated RAM is, in other words, the step that stood between this
+instrument and the next driver.
+
+**What this settles, and the experiment it names.** The answer at the poll's entry works: two polls that
+4.198 measured at 13.4 s apart were left 0.1 s apart, both readbacks took, and the run's next stop is a real
+driver wall instead of an idle sample. The driver is `UsbBusDxe`, the routine `UsbRootHubInit`, the wait a
+Mu-Silicium-only delay loop on `PollCount` at `HubIf+201`, and its **counter read 1**. The experiment this
+names and does not run follows from the reading and is cheap: count the callback. A `Z0` at `UsbBusDxe +
+0x658C` — the `UsbRootHubEnumeration` the routine itself registers — asks whether the periodic notification is
+ever delivered, and it decides between the two remaining stories (the timer tick never reaches DxeCore in this
+instrument, or it does and something else stops `PollCount`). The carry, if the reading is wanted first, is the
+direct analogue of this step: answer the same loop by writing `6` into `[x19+201]` at each hit, reading it back
+the way this step read its answers back — which also carries the run past `UsbRootHubInit` into
+`UsbBus->Devices[0] = RootHub` (`UsbBus.c:1185`), where real device enumeration begins.
+
+**Rows.**
+
+- **artifacts**, all host-side and none of them a device read: `work/out/qemu-probe-4.199/hand10probe.py`
+  (`915bf4e02f18907b…`, 26,748 B), `run-hand10.sh` (`551cb200f5091742…`, 5,661 B), `hand10-run.log`
+  (`52d8daab07cee9f0…`, 8,973 B), `hand10-stdout.log` (byte-identical), `panel4199.log` (`28877b5f547a3bda…`,
+  26,707 B), `work/out/qemu-panel-4.199-trace.txt` (`8f2f03581ef7a375…`, 28,259 B); the fabricated block
+  `/tmp/xhci-cap.bin` (`d92559090d42f685…`, 4,096 B) unchanged from 4.196; the read-only comparisons — the
+  built `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/UsbBusDxe.efi` (`57fc986a5ff9a093…`, 52,736 B), the prebuilt
+  `Binaries/bitra/QcomPkg/Drivers/UsbBusDxe/UsbBusDxe.efi` (77,824 B), upstream's `UsbHub.c`
+  (`/tmp/upstream-usbhub.c`, 34,689 B), the GUID census over 48 built and 86 `device/dxe` binaries. Nothing was
+  written outside `docs/` and `work/` (gitignored).
+- **shows**: the poll helper's entry fired twice — reset then run, the same sites and arguments as 4.198 — and
+  the two `WANTS` sentences are the corrected wording; the answer's shape is the helper's own
+  `bics/cset/cmp/b.eq`, both call sites want the masked bits clear, and both answers read back `0x0`; the second
+  entry came 0.1 s after the first where 4.198's came 13.4 s later, so the bound was never spent and the
+  pre-written falsifier did not occur; the run's next stop is a three-instruction loop at `0x9bf9eef4` reading
+  `[x19,#201]` against 6, with `x19 = 0x9BE13C18` a pool allocation and `PollCount` reading 1.
+- **decides**: the identity of the wall's module — `UsbBusDxe`, and it is **this tree's build**, settled by
+  `SizeOfImage 0x10000`, 5 sections, the byte pattern at file `0x42F4` = rva `0x4EF4`, and the machine's own
+  `x22` matching the built code's `adrp` operand, with the Qualcomm prebuilt excluded on four counts; the
+  identity of the routine — `UsbRootHubInit`, named by its own `DEBUG_INFO` string at rva `0xA090`, its
+  `CreateEvent`/`SignalEvent`/`SetTimer` argument constants, its struct offsets and its entry in the
+  function-pointer table at rva `0xD5B0`; that the wait is a Mu-Silicium-only addition, absent from upstream
+  edk2; and that the xHCI controller protocols **were** published on this run, by the three-link call chain
+  from `UsbRootHubInit` back to `OpenProtocol (gEfiUsb2HcProtocolGuid)`.
+- **corrects**: the experiment 4.198 named cannot be a loader — the block behind `0x0A600000` is pool RAM, so
+  the driver's own `HCRST` store sticks and no seed survives it; the tempting reading that a `TPL_CALLBACK`
+  notification is blocked by the spin, which DxeCore's own timer dispatch does not do; and the reading of
+  4.198's late sample, which is that run's own poll's `Stall(1)` leaf in `MetronomeDxe`'s `MicroSecondDelay`
+  and not an idle or unrelated callback — so 4.198's guest was still in `XhciDxe` when sampled and the wall
+  this step finds is genuinely another driver's.
+- **does not decide**: whether the periodic timer's notification is ever delivered (the reading is `PollCount`
+  = 1 and one increment is what the immediate `SignalEvent` gives) — the named experiment; whether
+  `XhcDriverBindingStart` *succeeded*, since the statuses are discarded and no print exists, only that the
+  protocol was published; the cell count 4.198 recorded (1,883,502 iterations at 55.1 s) is used here as an
+  *inside-the-poll* marker, not as a count this step re-measured; and the seed/redirect byte-order
+  question 4.198 raised, which this step does not touch because the answered word is the driver's own.
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
+  fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and
+  the EL3 stub's three fabricated structures all stand, and the panel's own header says so. The fabricated
+  xHCI block is a fourth lie of that family and is named as one where it is used, and on this run the
+  instrument also answered reads rather than only fabricating bytes — the runner's header states that cost in
+  the driver's own terms. `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5` and was read, not written.
+- **not an action**: no `fastboot` command, no console read from the device, and no seed written anywhere but
+  the QEMU command line. The porting goal is unchanged and unmet — no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state remains
+  a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+  `lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken
+  from this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot`
+  workflow needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out
+  screencap -p` still returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that
+  photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
+  firmware LUN are all as they were.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
