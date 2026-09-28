@@ -715,6 +715,29 @@ Work:
 > protocols the P2 assert is about are still absent — nine protocols, eight producers, the
 > distinction the P2 row above draws. No USB stick can be seen yet.
 >
+> **4.209: the digest printed under this heading is the 4.112 build's, and the path it names
+> has held three more builds since.** A reader who hashes
+> `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` today gets 1,173,504 B at `sha256
+> 43d8d7ab…`, not the `f1a7106b…`/1,171,456 B above — and that is the failure this
+> paragraph's own sentences warn about, so it is worth saying plainly rather than leaving to
+> be discovered. **None of the four is lost.** `f1a7106b…`/1,171,456 B is kept as
+> `work/out/fd-archive/Mu-gauguin-xhci-host-pre-depex.img` (mtime 2026-09-26 09:00, the time
+> the paragraph above gives); the depex build that followed is
+> `34360470b8a7aafad7340e02787f72366302ab673d11bd20570cb51f4219cb79`, 1,171,456 B, kept both
+> as `fd-archive/Mu-gauguin-xhci-host-post-depex.img` (2026-09-27 16:41) and as
+> `work/out/usb-host/prev-xhci-nocensus.img`, the copy `:1,179` records 4.180 making of the
+> 4.177 payload; **4.180** added the USB-handle census and wrote 1,173,504 B, `sha256
+> f2f9d948d8900df5814bb32e9d3bc047ad326c2bc4612894758ee001a8cf1d72`; and **4.188** added the
+> re-connect probe and wrote 1,173,504 B, `sha256 43d8d7ab…` (`:1,294`, `docs/08`:37,735),
+> which is the file there now. Two of the four share one size and two share the other, so the
+> digest and not the byte count is the only key. What `tools/fv-inventory.py --roster` prints
+> for the current one is `FVMAIN roster: 126 FFS files`, and among them the display stack is
+> already present offline — `SimpleFbDxe`, `GraphicsConsoleDxe`, a `BootLogo.bmp` and
+> **eighteen** `Panel_*.xml` files. **Nothing the paragraph above claims changes**: the
+> artifact is still unflashed, still the record payload's file set plus three drivers, and
+> **the gate is still unmet** for the two reasons it gives. What changes is which digest a
+> reader should check. See `docs/08` step 4.209.
+>
 > **Step 4.113 measured the gate's *other* half and found no obstacle of its own.** The storage
 > chain the second clause needs — `UFSDxe`, `DiskIoDxe`, `PartitionDxe`, `Fat`, with `SdccDxe`
 > and `EnglishDxe` — sits at Apriori **25–30** as one contiguous run, and not one of the six

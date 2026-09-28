@@ -43133,3 +43133,50 @@ they were, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
 
+
+## Step 4.209 — the P3 gate artifact the plan names by digest has been rebuilt three times under the same path since, and the digest it prints is the 4.112 build's: the four builds that path has held are `f1a7106b…` (kept in `work/out/fd-archive/`), `34360470…` (the 4.177 payload), `f2f9d948…` (4.180) and `43d8d7ab…` (4.188, the file there now)
+
+
+**What was open.** The P3 gate's blockquote in `docs/00-plan.md` (`:702-716`) names its own artifact by path,
+size and digest, and prints `1,171,456 B, sha256
+f1a7106b76f98e11bb2608557e76085e1b3dcba86fda472c89bcefa1783f1c84`.
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` on this disk is 1,173,504 B at `sha256
+43d8d7abb83656d60588efad038070c0a8b7b31ae6d5976600f0bedce4e76cbc`. The blockquote is dated — *"as of Step 4.112
+(2026-09-26)"* — and it is the same blockquote whose next sentences record an earlier candidate being *"audited
+against the wrong base and read as current for six steps"*, so a stale digest under it is the failure it warns
+about rather than a defect of its own. The question was whether the 4.112 bytes still exist anywhere on this
+disk, because a reader who follows the path gets the 4.188 build and has no way to check the older claim.
+
+
+**The measurement is a hash sweep and three archive listings.** `f1a7106b…` at 1,171,456 B is on disk, at
+`work/out/fd-archive/Mu-gauguin-xhci-host-pre-depex.img`, mtime **2026-09-26 09:00** — which is the time
+`docs/08`:22,137 gives the file the 4.112 step rebuilt (`2026-09-26 09:00:30`). The path then held **four**
+distinct builds, and every one of them is retained: `f1a7106b…`, 1,171,456 B (4.112, archived as `pre-depex`);
+`34360470b8a7aafad7340e02787f72366302ab673d11bd20570cb51f4219cb79`, 1,171,456 B (the depex build that followed,
+kept as `work/out/fd-archive/Mu-gauguin-xhci-host-post-depex.img`, mtime 2026-09-27 16:41, and as
+`work/out/usb-host/prev-xhci-nocensus.img`, which is the copy `docs/00`:1,179 records 4.180 making);
+`f2f9d948d8900df5814bb32e9d3bc047ad326c2bc4612894758ee001a8cf1d72`, 1,173,504 B (4.180's, the one the USB-handle
+census was built into); and `43d8d7ab…`, 1,173,504 B (4.188's, the re-connect probe, mtime 2026-09-28 12:49 —
+the file there now). Two of the four are 1,171,456 B and two are 1,173,504 B, so size alone does not identify a
+build and the digest is the only key. `tools/fv-inventory.py --roster` on the current file prints `FVMAIN
+roster: 126 FFS files`, and the display half of the volume is in it: `SimpleFbDxe`
+(`DCFD1E6D-788D-4FFC-8E1B-CA2F75651A92`, 25,168 B), `GraphicsConsoleDxe`
+(`CCCB0C28-4B24-11D5-9A5A-0090273FC14D`, 35,910 B), a `BootLogo.bmp` (`7BB28B99-61BB-11D5-9A5D-0090273FC14D`,
+91,138 B) and **eighteen** `Panel_*.xml` files — every one of them `type 0x02` — none of which the 4.112
+paragraph mentions because it was counting drivers, not files.
+
+
+**decides**: that the digest `docs/00`:704 prints is not the digest of the file that path holds, that the
+difference is three later rebuilds and not a corruption, and that the 4.112 bytes are retained under
+`work/out/fd-archive/` so the older claim is still checkable. **does not decide**: anything about the gate.
+Every substantive sentence in that blockquote stands — the artifact is unflashed, the gate is unmet for the two
+reasons it gives, and no USB stick has been seen. **Not an action**: read-only — `find`, `sha256sum`, `ls`, one
+`tools/fv-inventory.py --roster` and one arithmetic check on line widths. No build, no instrument leg, no flash,
+no `fastboot` command, no partition written, no seed written, no console read from the device and no device file
+opened. **device state**: unchanged and not re-measured. The three physical actions remain outstanding and none
+can be taken from this host — a reset of the phone, the reboot to the bootloader the P3 `fastboot boot` workflow
+needs, and a screen photograph of the 4.187 P3 payload's judgement lines, which 先读屏，再刷下一次 still requires before
+that payload may be booted. `device/dxe/UsbConfigDxe.efi` is untouched at sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5.
+
+
