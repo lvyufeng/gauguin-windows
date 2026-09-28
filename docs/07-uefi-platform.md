@@ -3355,6 +3355,54 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > **no Qualcomm GUID had ever been named** — 745 → 817 with the corrected roots — which is what
 > made `gEfiChipInfoProtocolGuid` read as *"defined by no header"*. Also: `XhciDxe`, the file with
 > no depex at all, locates `E722B03F` rather than running blind. See `docs/08` step 4.174.
+>
+> **The boot option that would start a USB installer, and the application behind it, are both
+> already in this firmware and built correctly — measured 2026-09-28 by step 4.175.** The first
+> P3 clause has three parts and two of them are platform-side, and no step in fifteen had read
+> either. `MsBootOptionsLibRegisterDefaultBootOptions`
+> (`SiliciumPkg/Library/MsBootOptionsLib/MsBootOptionsLib.c:240`) calls
+> `RegisterFvBootOption (&gMsBootPolicyFileGuid, L"USB Storage", (UINTN)-1, LOAD_OPTION_ACTIVE,
+> (UINT8 *)"USB", sizeof ("USB"))` — `Position = (UINTN)-1` reaches
+> `EfiBootManagerAddLoadOptionVariable` as **append**, so the option is in `BootOrder` and
+> active from the first boot, before anything is enumerated, because a removable-media path
+> cannot be named in advance. Its target is an FV file and not a device path:
+> `gMsBootPolicyFileGuid` = `50670071-478F-4BE7-AD13-8754F379C62F`
+> (`Common/Mu/PcBdsPkg/PcBdsPkg.dec:78`), `MsBootPolicy.inf` with
+> `MODULE_TYPE = UEFI_APPLICATION`, declared at `SiliciumPkg.dsc.inc:474`, present in **0** of
+> the tree's platform `DXE.inc` files. It **is** in the volume — `MsBootPolicy type=0x0009
+> size=357436`, in both `work/out/usb-host/` and `work/out/p2-variants/` — and the scan that
+> says otherwise is lying: the raw 16 bytes occur **0 times** in both `.img` files because
+> `FVMAIN_COMPACT` is compressed, and the positive control `BdsDxe` (`6D33944A-EC75-4855-A54D-809C75241F6C`,
+> from `BdsDxe.inf`'s `FILE_GUID`) reads 0 by that scan too while sitting in the same roster. A
+> file-GUID lookup in this project therefore has to go through `tools/fv-inventory.py`'s
+> decompressed roster; that is a rule, and no tool needed changing to state it. What the
+> application does when the option is booted: `MsBootPolicyEntry` (`MsBootPolicy.c:584`) takes
+> its parameter from `ImageInfo->LoadOptions` (default `"MS"`), `case 'U'` (`:616`) selects the
+> USB-only `mUsbBootSequence`, and `:636` calls `EfiBootManagerConnectAll ()` with the comment
+> *"Connect All is required for this type of boot"*; `MsBootUSB` (`:678-694`) then picks
+> `FilterOnlyUSB` and, on `EFI_NOT_FOUND`, waits 6 s in
+> `PauseToLetUsbDrivesEnumerateThroughHubs` and tries once more. `EfiBootManagerConnectAll` is a
+> **dispatch retry** — `BmConnect.c:23-55` is `do { LocateHandleBuffer/ConnectController … }
+> while (!EFI_ERROR (gDS->Dispatch ()))` — so the option's route re-runs the dispatcher from BDS
+> after `BdsDxe` installed `gEfiBdsArchProtocolGuid`, and still cannot dispatch
+> `XhciPciEmulationDxe` (12 of its 13 `mArchProtocols` missing) or `XhciDxe` (no depex ⇒
+> `CoreAllEfiServicesAvailable ()`, all 13). The boot option and P2's assert are one blocker,
+> not three. Second and independent: the platform's other hook into the same controller, the
+> `gUsbControllerInitGuid` event group, is **dormant on this port**. The only carrier of that
+> GUID in either `Binaries/` tree is `UsbConfigDxe`, whose source is not in the tree, so what it
+> does with the signal is unreadable here; the signal comes only from
+> `DeviceBootManagerOnDemandConInConnect`, which fires on `gConnectConInEventGuid`
+> (`DB4E8151-57ED-4BED-8833-6751B5D1A8D7`), which `ConSplitter.c` raises only on a real
+> `ReadKeyStroke`/`WaitForKey`/`ReadKeyStrokeEx`. `BdsReadKeys ()` opens with `if
+> (PcdGetBool (PcdConInConnectOnDemand)) { return; }` and `PcdConInConnectOnDemand|TRUE` is set
+> at `SiliciumPkg.dsc.inc:102`, so the one place in `BdsDxe` that reads the console returns
+> immediately under the very Pcd that arms the chain — and the platform's own key handling
+> bypasses ConSplitter entirely, binding STI by `LocateDevicePath` on `KeypadDevicePath`
+> (`BootDevices.h:31-51`). Connecting a console is a `ConnectController`, not a read, so
+> `EfiBootManagerConnectAllDefaultConsoles` signalling nothing is not a bug. Control: over the
+> six reference platforms with an XHCI stack, `UsbConfigDxe` appears in **6 of 6** and
+> `UsbInitDxe` in 4 of 6 (`i005d` and `cebu` omit it, both shipping Windows on these SoCs), and
+> `XhciPciEmulationDxe`/`XhciDxe` in all six. No firmware was built. See `docs/08` step 4.175.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

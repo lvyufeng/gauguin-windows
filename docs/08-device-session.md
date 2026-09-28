@@ -35536,3 +35536,281 @@ shows, and this step does not claim it does. `XhciPciEmulation` opens and closes
   porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.175 — the platform side of the first P3 clause has been complete the whole time and no step had read it: `MsBootOptionsLibRegisterDefaultBootOptions` adds an *active* `USB Storage` boot option on every boot, its target `MsBootPolicy` is an FFS file in the volume, and that target calls `EfiBootManagerConnectAll` — whose `do { … } while (gDS->Dispatch ())` retries the dispatcher and still cannot dispatch either XHCI driver; and the platform's *other* hook into the same controller, the `gUsbControllerInitGuid` group, hangs off a console read this port's own boot never performs
+
+### The clause has three parts, and two of them had never been read
+
+The gate's first clause is *a Windows 11 ARM64 installer boots off a USB stick*. Everything the
+port has measured about it so far — Steps 4.103 through 4.174 — has been about **the controller**:
+whether the three USB host drivers are packaged, whether their depexes can be satisfied, whether
+their producers are promoted. That is one of its three parts. The other two are the **boot option**
+that would reach a stick, and the **application** that option runs, and neither had been read at
+all: `grep -c` over all nine documents returns **0** for `USB Storage`, for
+`RegisterDefaultBootOptions`, for `MsBootPolicy`, for `RefreshAllBootOption`, and for every one of
+the four identifiers in the ConIn chain below.
+
+That is the shape of a blind spot rather than a gap. A port can spend fifteen steps proving a
+controller is not deadlocked and never once ask what would ask the controller to do anything.
+
+### The option is registered before anything is enumerated, and it is active
+
+The platform's `PlatformBootManagerLib` is `SiliciumPkg/Library/BootManagerLib/BootManagerLib.inf`
+(`SiliciumPkg.dsc.inc:239`, resolved through `gauguin.dsc:71` → `BitraPkg.dsc.inc:20` →
+`QcomPkg.dsc.inc`), and its `PlatformBootManagerBeforeConsole` calls
+`MsBootOptionsLibRegisterDefaultBootOptions ()` at `BootManager.c:48` — which is EDK2's
+"register new `Boot####`" hook, and it runs before any device exists:
+
+```c
+[SiliciumPkg/Library/MsBootOptionsLib/MsBootOptionsLib.c:246]
+  RegisterFvBootOption (&gMsBootPolicyFileGuid, L"Internal Storage", (UINTN)-1, LOAD_OPTION_ACTIVE, (UINT8 *)"SSD", sizeof ("SSD"));
+  RegisterFvBootOption (&gMsBootPolicyFileGuid, L"USB Storage",      (UINTN)-1, LOAD_OPTION_ACTIVE, (UINT8 *)"USB", sizeof ("USB"));
+  RegisterFvBootOption (FixedPcdGetPtr (PcdUfpLoaderFile), L"FFU Mode", (UINTN)-1, LOAD_OPTION_HIDDEN, NULL, 0);
+```
+
+Three options, and **none of them is a device path**: each is an FV-file option built by
+`CreateFvBootOption` (`:171`) around `gMsBootPolicyFileGuid` with an optional data string, and
+`RegisterFvBootOption` adds it to `BootOrder` through `EfiBootManagerAddLoadOptionVariable
+(&NewOption, (UINTN)-1)` — `-1` being *append*, so the option is in the boot order, active, from
+the first boot, before the firmware can know whether a stick is present. That is deliberate: the
+device path is the one thing a removable-media boot option cannot name in advance, so the option
+names an application and the application finds the media.
+
+### The target is in the volume — and the instrument that says it is not
+
+`gMsBootPolicyFileGuid` is `50670071-478F-4BE7-AD13-8754F379C62F`
+(`Common/Mu/PcBdsPkg/PcBdsPkg.dec:78`), and its file is `PcBdsPkg/MsBootPolicy/MsBootPolicy.inf`,
+`FILE_GUID = 50670071-478f-4be7-ad13-8754f379c62f`, `MODULE_TYPE = UEFI_APPLICATION`. It is
+declared as a component at `SiliciumPkg.dsc.inc:474` but appears in **no** platform's `DXE.inc`
+(0 of the whole tree), so whether it is in the volume is a question only the volume can answer.
+
+The first attempt answered it wrongly. Scanning the built boot image for the 16 bytes returns **0**:
+
+```
+Mu-gauguin-xhci-host-gzip.img          1171456 B   boot-policy GUID occurrences: 0
+Mu-gauguin-apriori-extras-gzip.img     1144832 B   boot-policy GUID occurrences: 0
+```
+
+and the conclusion *"the USB Storage option is dangling"* follows from it directly. It is false.
+Every boot image this project builds carries `FVMAIN_COMPACT`, which is **compressed**, so a raw
+scan of the `.img` sees none of the volume's file GUIDs — the same shape mismatch that 4.174
+repaired in `guid-refs.py`'s loader, here surviving in an ad-hoc scan. Through
+`tools/fv-inventory.py`'s decompressed roster the answer is different and unambiguous:
+
+```
+volume: 126 files, 7536640 bytes
+  6D33944A-EC75-4855-A54D-809C75241F6C  BdsDxe (control)   type=0x0007 size=385166
+  50670071-478F-4BE7-AD13-8754F379C62F  MsBootPolicy       type=0x0009 size=357436
+```
+
+`MsBootPolicy` is in the volume, an FFS file of type `0x09`, 357,436 B, and it is there in the
+`p2-variants` payload too. The option resolves. The rule this forces, and it is the same rule twice
+now: **a byte scan for a file GUID is only valid against the decompressed volume; run it against a
+`.img` and the answer is always zero, which reads as *absent* rather than as *not asked*.**
+
+### What the target does when the option is booted
+
+`MsBootPolicyEntry` reads its optional data — `ImageInfo->LoadOptions`, the `"USB"` string — and
+switches on its first character (`MsBootPolicy.c:615-627`):
+
+```c
+    case 'U':       // "USB"
+      BootSequence = mUsbBootSequence;
+      break;
+```
+
+`mUsbBootSequence` is two entries, `MsBootUSB` then `MsBootDone` (`:19-22`) — so the option is
+*only* USB, not USB-after-internal-storage. Then, before any selection, the one line that decides
+the whole clause:
+
+```c
+[MsBootPolicy.c:636]
+  EfiBootManagerConnectAll ();     // Connect All is required for this type of boot
+```
+
+and for `MsBootUSB` (`:678-694`) a `SetGraphicsConsoleMode (GCM_NATIVE_RES)`, then
+`SelectAndBootDevice (&gEfiSimpleFileSystemProtocolGuid, FilterOnlyUSB)`; if that returns
+`EFI_NOT_FOUND`, a `PauseToLetUsbDrivesEnumerateThroughHubs ()` — a 6-second timer
+(`USB_DRIVE_SECOND_CHANCE_DELAY_S`, `:10`, `:563`) — and a second `FilterOnlyUSB` attempt. The
+filter is `MsBootPolicyLibIsDevicePathUsb`, which wants a `MSG_USB_DP`, `MSG_USB_CLASS_DP` or
+`MSG_USB_WWID_DP` node somewhere in the device path of a `SimpleFileSystem` handle.
+
+So the application is not a stub and does not need anything new written for it. It enumerates
+`SimpleFileSystem`, filters to USB, waits six seconds for a slow hub and tries again.
+
+### Which leaves the controller — and `EfiBootManagerConnectAll` is a dispatch retry that fails
+
+`EfiBootManagerConnectAll` is not merely a `ConnectController` sweep. `BmConnect.c:23-55`:
+
+```c
+    for (Index = 0; Index < HandleCount; Index++) {
+      gBS->ConnectController (HandleBuffer[Index], NULL, NULL, TRUE);
+    }
+    ...
+    Status = gDS->Dispatch ();
+  } while (!EFI_ERROR (Status));
+```
+
+It **calls the DXE dispatcher in a loop** until a pass dispatches nothing. That matters, because it
+means the boot-option route is not merely a *connect* of drivers that were already dispatched — it
+re-runs the dispatcher from BDS, after `BdsDxe` has installed `gEfiBdsArchProtocolGuid`. And it
+still cannot dispatch either XHCI driver:
+
+- `XhciPciEmulationDxe`'s 234-byte expression names **twelve of the thirteen `mArchProtocols`** plus
+  `gEfiDriverBindingProtocolGuid` (Step 4.103's reading, `:26487`), omitting only
+  `gEfiCapsuleArchProtocolGuid`. Eight of its terms are among the nine protocols the panel reports
+  absent, so the dispatcher's answer stays *no*.
+- `XhciDxe` carries no dependency expression at all, which `CoreIsSchedulable` answers through
+  `CoreAllEfiServicesAvailable ()` (`Dependency.c:225`) — **all thirteen**.
+
+So the dispatcher retry is not a second chance for these two; it is the same question asked again
+with the same answer. And that is the whole of the clause's obstruction: the option exists, the
+application exists and is in the volume, the mass-storage stack below it is complete
+(`UsbBusDxe`, `UsbMassStorageDxe`, `UsbKbDxe` at `DXE.inc:103-105`, plus `DiskIoDxe` 25 /
+`PartitionDxe` 26 / `Fat` 31 in the a-priori array), and the one thing missing is the controller —
+which Steps 4.112 and 4.113 had already established is blocked by the same nine missing
+architectural protocols as the P2 assert. **The two clauses of the P3 gate and P2's assert are one
+blocker, not three**, and this step adds only that the platform side above the controller is
+already built.
+
+### The other hook into the same controller, and the console read that never happens
+
+The platform has a second, independent route to USB, and it is the one the four `grep` hits at the
+top of this step were about. It runs through BDS's *lazy console* mode, and every link of it is in
+source:
+
+```
+SiliciumPkg.dsc.inc:102        PcdConInConnectOnDemand|TRUE
+BdsEntry.c:948-957             ConIn is NOT connected at BDS entry when that Pcd is TRUE;
+                               only ConOut and ErrOut are
+ConSplitter.c:3428/3462/3629   the first ReadKeyStroke / WaitForKey / ReadKeyStrokeEx on the
+                               splitter signals gConnectConInEventGuid, once
+BdsEntry.c:64-88               BdsDxeOnConnectConInCallBack -> PlatformBootManagerOnDemandConInConnect ()
+PlatformBootManager.c:47-64    DeviceBootManagerOnDemandConInConnect () -- Qualcomm's, from
+                               QcomPkg.dsc.inc:36 -- create-and-signal an event in
+                               gUsbControllerInitGuid
+```
+
+The link that decides whether that signal goes anywhere is in the DXE core, and it is the one worth
+quoting because the obvious reading of the code above is the wrong one:
+
+```c
+[Core/Dxe/Event/Event.c:554-568]
+      if ((Event->ExFlag & EVT_EXFLAG_EVENT_GROUP) != 0) {
+        //
+        // The CreateEventEx() style requires all members of the Event Group
+        //  to be signaled.
+        //
+        CoreReleaseEventLock ();
+        CoreNotifySignalList (&Event->EventGroup);
+```
+
+`gBS->SignalEvent` on an event made by `CreateEventEx` with a group GUID signals **the whole group**,
+not just that event. So `DummyNotify` — which returns immediately, and which the function's shape
+invites you to read as the point — is a red herring; the group is the channel, and
+`DeviceBootManagerOnDemandConInConnect` is a real group signal.
+
+And then the question becomes who is in that group. Over both `Binaries/` trees — 47 `bitra` `.efi`,
+and `gauguin`'s extraction — exactly one driver carries the 16 bytes:
+
+```
+--- Binaries/bitra/QcomPkg/Drivers
+   UsbConfigDxe.dualrole.efi                UsbControllerInit
+   UsbConfigDxe.efi                         UsbControllerInit
+   UsbConfigDxe.hostmode.efi                UsbControllerInit
+--- Binaries/gauguin/QcomPkg/Drivers
+   UsbConfigDxe.efi                         UsbControllerInit
+```
+
+`UsbConfigDxe`, in all four of the builds of it that exist in this tree, and nothing else. Its
+source is not in the tree, so what it does with the signal is not readable — but 4.174 established
+that it installs `E722B03F`, and `UsbInitDxe`'s depex is `PUSH E722B03F END` and nothing else. The
+shape is a deferred start: the platform signals the group, `UsbConfigDxe` runs and publishes, and
+`UsbInitDxe` becomes schedulable. That much is inference from two measurements and is marked as
+inference; the call sites are not.
+
+The part that is measured, and that closes nothing but explains the silence, is **when that signal
+fires on this platform — never, during an ordinary boot.** The signal comes only from a real key
+*read* through the ConSplitter, and this port has no such read:
+
+- `BdsReadKeys ()`, whose body is `gST->ConIn->ReadKeyStroke (gST->ConIn, &Key)`
+  (`BdsEntry.c:299`), opens with `if (PcdGetBool (PcdConInConnectOnDemand)) { return; }` — so the
+  one place in `BdsDxe` that reads the console **returns immediately under the very Pcd that arms
+  the chain**. Its call site in `BdsWait`'s loop (`:332`) and after it (`:1091`) therefore reads
+  nothing.
+- `EfiBootManagerConnectAllDefaultConsoles` (`BmConsole.c:712`) *does* connect `ConIn` without a
+  lazy guard, and `EfiBootManagerConnectAll` calls it twice (`BmConnect.c:74`, `:85`) — but
+  connecting a console is `ConnectController`, not a read, so it signals nothing.
+- The platform's own key handling does not go through the splitter at all:
+  `RegisterKeyCallback` → `SetupKeypad` binds `gEfiSimpleTextInputExProtocolGuid` by
+  `LocateDevicePath` against `KeypadDevicePath`, which is a `HW_VENDOR_DP` node carrying
+  `EFI_KEYPAD_DEVICE_GUID` (`BootDevices.h:31-51`) — the **keypad's own** STI, not
+  `gST->ConIn`. Holding Volume Up is read straight off the keypad and never touches
+  ConSplitter, so it cannot pull the group either.
+
+The remaining trigger is the one `BdsEntry` writes down explicitly — the `BootFwUi` branch
+(`:1055-1063`), *"Follow generic rule, Call BdsDxeOnConnectConInCallBack to connect ConIn before
+enter UI"*, taken when the OS has set `EFI_OS_INDICATIONS_BOOT_TO_FW_UI` — plus any console
+application that polls the keyboard. Neither is a first boot.
+
+**So the deferred route is dormant on this port, and that is a second and independent reason the
+controller is not up**, distinct from the architectural protocols: even a payload with all thirteen
+installed would still need something to read the console before this hook fires, and under
+`PcdConInConnectOnDemand = TRUE` the firmware's own boot is written not to.
+
+### The control: how the reference platforms treat the same three blobs
+
+`UsbConfigDxe` is listed by **6 of 6** platform packages whose `DXE.inc` carries an XHCI host stack
+— `spacewar`, `pong`, `aston`, `i005d`, `cebu`, `9707f`. `UsbInitDxe` is listed by **4 of 6**:
+`i005d` and `cebu` have no line for it, and both ship Windows on these SoCs. So the
+`E722B03F`-gated driver is optional in Qualcomm's own reference wiring, and its absence is not what
+would hold the host stack back. `XhciPciEmulationDxe` and `XhciDxe` are listed by all six, which is
+consistent with `gauguin.dsc`'s `USE_XHCI_HOST_DRIVER` guarding exactly the trio and with
+`XHCI_HOST_DRIVERS` in the generator inserting them after `UsbfnDwc3Dxe` and `UsbConfigDxe`.
+
+This does not change the reading above — a driver being optional in the reference is not a driver
+being unnecessary here — but it does settle which of the three a later step should spend its time
+on: the two that every reference platform ships.
+
+### Rows:
+
+- **instruments**: no tool was changed. The byte scan that first answered *"not in the volume"* is
+  the instrument this step's correction is about, and the repair is a rule rather than an edit —
+  a file-GUID lookup must go through `tools/fv-inventory.py`'s decompressed roster, because
+  `FVMAIN_COMPACT` is compressed and a raw scan of a `.img` returns 0 for everything.
+- **shows**: that the platform registers an active `USB Storage` boot option on every boot,
+  pointing at `MsBootPolicy` = `50670071-478F-4BE7-AD13-8754F379C62F` with optional data `"USB"`
+  (`MsBootOptionsLib.c:246-248`); that the file is in both built volumes (FFS type `0x09`,
+  357,436 B); that `MsBootPolicyEntry` switches on `'U'` to a USB-only sequence and calls
+  `EfiBootManagerConnectAll ()` before selecting (`:636`), with a 6-second second chance for slow
+  hubs; that `EfiBootManagerConnectAll` is a `do { … } while (gDS->Dispatch ())` retry
+  (`BmConnect.c:23-55`) and so *re-runs the dispatcher from BDS* — and still cannot dispatch
+  `XhciPciEmulationDxe` (12 of 13 architectural protocols, 8 of them absent) or `XhciDxe` (no
+  depex ⇒ all 13); that `UsbConfigDxe` is the only carrier of `gUsbControllerInitGuid` in either
+  `Binaries/` tree (4 builds of it); and that the group signal it waits on originates from a
+  console key read this port never performs.
+- **adds**: one measurement and one rule. No firmware, no volume, no include and no tool was
+  changed, and nothing was built.
+- **corrects**: *"the USB Storage option is dangling"* — my own first answer this step, from a
+  raw scan of a boot image, and wrong for the reason 4.174 already recorded once for
+  `guid-refs.py`. Corrects the shape of the clause too: it had been read as a *controller*
+  problem for fifteen steps, and two of its three parts — the option and the application — were
+  never opened. And it corrects, in the opposite direction, the natural reading of
+  `DeviceBootManagerOnDemandConInConnect`: the `DummyNotify` callback makes the function look
+  inert, and `Event.c:554-568` says the group is signalled regardless.
+- **does not close**: the clause, and it moves the obstruction rather than removing it. Three
+  things are now known not to be the problem — the option, the application, and the mass-storage
+  stack — and two independent reasons the controller is down are on the record: the architectural
+  protocols, which 4.112 and 4.113 already had, and the disarmament of the lazy-ConIn hook, which
+  is new. What is *not* claimed: what `UsbConfigDxe` does with the group signal, which no source in
+  this tree can be read for; whether a Windows installer's own loader would read the console and so
+  arm the hook (it would, and that is exactly why the hook is dormant on *our* firmware rather than
+  unreachable in principle); and whether `XhciDxe` retrying its `LocateProtocol` on `E722B03F`
+  changes any of this — 4.174 left that open and this step does not touch it. Which payload `boot`
+  currently holds is still the first question whenever a device is present.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and no firmware was built.
+  `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The
+  porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.

@@ -983,6 +983,38 @@ Work:
 > earlier readings of those same two GUIDs are confirmed by a different axis. One sharpening:
 > `XhciDxe`, the no-depex file in the UEFI 2.0 band, **locates** `E722B03F` at VA 0x01960 rather
 > than running blind. No firmware was built. See `docs/08` step 4.174.
+>
+> **Step 4.175 (2026-09-28) opened the half of the first P3 clause that no step had ever read,
+> and found the platform side of it already complete.** The clause is *"a Windows 11 ARM64
+> installer boots off a USB stick and sees the internal UFS"*, and fifteen steps had measured
+> only the controller; `grep -c` over all nine docs returns **0** for `USB Storage`,
+> `RegisterDefaultBootOptions`, `MsBootPolicy`, `ConnectConInEvent`, `UsbControllerInitGuid` and
+> the rest of the boot-option vocabulary. Two of the clause's three parts are on the platform
+> side and both are done: `MsBootOptionsLibRegisterDefaultBootOptions`
+> (`MsBootOptionsLib.c:240`) registers `L"USB Storage"` against `gMsBootPolicyFileGuid` with
+> `Position = (UINTN)-1` (**append**) and `LOAD_OPTION_ACTIVE`, so the option is in `BootOrder`
+> and active from the first boot — it cannot be a device path, because the path of a stick that
+> is not plugged in yet cannot be named in advance — and the application it names is **in the
+> volume**: `MsBootPolicy`, FFS type `0x09`, 357,436 B, present in both built images in 126 and
+> 123 files. The instrument says otherwise and is wrong: a raw scan for the 16 bytes returns **0
+> in both artifacts**, because `FVMAIN_COMPACT` is compressed; the positive control `BdsDxe`
+> (`6D33944A-EC75-4855-A54D-809C75241F6C`) reads 0 by the same scan and is present in the same
+> roster. **The rule this leaves is that a file-GUID lookup must go through
+> `tools/fv-inventory.py`'s decompressed roster**, the second time in two steps that a shape
+> mismatch produced an "absent" for something present. Nor is the target a stub:
+> `MsBootPolicyEntry` switches `'U'` to a USB-only sequence, calls `EfiBootManagerConnectAll ()`
+> at `:636` — *"Connect All is required for this type of boot"* — and selects `FilterOnlyUSB`
+> with a 6-second `PauseToLetUsbDrivesEnumerateThroughHubs`. That call is a **dispatch retry**
+> (`BmConnect.c:23-55`, `do { … } while (!EFI_ERROR (gDS->Dispatch ()))`) and still cannot
+> dispatch `XhciPciEmulationDxe` (12 of its 13 terms absent) or `XhciDxe` (no depex ⇒ all 13),
+> so the boot-option route and P2's assert are **one blocker, not three**. A second, independent
+> reason the controller is down is new: the `gUsbControllerInitGuid` group hook is dormant here,
+> because `PcdConInConnectOnDemand|TRUE` (`SiliciumPkg.dsc.inc:102`) makes `BdsReadKeys` return
+> immediately, connecting a console is a `ConnectController` and not a read, and the platform's
+> own key handling bypasses ConSplitter entirely via the keypad's STI. Control: `UsbConfigDxe`
+> is in **6 of 6** reference XCHI stacks and `UsbInitDxe` in 4 of 6, which says which of the trio
+> a later step should spend time on. No tool was changed and no firmware was built. See `docs/08`
+> step 4.175.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three
