@@ -3403,6 +3403,55 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > six reference platforms with an XHCI stack, `UsbConfigDxe` appears in **6 of 6** and
 > `UsbInitDxe` in 4 of 6 (`i005d` and `cebu` omit it, both shipping Windows on these SoCs), and
 > `XhciPciEmulationDxe`/`XhciDxe` in all six. No firmware was built. See `docs/08` step 4.175.
+>
+> **Dependency ordering cannot be the XCHI obstruction, and the repair that would have been built
+> for it is unnecessary — measured 2026-09-28 by step 4.176.** `XhciPciEmulationDxe` and `XhciDxe`
+> go into `DXE.inc` and into neither a-priori array, by design; `XhciDxe` has no `DXE_DEPEX`
+> anywhere and is released by `CoreAllEfiServicesAvailable ()` (`Dependency.c:221-225`); and 4.174
+> measured that its first act is to locate `E722B03F` at VA `0x01960`. That is a real hazard shape
+> — a driver released before the protocol it looks for is published — and the repair looks
+> natural: `UsbConfigDxe`, the only producer of `E722B03F` (4.175's carrier scan), is at **index
+> 57** of our a-priori array, so move it earlier, or promote the two XCHI files. **The hazard
+> cannot occur.** `MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:1062-1216` is the dispatch loop,
+> and it drains before it evaluates:
+>
+> ```
+> do {                                            // :1062
+>   while (!IsListEmpty (&mScheduledQueue)) { … }  // :1066 — runs every promoted driver
+>   ReadyToRun = FALSE;                            // :1192 — reached only when that queue is empty
+>   for (…) if (CoreIsSchedulable (…)) …           // :1193 / :1204 — the ONLY depex evaluation
+> } while (ReadyToRun);                            // :1216
+> ```
+>
+> and `CoreFwVolEventProtocolNotify` (`:1860`) fills the queue in a single pass over the whole
+> Apriori file — `DriverEntry->Dependent = FALSE; … InsertTailList (&mScheduledQueue, …)` at
+> `:2114-2116`. So **every promoted driver's entry point has returned before any non-promoted
+> driver is considered for the first time**: `UsbConfigDxe` at 57 has installed `E722B03F` at its
+> three sites before `XhciDxe`'s locate is reached. All thirteen depex terms hold the same way,
+> since every producer is promoted below 57 — `ArmCpuDxe` 6, `MetronomeDxe` 8, `ArmTimerDxe` 9,
+> `RuntimeDxe` 5, `VariableRuntimeDxe` 31, `ResetSystemRuntimeDxe` 34, `WatchdogTimer` 36,
+> `SecurityStubDxe` 37, `EmbeddedMonotonicCounter` 38, `RealTimeClock` 39, `BdsDxe` 44, and
+> `gEfiDriverBindingProtocolGuid`, which DxeCore only consumes (`DxeMain.inf:149`) and which the
+> first promoted driver-model driver publishes inside that same drain. The reorder experiment is
+> therefore off the list, and 4.173's warning stands unweakened: promotion would set
+> `Dependent = FALSE` and run `XhciPciEmulationDxe` with its thirteen-term expression unread, to
+> buy an ordering that is already free. **The instrument caveat is the part a device session
+> needs:** `P2 SEQ` has one character per *promoted* entry (`:2270-2280`), so it cannot name either
+> XCHI driver and `tools/apriori-index.py` reports them absent by construction — right about the
+> string, wrong about the run. The rows that do carry them are `P2Tick`'s `K` lines (`:659-682`),
+> which fire for every dispatch attempt including non-promoted ones, because
+> `CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` (`:1242`) puts those into the same
+> queue the scan is about to drain; expect them after the promoted batch at `70/70`. *Released* is
+> not *succeeded*, and nothing here says what either driver does when it runs. Beside it, the
+> reciprocal of 4.172 over the handset's own array: of the 11 held-out drivers with a stock
+> `DXE_DEPEX`, eight are promoted by the device — `QcomWDogDxe` 35, `DisplayDxe` 41, `ADSPDxe` 43,
+> `PILProxyDxe` 44, `PILDxe` 45, `CPRDxe` 46, `VerifiedBootDxe` 50, `QcomBds` 58 — and stock
+> indices 41–46 are one contiguous display/PIL run our volume carries none of, five held out by
+> `DXE.inc` and the sixth (`FvDxe`) named by no table in this repository. `MinidumpTADxe`,
+> `QcomMpmTimerDxe` and `VibratorDxe` appear in no stock array at all. The handset promotes no XCHI
+> driver, so its order cannot validate that half of P3; and both orders put BDS before
+> `UsbConfigDxe` (58 < 65, 44 < 57). Instrument: `tools/apriori-stock-diff.py --index`. See
+> `docs/08` step 4.176.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

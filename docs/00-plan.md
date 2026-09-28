@@ -1015,6 +1015,41 @@ Work:
 > is in **6 of 6** reference XCHI stacks and `UsbInitDxe` in 4 of 6, which says which of the trio
 > a later step should spend time on. No tool was changed and no firmware was built. See `docs/08`
 > step 4.175.
+>
+> **Step 4.176 (2026-09-28) proved dependency ordering cannot be the XCHI obstruction, and removed
+> the repair that was going to be built for it.** 4.174 left one thing open — whether `XhciDxe`,
+> released by the UEFI 2.0 rule with no depex at all, retries its `LocateProtocol` on `E722B03F` if
+> it runs before `UsbConfigDxe` installs it. The natural repair is a reorder: `UsbConfigDxe` is at
+> **index 57** of our a-priori array and both XCHI files are in neither array, and
+> `tools/build-apriori-variant.sh` plus `make_uefi_platform.py --apriori-move` already exist to do
+> it. **`Dispatcher.c:1062-1216` says the worry cannot happen.** The dispatch loop is
+> `do { while (!IsListEmpty (&mScheduledQueue)) { …CoreStartImage… }  // :1066
+> for (…) if (CoreIsSchedulable (…)) … } while (ReadyToRun)  // :1193, :1216` — every depex is
+> evaluated at `:1204`, after the queue at `:1066` has been drained to empty — and
+> `CoreFwVolEventProtocolNotify` (`:1860`) fills that queue with the **whole** promoted batch in one
+> pass (`:2107-2126`, `Dependent = FALSE` at `:2114`). So every promoted driver's entry point has
+> returned before any non-promoted driver is first considered: `UsbConfigDxe` (57) has already
+> installed `E722B03F` at its three sites when `XhciDxe`'s locate at VA `0x01960` runs. All thirteen
+> terms hold the same way — `ArmCpuDxe` 6, `MetronomeDxe` 8, `ArmTimerDxe` 9, `RuntimeDxe` 5,
+> `VariableRuntimeDxe` 31, `ResetSystemRuntimeDxe` 34, `WatchdogTimer` 36, `SecurityStubDxe` 37,
+> `EmbeddedMonotonicCounter` 38, `RealTimeClock` 39, `BdsDxe` 44, and the thirteenth,
+> `gEfiDriverBindingProtocolGuid`, published by whichever promoted `DRIVER` installs its own binding
+> first inside the same drain (DxeCore only consumes it — `DxeMain.inf:149`). **Corollary that
+> matters more than the ordering: `P2 SEQ` cannot see either XCHI driver.** Its letter string is
+> `mP2Apriori` characters long, one per *promoted* entry (`:2270-2280`), so
+> `tools/apriori-index.py` will report them absent — right about the string, wrong about the run.
+> The rows that carry them are `P2Tick`'s `K` lines (`:659-682`), which fire for every dispatch
+> attempt including the non-promoted ones, since those enter the same queue via
+> `CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` (`:1242`). *Released* and *succeeded*
+> remain different questions. Beside it, the reciprocal of 4.172: of the 11 drivers 4.170 held out
+> that have a stock `DXE_DEPEX`, **eight are promoted by the handset's own array** — `QcomWDogDxe`
+> 35, `DisplayDxe` 41, `ADSPDxe` 43, `PILProxyDxe` 44, `PILDxe` 45, `CPRDxe` 46, `VerifiedBootDxe`
+> 50, `QcomBds` 58 — and six of them are one contiguous run (41–46) our volume carries none of, five
+> held out by `DXE.inc` and the sixth, `FvDxe`, named by nothing in this repository. `MinidumpTADxe`,
+> `QcomMpmTimerDxe` and `VibratorDxe` are in no stock array at all. The handset promotes **no XCHI
+> driver**, so the stock order cannot validate that half of P3 — and both orders put BDS before
+> `UsbConfigDxe` (58 < 65 stock, 44 < 57 ours), so the USB region was not rearranged. Instrument:
+> `tools/apriori-stock-diff.py --index`. No firmware was built. See `docs/08` step 4.176.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

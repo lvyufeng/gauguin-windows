@@ -35814,3 +35814,232 @@ on: the two that every reference platform ships.
   porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.176 — the dispatcher drains the whole a-priori queue before it evaluates a single depex, so both XCHI drivers are released into a protocol database that already holds all thirteen of their architectural terms and `E722B03F` as well: the ordering 4.174 left open to a retry cannot be the obstruction, the reorder-`APRIORI.inc` repair is removed from the candidate list before anyone builds it, and `P2 SEQ` — the instrument a device session would read to check this — cannot name either driver, because its letter string is `mP2Apriori` characters long and both are deliberately *not* promoted
+
+### The question this closes, and the repair it invites
+
+4.174 ended with one thing left open, in its own words: *"whether `XhciDxe` retrying its
+`LocateProtocol` on `E722B03F` changes any of this — 4.174 left that open and this step does not
+touch it."* `XhciDxe` is the file with no `DXE_DEPEX` anywhere, released by
+`CoreAllEfiServicesAvailable ()` (`Dependency.c:221-225`), and 4.174 measured that its first act is
+to *locate* `E722B03F-B250-42CE-8EBD-5BD51812D037` at VA `0x01960` rather than run blind. The
+obvious worry follows: if `XhciDxe` is released before `UsbConfigDxe` has installed that protocol,
+the locate fails, and if `XhciDxe` does not retry, the host controller is never bound.
+
+That worry has a repair that looks natural and that this repository is already equipped to perform.
+`UsbConfigDxe` — the only producer of `E722B03F` in either `Binaries/` tree, per 4.175's carrier
+scan — sits at **index 57** of our a-priori array, and `XhciPciEmulationDxe` and `XhciDxe` sit in
+**neither** array. So the repair would be: move `UsbConfigDxe` earlier, or promote the two XCHI
+files into the a-priori batch. `tools/build-apriori-variant.sh` and
+`tools/make_uefi_platform.py --apriori-move` exist for exactly that, and the built
+`work/out/p2-variants/Mu-gauguin-apriori-extras-gzip.img` is such a variant already.
+
+**The repair is unnecessary, and the worry cannot happen.** Both fall out of one structural fact
+about `CoreDispatcher`, which no step had read.
+
+### The order inside `CoreDispatcher`: drain to empty, then evaluate
+
+`Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:1062-1216` is the whole dispatch loop,
+and its shape is unambiguous:
+
+```
+  do {                                              // :1062
+    while (!IsListEmpty (&mScheduledQueue)) {        // :1066
+      … CoreLoadImage / CoreStartImage …             // :1153
+      ReturnStatus = EFI_SUCCESS;
+    }                                                // :1189 — the queue is now EMPTY
+    ReadyToRun = FALSE;                              // :1192
+    for (Link = mDiscoveredList.ForwardLink; …) {    // :1193
+      if (DriverEntry->Dependent) {
+        if (CoreIsSchedulable (DriverEntry)) {       // :1204 — the first depex evaluation
+          CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter (DriverEntry);   // :1205
+          ReadyToRun = TRUE;
+        }
+      }
+    }
+  } while (ReadyToRun);                              // :1216
+```
+
+Everything a depex can gate on is decided in the `for` at `:1193`, and that loop is reached only
+after the `while` at `:1066` has emptied the queue. A driver's dependency expression is therefore
+never evaluated while a promoted driver is still waiting to start.
+
+The queue is not filled gradually, either. `CoreFwVolEventProtocolNotify` (`:1860`) walks the
+volume's `DRIVER` files and then, in one pass, reads the Apriori section and appends *every* match
+to `mScheduledQueue` — `DriverEntry->Dependent = FALSE; DriverEntry->Scheduled = TRUE;
+InsertTailList (&mScheduledQueue, …)` at `:2114-2116`, inside the
+`for (Index = 0; Index < AprioriEntryCount; Index++)` at `:2107`. So by the time
+`CoreDispatcher` runs its first `do`, the queue already holds the entire promoted batch in array
+order, and the first `while` drains all of it.
+
+The consequence is a single sentence: **every promoted driver's entry point has returned before
+any non-promoted driver is considered for the first time.** That is not a heuristic about
+timing; it is the loop's structure.
+
+### `UsbConfigDxe` is promoted, so it has already run
+
+`tools/apriori-stock-diff.py --index` (a flag this step added — see *Rows*) prints our array with
+its indices. `UsbConfigDxe` is at **57**, and it is a promoted driver, so it is in the queue that
+the `while` at `:1066` drains. `XhciPciEmulationDxe` and `XhciDxe` are in neither array, so they
+are `Dependent` and are looked at for the first time in the `for` at `:1193` — after that drain.
+
+By 4.174's own measurement, `UsbConfigDxe` installs `E722B03F` at three sites (VA `0x03aa4`,
+`0x0517c`, `0x052c8`). So when `XhciDxe`'s `LocateProtocol` at VA `0x01960` runs, the protocol is
+already in the database. **`XhciDxe` never needs to retry**, and whether it would retry on failure
+stops mattering. 4.174's open question is closed without a device, a build or a disassembly of the
+retry path.
+
+The same argument covers the other twelve terms. Each names an architectural protocol, and each
+producer is a promoted entry at a lower index than 57:
+
+| term | producer | ours |
+|---|---|---|
+| `EFI_CPU_ARCH` | `ArmCpuDxe` | 6 |
+| `EFI_METRONOME_ARCH` | `MetronomeDxe` | 8 |
+| `EFI_TIMER_ARCH` | `ArmTimerDxe` | 9 |
+| `EFI_RUNTIME_ARCH` | `RuntimeDxe` | 5 |
+| `EFI_VARIABLE_ARCH`, `EFI_VARIABLE_WRITE_ARCH` | `VariableRuntimeDxe` | 31 |
+| `EFI_RESET_ARCH` | `ResetSystemRuntimeDxe` | 34 |
+| `EFI_WATCHDOG_TIMER_ARCH` | `WatchdogTimer` | 36 |
+| `EFI_SECURITY_ARCH` | `SecurityStubDxe` | 37 |
+| `EFI_MONOTONIC_COUNTER_ARCH` | `EmbeddedMonotonicCounter` | 38 |
+| `EFI_REAL_TIME_CLOCK_ARCH` | `RealTimeClock` | 39 |
+| `EFI_BDS_ARCH` | `BdsDxe` | 44 |
+
+The thirteenth term is `gEfiDriverBindingProtocolGuid`, which is not an architectural protocol and
+has no single producer: it is published by each driver-model driver on its own handle, and DxeCore
+only *consumes* it (`DxeMain.inf:149`, `## SOMETIMES_CONSUMES`; the call sites are all in
+`Hand/DriverSupport.c`). It is satisfied within the same drain, by the first promoted `DRIVER` to
+install its own binding — and our volume promotes `SdccDxe` 27, `UFSDxe` 28, `PmicDxe` 35,
+`UsbConfigDxe` 57 and the rest of that set. So all thirteen terms hold at `:1204`.
+
+One consequence worth stating, because 4.173 raised it as a warning and this sharpens it rather
+than softening it: `BdsDxe` being at index 44 is what makes `EFI_BDS_ARCH` true during the drain,
+and 4.173's reading — that `BdsDxe` installs `gEfiBdsArchProtocolGuid` when it is dispatched, and
+that `BdsEntry` runs only after the DXE phase — is consistent with the promotion. Promoting
+`XhciPciEmulationDxe` would not move it earlier in any useful sense; it would only set
+`Dependent = FALSE` and run it with the thirteen-term expression unread.
+
+### What this removes, and what it does not say
+
+**Removed:** the reorder-the-a-priori-array repair, for the XCHI stack. It was a plausible next
+experiment — the tooling exists, a variant is already built, and the failure mode it addressed
+(locate-before-publish) is real in general — and it is now known to address nothing here. That is
+a build not spent and a flash not spent, which matters because device time is the scarce resource.
+
+**Also removed:** 4.174's residual doubt about the retry path. The `LocateProtocol` at VA `0x01960`
+succeeds on its first call or it is not reached.
+
+**Not said:** that the XCHI stack works. *Released* and *succeeded* are different questions, and
+this step answers only the first. `CoreStartImage`'s return value (`:1153-1167`) is a separate
+measurement: a driver can be released into a complete protocol database and still fail in its own
+entry point — on the MMIO window it maps, the PCI emulation it sets up, or anything else. Nothing
+here says what `XhciPciEmulationDxe` does when it runs, and nothing here explains `P2 DIAG`'s
+content on the last run.
+
+**Not said either:** that the ordering is irrelevant to P3. It is irrelevant *as a candidate
+repair*; it is highly relevant as a *precondition*, and the reason it holds is the reason the
+panel's own instrument is misleading — next.
+
+### The instrument that would have hidden it
+
+`P2 SEQ` is one character per **promoted** entry. `Dispatcher.c:2270-2280` says so in the
+instrument's own comment: *"It is `mP2Apriori` characters long, and `mP2Apriori` is incremented
+inside the match branch of the promotion loop"* — the match branch at `:2114-2126`. So the letter
+string is a record of the promoted batch and of nothing else.
+
+`XhciPciEmulationDxe` and `XhciDxe` are in neither a-priori array, by design. Neither has a slot
+in that string. `tools/apriori-index.py` — the tool written to decode a `P2 SEQ` off the panel —
+would report them as absent, and it would be right about the string and wrong about the run. A
+later step reading the panel must not conclude from a `SEQ` that the XCHI drivers did not run.
+
+The line that *does* carry them is `P2Tick` (`:659-682`), which fires once per dispatch attempt
+with the shape `K <n> <phase><why> <started>/<apriori> free=<n> <guid>`. It is called at `:1122`
+(on a load failure) and `:1167` (after every `CoreStartImage`, success or failure) — both inside
+the `while` at `:1066`, which drains non-promoted drivers too, because
+`CoreInsertOnScheduledQueueWhileProcessingBeforeAndAfter` (`:1242`) puts them into the same queue
+the scan is about to drain. So the run's `K` rows show `XhciPciEmulation` and `XhciDxe` *after*
+the promoted batch, at a `<started>/<apriori>` of `70/70`, and the phase letter on those two rows
+is the answer to the question this step leaves open. `P2 DIAG` (`:2436-2444`) is the failure list
+and is the other half — it is capped at `P2BRINGUP_DIAG_MAX` = 64 records, and it records load and
+start failures only.
+
+### Beside it: the eight held-out drivers the handset promoted, and the one run they form
+
+The reciprocal of 4.172's measurement, which the previous session proposed and never ran. 4.170
+left **11** drivers that this build has a stock `DXE_DEPEX` for and that `DXE.inc` holds out of the
+volume — `ADSPDxe`, `CPRDxe`, `DisplayDxe`, `MinidumpTADxe`, `PILDxe`, `PILProxyDxe`, `QcomBds`,
+`QcomMpmTimerDxe`, `QcomWDogDxe`, `VerifiedBootDxe`, `VibratorDxe`. Against the handset's own
+array, read from `/tmp/phone-payload.raw`:
+
+**Eight are promoted by the device's own firmware** — `DisplayDxe` 41, `ADSPDxe` 43,
+`PILProxyDxe` 44, `PILDxe` 45, `CPRDxe` 46, `QcomWDogDxe` 35, `VerifiedBootDxe` 50, `QcomBds` 58.
+**Three are not** — `MinidumpTADxe`, `QcomMpmTimerDxe`, `VibratorDxe`, none of which appears in
+the stock array at all.
+
+And six of the eight are not a scattering: **stock indices 41 through 46 are one contiguous run**
+— `DisplayDxe` 41, `FvDxe` 42, `ADSPDxe` 43, `PILProxyDxe` 44, `PILDxe` 45, `CPRDxe` 46, with
+`PmicDxe` 40 immediately before it — and our volume carries **none** of the six. That run is the
+display and PIL family, and it is missing for **two different reasons**, which is the distinction
+4.172 named: five are held out by `DXE.inc` (the display ones behind `USE_CUSTOM_DISPLAY_DRIVER`,
+the PIL ones named in its header comment), and `FvDxe` is not held out at all — it is one of the
+nine drivers 4.172 found that no table in this repository names.
+
+The other three promoted ones sit inside blocks where the two orders put different drivers, which
+is a statement about alignment and **not** a statement that one driver does another's job:
+
+| stock | name | ours, same region |
+|---|---|---|
+| 33–35 | `VariableDxe`, `FeatureEnablerDxe`, `QcomWDogDxe` | `VariableRuntimeDxe` 31 |
+| 48–50 | `ASN1X509Dxe`, `SecRSADxe`, `VerifiedBootDxe` | `SecurityStubDxe` 37 |
+| 57–58 | `FontDxe`, `QcomBds` | `BdsDxe` 44, `GpiDxe` 45 |
+
+The `QcomBds` row is the one that touches P3, and what it says is a boundary rather than a defect:
+the handset's own BDS is promoted at 58, ours at 44, and **both orders put BDS before
+`UsbConfigDxe`** (stock 58 < 65, ours 44 < 57). The reference order this port inherited was not
+rearranged in the USB region. What the stock array cannot do is validate the XCHI half of P3 at
+all: the handset promotes **no XCHI driver**, consistent with 4.173's finding that `xbl.img`
+contains no occurrence of the string `xhci`. Half of P3 is a stack the device never had.
+
+Also worth recording as a limit: 4.172's non-claim carries over unchanged. An entry in the stock
+array *"is not proof the driver is needed for anything this port does; it is proof the device's own
+firmware ran it."* Eight of the eleven were run by the handset. That is not eight reasons to
+package them.
+
+### Rows:
+
+- **instrument**: `tools/apriori-stock-diff.py` gained `--index`, which prints both arrays as
+  `index name` with a `*` on a name the other side promotes too. The tool's existing aligned block
+  answers "what changed" and is the wrong shape for "where is this one" — a position quoted off it
+  has to be counted by eye through a wrapped `~` row, which is how the `QcomBds` 58 / `BdsDxe` 44
+  pair was read the first time. Nothing else was changed and no firmware was built.
+- **shows**: that dependency ordering cannot be the XCHI obstruction. The dispatcher empties
+  `mScheduledQueue` before it evaluates one depex (`Dispatcher.c:1066` then `:1193`), the queue is
+  filled in one pass with the whole promoted batch (`:2107-2126`), and every producer of every term
+  of both XCHI depexes is a promoted entry below index 57 — including `UsbConfigDxe` at 57, the
+  sole producer of `E722B03F`.
+- **closes**: 4.174's open question about `XhciDxe`'s failed-lookup retry. It cannot be reached:
+  the protocol is installed before `XhciDxe` is ever evaluated for release.
+- **removes**: the reorder-`APRIORI.inc` experiment from the candidate list, before it was built or
+  flashed. `tools/build-apriori-variant.sh` and the already-built `apriori-extras` variant stay on
+  the shelf; neither addresses this.
+- **corrects**: the reading a device session would otherwise take from `P2 SEQ`. Its letter string
+  is one character per *promoted* entry (`Dispatcher.c:2270-2280`), so it cannot name either XCHI
+  driver and `tools/apriori-index.py` will report them absent — correctly about the string,
+  wrongly about the run. The rows that carry them are `P2Tick`'s `K` lines (`:659-682`), which fire
+  for every dispatch attempt including non-promoted ones.
+- **also measures**: the reciprocal of 4.172 — of the 11 drivers held out of the volume that have a
+  stock `DXE_DEPEX`, eight are promoted by the handset's own array, six of those as one contiguous
+  run at stock indices 41–46 that our volume carries none of, five held out by `DXE.inc` and the
+  sixth (`FvDxe`) named by nothing in this repository.
+- **does not close**: the clause, or any part of it. This step removes a candidate repair and
+  closes a sub-question; it says nothing about whether either XCHI driver succeeds when it runs.
+  *Released* and *succeeded* are different questions and only the first is answered here. The first
+  question whenever a device is present is still which payload `boot` holds.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and no firmware was built. `userdata`
+  (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The porting goal
+  is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.

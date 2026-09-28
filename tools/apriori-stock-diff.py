@@ -31,6 +31,7 @@ Usage:
     tools/apriori-stock-diff.py work/out/usb-host/Mu-gauguin-xhci-host-gzip.img
     tools/apriori-stock-diff.py <img> --stock <file> --tree work/uefi/Mu-Silicium
     tools/apriori-stock-diff.py <img> --device device/dxe   # validate the stock side
+    tools/apriori-stock-diff.py <img> --index               # both arrays as `index name`
 
 `--device` checks the stock list against the extracted stock FFS files: every GUID in a genuine
 a-priori array names a file in the volume it belongs to, and a GUID that names nothing means the
@@ -91,6 +92,10 @@ def main():
     ap.add_argument("--from-volume", help="read the stock array out of a built volume instead")
     ap.add_argument("--tree", default=DEFAULT_TREE)
     ap.add_argument("--device", help="directory of extracted stock .ffs files, to validate --stock")
+    ap.add_argument("--index", action="store_true",
+                    help="print both arrays as `index name` instead of aligning them, with a "
+                         "`*` on a name the other side promotes too - the shape to read when "
+                         "the question is where one driver sits rather than what changed")
     args = ap.parse_args()
 
     fvi = by_path("fv_inventory", os.path.join(HERE, "fv-inventory.py"))
@@ -139,6 +144,21 @@ def main():
 
     S = [nm(g) for g in stock]
     O = [nm(g) for g in ours]
+
+    if args.index:
+        # The same two arrays with an index in front of each name. The aligned block below is
+        # the right shape for "what changed", and the wrong shape for "where is this one" -
+        # a position quoted off it has to be counted by eye through a wrapped `~` row, which
+        # is how the question that prompted this flag was answered the first time. A `*`
+        # marks a name the other side also promotes, so a row that is only on one side reads
+        # as such without a second lookup.
+        for label, side, other in (("stock", S, set(O)), ("ours", O, set(S))):
+            print("\n  %s, by index (%s on the left, `*` = the other side has it too):\n"
+                  % (label, "stock" if label == "ours" else "ours"))
+            for i, n in enumerate(side):
+                print("  %2d  %s %s" % (i, "*" if n in other else " ", n))
+        return
+
     sm = difflib.SequenceMatcher(a=S, b=O, autojunk=False)
     print("\n  the two orders, aligned by name (stock on the left):\n")
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
