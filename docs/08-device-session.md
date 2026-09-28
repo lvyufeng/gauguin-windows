@@ -43627,3 +43627,124 @@ the P3 `fastboot boot` workflow needs, and the screen photograph. `userdata` (10
 table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
+
+## Step 4.215 — the BTNS/PM01 pairing is measured across the corpus instead of argued from one table: the census becomes a tracked tool, the PON's `_DSM` confirms both key descriptors in 21 of 21, the volume-up pin is a number no other table carries, and `131` FFS files are a directory listing
+
+
+**Why this ran.** P3 item 4 is `ButtonsDxe` plus a way to choose boot entries, and the half of it that is
+offline work is the ACPI the driver binds: the `BTNS` node at the end of `tools/acpi/gauguin.asl`, whose three
+`GpioInt` descriptors name `\\_SB.PM01` for their controller. The record's case for that node has rested, since
+the step that wrote it, on a census of the reference tables in `work/uefi/Mu-Silicium/Silicium-ACPI` — and that
+census was taken once, in a scratch script, and left no instrument behind. Under this port's own rule, restated
+by `tools/acpi-dep-census.py` and quoted here because it is the reason for this step, *a number a reader cannot
+ask again from the repository is not a measurement*. This step makes it askable: `tools/acpi-gpio-census.py` is
+new, tracked, and reproduces every count below from the source trees on each run.
+
+**What the corpus says, over all 66 tables it holds.** 66 files over **21 platforms** — Kailua is the one
+platform with two files, `DSDT_MTP` and `DSDT_QRD` — which is why the ACPI source's own header counts 21 and the
+file count is 22: the two numbers are the same set and not a disagreement. **23** files declare a `BTNS` (all 23
+with `_HID "ACPI0011"`, all 23 with at least one `GpioInt`); **22** declare a `PM01`; **21** declare both. And
+the finding that reframes the question: of the 22 files with a `PM01`, all 22 give it a `_CRS`, and **none of
+the 22 declares a `GpioIo` or a `GpioInt` in it**. What they carry instead is one shared level interrupt on
+`0x201` — two of them, `0x201` and `0x0203`, in Kailua's `DSDT_MTP`. So the pin space the `BTNS` descriptors
+index is not described in ACPI anywhere in this corpus, in any table, and gauguin's table is not an outlier in
+that. It is the shape. The framing this replaces — that `PM01` declaring no pin range meant the descriptors had
+no controller to bind through — is withdrawn, because it is true of every table in the corpus and so
+distinguishes nothing.
+
+**The hard result, and the one that changes what the file can claim.** `PM01`'s `_DSM` function 1 answers with
+the PON's own two key indices, power first and resin second, in the same flat pin space the `BTNS` descriptors
+number into. Comparing that package against the descriptors, over the 21 tables carrying both nodes: **cells 0
+and 2 of the `_CRS` equal `_DSM` function 1 in all 21**. Not 20 — 21. The ACPI source said 20 in four places and
+now says 21, amended in place at the `_DSM` itself and in the three sentences above the `BTNS` node. The paired
+set is the 23 `BTNS` tables minus `gts8p` and `r0q`, the two Samsung SSDTs whose `PM01` is declared in a DSDT
+this corpus does not hold — so those two rows show a controller named and not a table that is missing one. The
+comparison is stated on cells 0 and 2 rather than on the first and last descriptor, and that distinction is
+load-bearing: `cepheus` carries four descriptors and `caymanslm` five, so their last cell is an extra pin, and
+reading it as the resin key reports both as disagreeing with their own PON when their cells 0 and 2 agree
+exactly. Getting that wrong was this tool's fourth wrong answer, and it is recorded at the comparison, where the
+mistake was.
+
+**The same comparison rejects the middle cell, in every table.** In **0 of 21** paired tables is the middle
+descriptor's pin one the PON also names. It is a third pin, outside the pair the controller states, in the whole
+corpus — so gauguin's `0x0081` sitting outside `{0, 1}` is the family's arrangement and not a local quirk. The
+value is platform-specific and takes six forms across the 21: `0x00C6` in eight (`Cedros`, `Lahaina`, `a52sxq`,
+`lemonade`, `lisa`, `renoir`, `venus`, `vili`), `0x0085` in seven (`alioth`, `caymanslm`, `cepheus`, `mh2`,
+`nabu`, `pipa`, `vayu`), `0x0209` in two (`miatoll`, `surya`), `0x00D5` in two (both Kailua files), `0x020F` in
+one (`a52q`), and **`0x0081` in one — gauguin's own**. A search of the whole 66-file corpus for `0x0081` in a
+`BTNS` descriptor returns that single hit, so the value the ACPI source labels as reasoned rather than measured
+is now bounded as well as labelled: the corpus can neither corroborate it nor refute it, because no other table
+in it carries one. That is the strongest form of the label the file already applies to it, and the file's
+paragraph now says so.
+
+**Three wrong readings of this corpus, all recorded where they happened.** The tool did not work the first time,
+and every failure ran in the same direction — a parser bug producing the answer the caller was looking for. A
+glob for `DSDT.aml` alone reads **58** of the 66 tables, because eight of the corpus's forty platform tables
+ship as `SSDT.aml` (`citrus`, `ingres`, `lime`, `nitrogen`, `spes`, `caprip`, `gts8p`, `r0q`). A search for
+`Method (_CRS)` alone hides `gts8p` and `r0q`, whose `_CRS` is a `Name`, and printed `n 0` for both while
+printing `PM01` in the controller column from the same three descriptors — the row was internally contradictory,
+which is the only reason it did not read as a clean negative. And a `ResourceTemplate` search started inside the
+block it opens finds nothing in the `Name` form, because the two words sit just before the brace that opened it;
+that printed `no template` for the same two tables a second time. Each of the three is a negative that looks
+like a fact about the tables. The docstrings carry all three, at the function that got each one wrong, and the
+tool's own header records the withdrawn framing above for the same reason.
+
+**The volume counts, reconciled rather than corrected.** `docs/07:264`'s "**131** FFS files" for the Simple
+build is the `Ffs/` directory listing, and the numbers agree exactly once each is read as what it is:
+`Build/…/FV/Ffs/` holds 131 entries = **128** directories named `<GUID><Module>` + three `.inf` files
+(`FvAddress.inf`, `FVMAIN.inf`, `FVMAIN_COMPACT.inf`); the GUID each of those names begins with is exactly one
+of the 128 in the two GenFv maps, **126** in `FVMAIN.Fv.txt` (`0x731000` / `0x730b60`) and **2** in
+`FVMAIN_COMPACT.Fv.txt` (`9AFFB503…`, `9E21FD93…`, `0x300000` / `0x1126f8`), with nothing dangling on either
+side. So the real figures are **126** FFS files in `FVMAIN` and 128 across both volumes for Simple, and 128 and
+130 for Qcom under step 4.213's net `+2` roster delta — and 4.213's other sentence, "the GenFv map cross-check
+at 128 offsets and GUIDs", was already counting both volumes and was right. 131 is not a wrong number; it is a
+right number with the wrong noun, which is the failure mode this record's count sentences have hit before. The
+long-standing pair of "orphan" GUIDs in that directory, `9E21FD93-9C72-4C15-8C4B-E77F1DB2D792` and
+`9AFFB503-E643-4141-8B90-17E8588B1D35`, is explained by the same reading: they are `FVMAIN_COMPACT`'s own two
+files and were never orphans. `FVMAIN.Fv.txt` carries no file type at all, which is why
+`tools/fv-inventory.py`'s "122 named, 1 with no UI section" cannot be compared to `126` — it is a different
+enumeration, and the flashed build's "122 FFS files" is a genuine FFS count of that older volume and stands.
+
+**The a-priori array, re-proved by a second instrument.** Step 4.213 measured the array against `APRIORI.inc`
+with one tool; this step ran `tools/apriori-order.py`, which reads the array out of the artifact by a different
+walk and compares it against the file's own INF list with each `!if` evaluated from a value the caller supplies.
+On `work/out/p2-what/Mu-gauguin-stock-none.img` it prints **"the array is exactly the INF order of APRIORI.inc:
+70 entries, zero mismatches"** — independent corroboration of 4.213 from a tool that was not its author. The
+control direction fails on purpose: `--display qcom` reports `MISMATCH: 71 active INF lines, 70 GUIDs in the
+array`, `UNRESOLVED: … DisplayDxe.inf`, and nine `OUT OF ORDER` rows from position 61 on — the two entries of
+the file's `USE_CUSTOM_DISPLAY_DRIVER == 1` branch that the built array does not have. And one thing this step
+expected to be new is not, which is worth recording rather than dropping: the per-position name table for all 70
+entries was already printed by `tools/apriori-index.py` and `tools/apriori-order.py` before this step, with
+`ButtonsDxe` at 58, `SimpleFbDxe` at 60 and `UsbBusDxe` at 52. No new instrument was needed for it and none was
+written. A carried suspicion that only 38 of the 70 names resolve, against 25 ambiguous GUIDs, was a
+path-resolution artefact of a `/tmp` copy of the walker and is withdrawn: all 70 resolve, and the array is
+exactly `APRIORI.inc`'s active-branch INF order.
+
+**What is still not closable.** Item 4's first half is a driver that is built, in the volume at `0x002B3DB0`, at
+a-priori slot 58, and roster'd at `APRIORI.inc:97` and `DXE.inc:102` — and this step does not move it: whether
+`ButtonsDxe` binds depends on a pin space that the corpus, measured here, does not describe anywhere, and the
+only object that does describe it is the live PMIC, which needs `/dev/mem` on the phone. The second half is BDS,
+and step 4.166 already measured it as "not a driver to write but a BDS to reach", with `gauguin.fdf:52-62`
+recording why `BootManagerMenuApp` cannot be listed while `PcdBootManagerMenuFile` does resolve. Neither half is
+reachable offline, and no reading in this step changes what has to happen next: the phone.
+
+**decides**: that `PM01` declaring no pin range is the corpus's shape in all 22 files that declare the node
+rather than a gap in this table, so the empty pin space cannot be filled from references and the earlier framing
+is withdrawn; that the PON's own `_DSM` confirms cells 0 and 2 of the `BTNS` `_CRS` in 21 of 21 paired tables,
+which raises the count the ACPI source carried as 20 in four places; that the middle descriptor is a third pin
+the PON never names, in 21 of 21, and that its value `0x0081` occurs exactly once in the 66-file corpus — here;
+that the array is exactly `APRIORI.inc`'s active-branch INF order, on a second instrument with a failing
+control; and that the record's `131` FFS files are `Ffs/` entries, with 126 in `FVMAIN` and 128 over both
+volumes. **does not decide**: whether `ButtonsDxe` binds on the device, which needs the live PMIC; whether the
+volume-up pin is `0x81`, which no reference in the corpus can settle either way; and nothing at all about the P3
+gate, which is still unmet. **Not an action**: one new tracked tool, five corrections inside
+`tools/acpi/gauguin.asl`, one amendment plus one corrected sentence in `docs/07`, and offline reads of artifacts
+already on disk. No flash, no `fastboot` command, no partition written, no seed written, no console read from
+the device and no device file opened; all build output is under `work/`, which is gitignored, and the tracked
+tree is at `USE_CUSTOM_DISPLAY_DRIVER = 0` with `USE_XHCI_HOST_DRIVER = 1`, unchanged by this step. **device
+state**: unchanged and not re-measured — `adb devices`, `fastboot devices`, `lsusb` and both tty globs are
+empty, so the three physical actions remain outstanding: a reset of the phone, the reboot to the bootloader the
+P3 `fastboot boot` workflow needs, and the screen photograph. `userdata` (107 GB, unbacked), the partition table
+and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+

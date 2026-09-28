@@ -261,7 +261,8 @@ what is flashed; **Qcom** is `=1` (Qualcomm `DisplayDxe`) and is the goal.
 **Amended 2026-09-29 by step 4.213:** the volume has grown in both columns since
 these numbers were taken, and only the first row survives. Rebuilt from the same
 tracked tree with `--xhci-host`, **Simple** is `0x731000` / `0x730960` with
-**131** FFS files and 48 images validated, and **Qcom** is `0x782000` /
+**131** `Ffs/` entries — **126** FFS files, per step 4.215 — and 48 images
+validated, and **Qcom** is `0x782000` /
 `0x7814a8` with **133** and 47 — both totals `0x2F000` (192,512 bytes) higher,
 so `122` and "(not on disk any more)" are stale rather than wrong. The
 `Mu-gauguin.img` row is not comparable rather than wrong: the in-tree payload
@@ -278,6 +279,26 @@ The `P2 WHAT` probe added to `DxeCore` takes the volume to `0x731000` /
 `0x730b60` and `FVMAIN.Fv` to sha256 `e8888c0b…`; the roster and every file
 size are unchanged, so the 512 bytes are the probe's own cost in that one
 file. See `docs/08` step 4.214.
+
+**Amended 2026-09-29 by step 4.215:** the two counts above are directory
+listings and not FFS counts, and they reconcile exactly once read as what they
+are. `Build/…/FV/Ffs/` holds **131** entries for the Simple build: **128**
+directories whose names are a GUID followed by a module name
+(`CB70DC37-…ButtonsDxe`) and three `.inf` files (`FvAddress.inf`, `FVMAIN.inf`,
+`FVMAIN_COMPACT.inf`). The GUID each of those names begins with is exactly one
+of the 128 in the two GenFv maps — **126** in `FVMAIN.Fv.txt` and **2** in
+`FVMAIN_COMPACT.Fv.txt`, `9AFFB503…` and `9E21FD93…` — with nothing dangling on
+either side, which is the 128 this table's own "GenFv map cross-check at 128
+offsets and GUIDs" was already counting. So the real figures are **126** FFS
+files in `FVMAIN` and 128 across both volumes for Simple, and 128 and 130 for
+Qcom under 4.213's net `+2` roster delta. `131` and `133` are not wrong numbers;
+they are right numbers with the wrong noun. The flashed volume's `122` is a
+genuine FFS count of that older volume and stands, and `FVMAIN.Fv.txt` carries
+no file type at all, so a "no UI section" count cannot be taken from the map.
+The pair of long-standing "orphan" GUIDs in that directory,
+`9E21FD93-9C72-4C15-8C4B-E77F1DB2D792` and
+`9AFFB503-E643-4141-8B90-17E8588B1D35`, is explained by the same reading: they
+are `FVMAIN_COMPACT`'s own two files. See `docs/08` step 4.215.
 
 **Verified:**
 
