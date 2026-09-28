@@ -43874,3 +43874,99 @@ payload boots. There is also still **no removable USB stick attached to this hos
 medium exists here only as an image. `userdata` (107 GB, unbacked), the partition table and the
 firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+---
+
+## Step 4.217 — "does this firmware contain driver X" is answered by decompressing the volume, with controls that pass: AAVMF carries `UdfDxe` and gauguin does not, the three USB-host drivers live only on the reference side, and the stick's own boot manager draws a `Windows Setup` window and then holds still
+
+**A method that had been wrong twice, replaced rather than re-argued.** Step 4.216 withdrew the
+"does this firmware contain driver X" test because its controls failed — three drivers AAVMF
+certainly contains read absent from it. `tools/fw-inventory.py` is the replacement, and the reason
+both earlier scans were measuring nothing is worth naming precisely, because it is one defect and
+not two. An FFS `FILE_GUID` and an FFS file name are both **contents of a possibly compressed
+volume**: a volume compressed whole holds no FFS metadata at all until its outer GUIDed section is
+decompressed, so a byte scan of the `.fd` measures whether the container is compressed and not what
+it contains. AAVMF's `.fd` is exactly that — its outer volume carries an LZMA GUIDed section — which
+is why every GUID scan and every UTF-16LE name scan returned absent, controls included, and why
+adding a control to the same method could only have produced the same absent result again. So the
+new tool decompresses: `ee4e5898-3914-4259-9d6e-dc7bd79403cf` and `d42ae6bd-1352-4bfb-909a-ca72a6eae889`
+are EDK2's two LZMA compressor GUIDs, undone as `.lzma`-alone framing, `1d301fe9-be79-4353-91c2-d23c0d59cb45`
+is Qualcomm's gzip, and Tiano and brotli are recognised by GUID and named as undecompressed rather
+than silently skipped, because neither is in the standard library. It then walks the FFS file, section
+and GUIDed-section structure and recurses into whatever nested volume comes out. `tools/xbl_extract.py`
+is the sibling and is not changed: it is XBL-specific (an ELF-wrapped FV whose nested volume is gzip),
+where this one takes a bare `.fd`, and the FFS-walking helpers are shared in shape because the PI spec
+is.
+
+**The controls that failed now pass, and the answer to 4.216's open question.** gauguin's built
+`FVMAIN.Fv` is **126 FFS files, 124 carrying a name**; AAVMF's `AAVMF_CODE.no-secboot.fd` is
+**110 files, 108 named**. `Fat`, `DiskIoDxe` and `PartitionDxe` — the three the withdrawn method used
+as its control and read absent — now read **present in both**. Against that, **AAVMF reports
+`UdfDxe` and gauguin reports none**: `--grep UdfDxe` is 1 hit on AAVMF and 0 on the built volume.
+Step 4.216 closed with "whether AAVMF has a UDF driver is still open, and is answered by running the
+medium rather than by grepping the firmware"; it is now answered statically, with a control that
+passes, and the answer is **yes**. Two further measurements come out of the same walk and are worth
+recording because they are controls on other claims rather than incidental: AAVMF also carries
+`UsbBusDxe`, `UsbKbDxe` and `UsbMassStorageDxe` — exactly the three USB-**host** drivers `docs/03`
+lists as absent from XBL, so their absence there is a property of Qualcomm's device-side XBL and not
+of EDK2 — and **neither firmware carries an ISO 9660 driver** (`--grep Iso` is 0 on AAVMF), which is
+independent confirmation of 4.216's reading of `MdeModulePkg/Universal/Disk/`. The consequence is
+stated plainly because it changes how a run is read: a QEMU run against the converter's ISO **could
+reach its BCD on `UdfDxe`, a driver the phone does not have**, so the ISO succeeding on this host
+would be evidence about AAVMF and not about gauguin. The stick remains the honest medium, and now
+there is a measurement saying so rather than an argument.
+
+**One tool defect, found by using the tool the natural way.** `fw-inventory.py FIRMWARE.fd --grep UdfDxe`
+failed with `No such file or directory: '--grep'` — the first version recognised the flag only in
+`argv[1]`, and the natural way to reach for this script is with the file first. The flag is now pulled
+out of the argument list wherever it appears, with the reason kept in a comment beside it.
+
+**The stick's boot, read from the screen rather than predicted.** The serial log ends at
+`BdsDxe: starting Boot0001 "UEFI QEMU QEMU USB HARDDRIVE 1-0000:00:01.0-3" from
+PciRoot(0x0)/Pci(0x1,0x0)/USB(0x2,0x0)` and says nothing more — after hand-off the guest draws to the
+framebuffer and not to the UART, so everything after that line has to be read from the frames. The
+frames are a sequence and the sequence is the evidence: **shot-001 is 66 colours** (the firmware's own
+screen, before the stick's bootloader replaces it), **shot-002 is 1 colour** (the screen cleared at
+hand-off, which is why a single black frame is not a finding on its own), and **shots 003, 004 and 005
+are 779, 768 and 770 colours**. The drawn image is a window on a near-black purple field
+(`(24,0,82)`): a light-blue gradient band across the top, running `(152,180,208)` to `(185,209,234)`,
+carrying dark-purple title text that rasterises at 3× to **`Windows Setup`**; a white body below it
+holding 75.4% of the screen; a rule and a second light-blue band at the window's foot. The bottom bar
+carries the Windows four-pane logo at its left — the four 6-pixel squares measure orange-red
+`(242,80,34)`, green `(127,186,0)`, blue `(0,164,239)` and yellow `(255,185,0)` — and two light-grey
+`(249,249,249)` rounded buttons at its right. So what is running off the stick through the USB
+mass-storage path on `DiskIoDxe` + `PartitionDxe` + `Fat` is **Windows Setup's own boot manager and
+window, not EDK2's shell**, on a disk stack whose driver names are exactly the phone's.
+
+**Then it holds still, and that is what the frames say and all they say.** The window body is blank
+apart from one element roughly 20×20 pixels at x≈90–111, y≈180–200. Frames 3→4 differ by **156 pixels**
+and 4→5 by **127**, and every differing pixel of both lies inside that element; the remaining 479,800
+pixels of an 800×600 screen are byte-identical across four minutes. That is an animation still
+animating while the page does not advance — not a dead guest and not a reached disk step. Whether it
+advances is not predicted here and the run is still going.
+
+**decides**: that the FFS `FILE_GUID` scan and the UTF-16LE name scan both failed for the same reason —
+metadata inside a compressed outer volume — and that decompressing is the only way to read either;
+that gauguin's built `FVMAIN.Fv` holds 126 FFS files with 124 names and AAVMF's `.fd` holds 110 with
+108; that `Fat`, `DiskIoDxe` and `PartitionDxe` are present in both, so the controls that failed twice
+now pass twice; that **AAVMF carries `UdfDxe` and gauguin does not**, which closes the question 4.216
+left open; that AAVMF carries `UsbBusDxe`, `UsbKbDxe` and `UsbMassStorageDxe` and gauguin does not, so
+that gap is XBL's device-side design and not EDK2's; that neither carries an ISO 9660 driver; that a
+run against the ISO can therefore succeed here on a driver the phone lacks, which is why the stick is
+the medium that measures the phone; and that the stick's own boot manager under AAVMF draws a
+`Windows Setup` window with a four-pane Windows logo and two buttons, from `USB(0x2,0x0)`, over the
+same three disk drivers gauguin has. **does not decide**: whether that `Windows Setup` window ever
+advances past the page it is on — three frames spanning four minutes show an animating element and no
+other change, and the TCG run is still in flight; whether a Windows 11 ARM64 installer completes a
+boot off the stick; whether adding `UdfDxe` to gauguin is worth a firmware flash, since the stick path
+does not need it; and nothing about the P3 gate on the device, which is still unmet. **Not an action**:
+one new tracked tool (`tools/fw-inventory.py`), a correction to the `UdfDxe` bullet in `docs/03`, the
+install-medium note 4.216 left uncommitted in `docs/00`, and offline reads of firmware and of frames
+already on disk. Every measurement was taken on files under `work/` (gitignored) or on
+`/usr/share/AAVMF/`, which is read-only. **device state**: unchanged — `adb devices`, `fastboot devices`,
+`lsusb` and both tty globs are empty, so the three physical actions remain outstanding: a reset of the
+phone, the reboot to the bootloader the P3 `fastboot boot` workflow needs, and the screen photograph
+that `先读屏，再刷下一次` requires before any payload boots. There is still **no removable USB stick
+attached to this host**; the gate's medium exists here only as an image. `userdata` (107 GB, unbacked),
+the partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.

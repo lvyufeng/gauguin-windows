@@ -2482,3 +2482,11 @@ In rough order of value-versus-difficulty:
 - **Keep the backup current.** Any change to the partition layout invalidates parts of it.
 - **Serial/log output before anything else.** A bring-up with no way to see what failed is
   not debuggable.
+- **The install medium is a FAT32 stick, not the UDF ISO** (step 4.216). The gate's own
+  words are "boots off a USB stick", and that is also the only shape this firmware can read:
+  `DiskIoDxe`, `PartitionDxe` and `Fat` are in the build and no UDF and no ISO 9660 driver
+  is, while the converter's ISO puts every file in a UDF tree and hides it from the ISO 9660
+  one. `tools/make-win-stick.sh` builds the stick; `install.wim` is under FAT32's 4 GiB
+  per-file limit so no WIM split is needed. Reaching the ISO instead would mean adding
+  `MdeModulePkg/Universal/Disk/UdfDxe` to `DXE.inc`/`APRIORI.inc` and paying a firmware
+  flash for it, which the stick path does not need.

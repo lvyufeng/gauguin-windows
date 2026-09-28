@@ -74,8 +74,23 @@ Windows, the third for reading the medium Windows is installed from:
   `MdeModulePkg/Universal/Disk/` holds DiskIoDxe, UdfDxe, PartitionDxe, UnicodeCollation,
   RamDiskDxe and CdExpressPei, and nothing else. `UdfDxe` is therefore the only reader that
   would work on that media, and it is exactly the one missing. Install from a FAT32 stick
-  instead — `tools/make-win-stick.sh`, and step 4.216 in `docs/08-device-session.md` for the
-  measurements.
+  instead — `tools/make-win-stick.sh`, and steps 4.216 and 4.217 in `docs/08-device-session.md`
+  for the measurements.
+
+  This bullet is measured rather than grepped, and the distinction cost two retractions.
+  `tools/fw-inventory.py` walks the FFS structure and **decompresses** each volume before
+  reading it, because an FFS name and an FFS `FILE_GUID` are contents of a volume that may be
+  compressed whole — AAVMF's is — so a byte scan of a `.fd` measures the container and not
+  what it holds. With the decompressing walker and a control that now passes, the built
+  `FVMAIN.Fv` reports **126 FFS files, 124 named**, and `Fat`, `DiskIoDxe` and `PartitionDxe`
+  are present; `UdfDxe` is **absent**. The reference firmware is the contrast that makes the
+  absence a finding: `/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd` reports **110 files, 108
+  named**, carries the same three disk drivers, and **does** carry `UdfDxe` — along with
+  `UsbBusDxe`, `UsbKbDxe` and `UsbMassStorageDxe`, the three USB-*host* drivers above, which
+  confirms that gap is XBL's device-side design and not EDK2's. Neither firmware carries an
+  ISO 9660 driver. The practical consequence: on a host whose firmware has `UdfDxe`, this
+  ISO can boot to its BCD, so *succeeding there says nothing about the phone*. The stick is
+  the medium that measures the phone.
 
 Everything else needed for a first boot is already present as signed binaries.
 
