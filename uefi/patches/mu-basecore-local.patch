@@ -104,6 +104,36 @@
 #       carries every failure with its own status in words. The block is 78 rows
 #       in the worst case against the hundred or so the panel holds.
 #
+#       A fifth probe, P2 WHAT, added in step 4.214: the raw status behind the K
+#       line's class letter, on the per-attempt path. `P2WhyLetter` names eight
+#       statuses and returns 'O' for every other value - and 'O' is where this
+#       device's interesting statuses live, since a Qualcomm driver failing for its
+#       own reason returns a vendor code that is in none of the eight. The status
+#       in words is on the digest's `P2 DIAG` line, but the digest is printed from
+#       CoreDisplayDiscoveredNotDispatched, which DxeMain calls only after
+#       CoreDispatcher returns: a run that stalls inside the dispatcher prints no
+#       digest at all, and every session on this phone has stalled there. So the
+#       letter has been read several times and the value behind it never once. P2
+#       WHAT is that value, printed immediately after the K line it belongs to and
+#       only when the letter is 'O'. It is what makes a single photograph of a
+#       stalled run worth a status code instead of a letter.
+#
+#       It prints `%016lX` and not `%08X`, which is not a cosmetic choice. PrintLib
+#       reads the argument of an `X` with no `l` or `L` as an `int`
+#       (PrintLibInternal.c:826), and VA_ARG on this architecture reads the whole
+#       64-bit variadic slot and then casts it to the type named
+#       (MdePkg/Include/Base.h:643) - so a status with bit 31 set arrives negative
+#       and is sign-extended into the value that actually gets formatted.
+#       `0x80000000C0000002` prints as `FFFFFFFFC0000002`, which is a different
+#       number, and a vendor code is exactly the case where that happens. With
+#       LONG_TYPE the whole 64 bits print and the panel carries the status itself.
+#       The digest's own `%r` fallback does use `%08X`, so its spelling of one
+#       value is the truncated one and the two agree only in the low eight digits;
+#       this line is the complete reading of the two. Measured rather than argued:
+#       with the guard lifted so the line prints for every K row, a run reaching K
+#       17 prints `P2 WHAT 17 S 8000000000000003 D461A719-...` where `%08X` gives
+#       `00000003`. See docs/08 step 4.214.
+#
 #       It also replaces the digest's pause. The repeat loop stalled on
 #       CoreStall, which waits through the Metronome - and the Metronome is
 #       installed by `MetronomeDxe`, one of the drivers this volume is being
@@ -329,10 +359,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..73701216 100644
+index d7c7147e..7b48acab 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,972 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,1015 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -1300,12 +1330,55 @@ index d7c7147e..73701216 100644
 +    P2LargestAlloc (),
 +    Guid
 +    ));
++
++  //
++  // P2BRINGUP: P2 WHAT, added in step 4.214. The K line above gives the status as
++  // a class letter, and 'O' is the class that answers nothing: P2WhyLetter names
++  // eight statuses and returns 'O' for every other value, which on this device is
++  // where the interesting ones live. The same status in words is on the digest's
++  // `P2 DIAG` line, and the digest is printed from
++  // CoreDisplayDiscoveredNotDispatched, which DxeMain calls only *after*
++  // CoreDispatcher returns. A run that stalls inside the dispatcher prints no
++  // digest at all - and every session on this phone has stalled there - so the raw
++  // value behind an 'O' has never once been on the panel. This is the same reading
++  // at the same instant as the K line it follows, on the per-attempt path rather
++  // than the end-of-run one.
++  //
++  // `%016lX` and not `%08X`, and the difference is not cosmetic. PrintLib reads
++  // the argument of `%X` without `l` or `L` as an `int` (PrintLibInternal.c:826),
++  // and VA_ARG on this architecture reads the full 64-bit variadic slot and then
++  // *casts* it down to the type named (MdePkg/Include/Base.h:643) - so a status
++  // with bit 31 set comes back negative and is sign-extended into the UINT64 the
++  // conversion actually formats. The eight digits are not the low half of the
++  // status; `0x80000000C0000002` prints as `FFFFFFFFC0000002`, which is a
++  // different number. A vendor code is exactly the case where that happens, and a
++  // vendor code is what an 'O' is. `lX` sets LONG_TYPE, reads the whole 64 bits
++  // and prints the status as it is. `P2 WHAT 11 S 800000000000000E <36-char
++  // guid>` is 66 of the panel's 90 columns, so the extra eight cost nothing.
++  //
++  // The digest's `%r` is the truncated spelling: its fallback for a status it
++  // cannot name is a `%08X` over the same value, so the two agree only in the low
++  // eight digits and this line is the complete reading of the two.
++  //
++  // Only when the letter is 'O': for the eight named classes the letter already
++  // determines the status, and the panel is ninety columns.
++  //
++  if (P2WhyLetter (Status) == 'O') {
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 WHAT %d %c %016lX %g\n",
++      mP2Tick,
++      Phase,
++      Status,
++      Guid
++      ));
++  }
 +}
 +
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1449,19 @@ CoreDispatcher (
+@@ -483,11 +1492,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -1325,7 +1398,7 @@ index d7c7147e..73701216 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1493,20 @@ CoreDispatcher (
+@@ -519,6 +1536,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -1346,7 +1419,7 @@ index d7c7147e..73701216 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1884,8 @@ CoreAddToDriverList (
+@@ -896,6 +1927,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -1355,7 +1428,7 @@ index d7c7147e..73701216 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +2299,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +2342,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -1372,7 +1445,7 @@ index d7c7147e..73701216 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2412,29 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2455,29 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1402,7 +1475,7 @@ index d7c7147e..73701216 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2456,87 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2499,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1490,7 +1563,7 @@ index d7c7147e..73701216 100644
      }
  
      //
-@@ -1470,6 +2569,267 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2612,267 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1758,7 +1831,7 @@ index d7c7147e..73701216 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2846,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2889,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;

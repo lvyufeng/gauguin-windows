@@ -104,6 +104,36 @@
 #       carries every failure with its own status in words. The block is 78 rows
 #       in the worst case against the hundred or so the panel holds.
 #
+#       A fifth probe, P2 WHAT, added in step 4.214: the raw status behind the K
+#       line's class letter, on the per-attempt path. `P2WhyLetter` names eight
+#       statuses and returns 'O' for every other value - and 'O' is where this
+#       device's interesting statuses live, since a Qualcomm driver failing for its
+#       own reason returns a vendor code that is in none of the eight. The status
+#       in words is on the digest's `P2 DIAG` line, but the digest is printed from
+#       CoreDisplayDiscoveredNotDispatched, which DxeMain calls only after
+#       CoreDispatcher returns: a run that stalls inside the dispatcher prints no
+#       digest at all, and every session on this phone has stalled there. So the
+#       letter has been read several times and the value behind it never once. P2
+#       WHAT is that value, printed immediately after the K line it belongs to and
+#       only when the letter is 'O'. It is what makes a single photograph of a
+#       stalled run worth a status code instead of a letter.
+#
+#       It prints `%016lX` and not `%08X`, which is not a cosmetic choice. PrintLib
+#       reads the argument of an `X` with no `l` or `L` as an `int`
+#       (PrintLibInternal.c:826), and VA_ARG on this architecture reads the whole
+#       64-bit variadic slot and then casts it to the type named
+#       (MdePkg/Include/Base.h:643) - so a status with bit 31 set arrives negative
+#       and is sign-extended into the value that actually gets formatted.
+#       `0x80000000C0000002` prints as `FFFFFFFFC0000002`, which is a different
+#       number, and a vendor code is exactly the case where that happens. With
+#       LONG_TYPE the whole 64 bits print and the panel carries the status itself.
+#       The digest's own `%r` fallback does use `%08X`, so its spelling of one
+#       value is the truncated one and the two agree only in the low eight digits;
+#       this line is the complete reading of the two. Measured rather than argued:
+#       with the guard lifted so the line prints for every K row, a run reaching K
+#       17 prints `P2 WHAT 17 S 8000000000000003 D461A719-...` where `%08X` gives
+#       `00000003`. See docs/08 step 4.214.
+#
 #       It also replaces the digest's pause. The repeat loop stalled on
 #       CoreStall, which waits through the Metronome - and the Metronome is
 #       installed by `MetronomeDxe`, one of the drivers this volume is being

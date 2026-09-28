@@ -273,6 +273,12 @@ measured against a different enumeration from this one: over the 58
 Qcom 47 — and the two the switch adds are `CPRDxe` and `DisplayDxe`. See
 `docs/08` step 4.213.
 
+**Amended 2026-09-29 by step 4.214:** the Simple column has moved once more.
+The `P2 WHAT` probe added to `DxeCore` takes the volume to `0x731000` /
+`0x730b60` and `FVMAIN.Fv` to sha256 `e8888c0b…`; the roster and every file
+size are unchanged, so the 512 bytes are the probe's own cost in that one
+file. See `docs/08` step 4.214.
+
 **Verified:**
 
 - Both builds complete with `Return Code: 0x00000000`.

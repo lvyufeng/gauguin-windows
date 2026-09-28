@@ -43525,3 +43525,105 @@ workflow needs, and the screen photograph. `userdata` (107 GB, unbacked), the pa
 LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
+
+## Step 4.214 — the raw status behind the `K` line's class letter is put on the panel, and the instrument is proved by lifting its own guard: `P2 WHAT` fires once per `K` row, prints `%016lX` because `%08X` sign-extends a status whose bit 31 is set, and the width change costs the volume nothing
+
+
+**What was owed, and why this is the instrument.** `P2 WHAT` is not new to this port's vocabulary: `docs/00:195`
+owes it, in as many words — "`P2 WHAT` for the value behind `K 11 SO`'s non-error, non-`EFI_STATUS` letter" —
+and `docs/08:27069` lists it among the readings that need "a build that carries them on the glass". The need is
+structural. `P2WhyLetter` names eight statuses and returns `'O'` for every other value, so the `K` line's second
+letter is a complete answer for eight classes and no answer at all for the ninth. The same status in words is on
+the digest's `P2 DIAG` row, but the digest is printed from `CoreDisplayDiscoveredNotDispatched`, which
+`DxeMain.c:576` calls only *after* `CoreDispatcher` returns — and a run that stalls inside the dispatcher prints
+no digest at all, which is what every session on this phone has done. The letter has therefore been read several
+times and the value behind it never once.
+
+**What was built.** A guard appended to `P2Tick` in `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c`,
+immediately after the `K` line's own `DEBUG` call, on the per-attempt path rather than the end-of-run one:
+
+  if (P2WhyLetter (Status) == 'O') {
+    DEBUG ((
+      DEBUG_ERROR,
+      "P2 WHAT %d %c %016lX %g\n",
+      mP2Tick,
+      Phase,
+      Status,
+      Guid
+      ));
+  }
+
+**The width is the substance of the change, and the first version of it was wrong.** The probe was first written
+with `%08X`, reasoning that `%r`'s own fallback for a status it cannot name is a `%08X` over the same value, so
+the two spellings would be directly comparable. Reading the library shows what that actually means rather than
+what it looks like. `PrintLibInternal.c:826` reads the argument of an `X` with no `l` or `L` as an **`int`**;
+`MdePkg/Include/Base.h:643` expands `VA_ARG (Marker, int)` to `(int) __builtin_va_arg (Marker, UINTN)`, which
+reads the *whole* 64-bit variadic slot and then casts it down to the named type. So a status whose bit 31 is set
+comes back negative and is sign-extended into the `UINT64` the conversion actually formats: `0x80000000C0000002`
+prints as `FFFFFFFFC0000002`. That is not a truncation, it is a different number — and a vendor code is exactly
+the case where bit 31 is set, which is exactly what an `'O'` is. `%016lX` sets `LONG_TYPE`
+(PrintLibInternal.c:723-726), reads the full 64 bits and prints the status as it is. The claim about `%r`
+survives and is now stated precisely: `%r`'s spelling of one value is the truncated one, the two agree only in
+the low eight digits, and `P2 WHAT` is the complete reading of the two. The first version is recorded here
+because it is the failure mode this port's conventions exist to catch — a figure that reads like the measurement
+and is not.
+
+**The instrument is proved by lifting its own guard.** A negative result is degenerate here: "no `P2 WHAT` row
+anywhere" is equally consistent with "the guard is correct and no attempt returned an `'O'`" and with "the call
+never executes at all", and the second is exactly the failure a probe built and never seen fire would have. So
+for one build the guard alone was replaced with `if (1)` — the format string, the call site and everything else
+identical — and the result is `work/out/qemu-panel-what-ctl.txt`: 18 `K` rows and **18 `P2 WHAT` rows**, one
+after each, carrying the same guid and the same phase letter as the row above it. The values are
+`0000000000000000` for K 1 through K 16 and for K 18, and **`8000000000000003` for K 17** — `EFI_UNSUPPORTED`,
+on `D461A719-F2EC-5C77-A7AF-045F17ED012C`, the `CmdDbDxe` start failure the record already names
+(`docs/08:25486`). That row is the width change demonstrated on a real value from a real run: under `%08X` it
+prints `00000003`, which is not the status. The control run ends at the same `ASSERT DebugLib.c +78` after the
+same `ERROR: C90000002:V03000007 I0 CB29F4D1-…` row as the guarded run does, so eighteen extra rows on the
+console did not move the walk.
+
+**The guarded build, and what the guard costs.** The guard was restored, the tree rebuilt (`PROGRESS - Success`,
+`0048 Images Verified`), and the volume measured: `EFI_FV_TOTAL_SIZE` `0x731000`, `EFI_FV_TAKEN_SIZE`
+`0x730b60`, `FVMAIN.Fv` sha256 `e8888c0b54d7601210ba75d60516b51606128c7692386bd248e32c97a32cdf72`. Run under
+`--el3-stub --el3-zero-mem --el3-seed-smem` for 90 s it reaches K 18 with **no `P2 WHAT` row at all**, and that
+is the designed behaviour rather than a second failure: K 1–16 are `Ss` and K 17 is `SU`, every one of them a
+named class, and the guard fires only on `'O'`. So the instrument is present in the image, proved by the control
+to print, and silent on the runs where it should be. The cost is stated plainly: on a run whose failing attempts
+are all named, `P2 WHAT` adds nothing, because the class letter already determines the status. Its whole value
+is the `'O'` — and no run under QEMU on this host has ever produced one, so the datum the probe exists for is
+still the phone's `K 11 SO` and nothing else.
+
+**The width change costs the volume nothing, and 4.213's figure has moved.** The `%08X` predecessor is still on
+disk as the inner volume of the payload step 4.214's first version built; dumped back out it is sha256
+`9204e5f573a6bf66…`, and the two volumes are the same 7,540,736 bytes, take the same `0x730b60`, and carry the
+same 126 offsets and GUIDs from GenFv's map with every declared file size identical — the two-char-longer string
+fits inside padding the file already had, so the corrected probe is free. This build's `0x730b60` is 512 bytes
+more than the `0x730960` step 4.213 recorded for the same configuration and the same flags, and that difference
+is the `P2 WHAT` probe itself; the 4.213 volume is no longer on disk, so the 512 is a difference of two recorded
+figures and is not localised to a file; `docs/07:263`'s amended Simple row carries a sentence saying so.
+
+**Built and gated.** `P2DIR=work/out/p2-what tools/build-p2-payloads.sh` produced `Mu-gauguin-stock-gzip.img`
+1,179,648 bytes `cafb7cee72f6ddb3…`, `Mu-gauguin-stock-none.img` 3,248,128 bytes `e69302032428a5bf…` and
+`Mu-gauguin-silicon-gzip.img` 1,173,504 bytes `043501f5c93b1a13…`. All three pass `tools/check-payload.py`, the
+replayed ABL path, and the GenFv cross-check at 126 offsets and GUIDs with zero mismatches. The check that
+matters most is that the payload carries the *corrected* code and not the first version: the volume dumped back
+out of `Mu-gauguin-stock-none.img` is `e8888c0b54d76012…`, byte-identical to the build's `FVMAIN.Fv`, and the
+string it holds is `P2 WHAT %d %c %016lX %g`. `work/out/p2-variants/`, `work/out/p3-display/` and
+`work/out/usb-host/` were not touched.
+
+**decides**: that the `'O'` class now has a value on the panel at the moment the attempt is made rather than
+only in a digest a stalled run never reaches; that the spelling is the whole 64-bit status, on the evidence of
+the control run's `8000000000000003` against `%08X`'s `00000003`; and that the probe is non-perturbing, on the
+control run ending at the same assert after the same status-code row. It also corrects its own first version in
+place, one step after writing it, and amends the one figure in `docs/07` that this build moves. **does not
+decide**: the phone's `K 11` status, which is the entire point and is still on the phone — no QEMU run on this
+host has produced an `'O'`, so the probe is proved to fire but has never fired at the datum it was built for.
+**Not an action**: two builds, one payload set, one patch regeneration and two text edits. No flash, no
+`fastboot` command, no partition written, no seed written, no console read from the device and no device file
+opened; all build output is under `work/`, which is gitignored, and the tracked tree is at
+`USE_CUSTOM_DISPLAY_DRIVER = 0` with `USE_XHCI_HOST_DRIVER = 1`, the configuration that has been on the device.
+**device state**: unchanged and not re-measured — `adb devices`, `fastboot devices`, `lsusb` and both tty globs
+are empty, so the three physical actions remain outstanding: a reset of the phone, the reboot to the bootloader
+the P3 `fastboot boot` workflow needs, and the screen photograph. `userdata` (107 GB, unbacked), the partition
+table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
