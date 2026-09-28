@@ -4099,6 +4099,33 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > execution, and — because a machine that cannot interrupt cannot proceed — answering the wall the way 4.199
 > answered the polls. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08`
 > step 4.200.
+> **Step 4.201 — the re-run holds, and the census's own call site moves every USB event in this family inside
+> the instrument's one-shot `CoreConnectController`.** `run-hand11.sh`'s second attempt is its first with the
+> harness defect `free` fixed (`free = False` at the head of `watch()`, without which phase 1 returned at
+> `@0.0s` and spent none of its window), and all three parts came back. **Part 2**: `@4.9s WATCHPOINT #1 at
+> 0x17a00000 pc=0x9c4c1b64 lr=0x9c4bf54c`, module `MZ` at `0x9c4be000`, so rva `0x3b64`/`0x154c` — and the
+> image's own bytes at rva `0x1520` are `mov w1,#0x7`/`bl`, `mov w0,#0x4`/`mov w1,#0xff`/`bl`,
+> `mov x0,xzr`/`mov w1,#0x1`/`bl` (**ICCICR at base 0**) and `mov w0,#0x17a00000`/`mov w1,#0x1`/`bl` (ICDDCR),
+> i.e. `ArmGicV2Dxe.c:632`/`:635`/`:486`/`:463` into `IoLib`'s `MmioWrite32` (`str w19,[x20]` at `0x3b64`,
+> alignment assert at line 581). The V2 path 4.200 left open is closed by execution; the `0x08000000` control
+> never fired and read `unreadable`. **Part 1**: `HUB NOTIFY #1` fires once, `PollCount` 0 → 1, the wall reads
+> `01`, and 25 s at a 100 ms period delivers nothing more — the runner's own *"never fires"* is falsified and
+> re-framed. **Part 3**: the wall takes `0x06` and is never hit again; phase 1 spends its full window and its
+> break-in finds the guest at rva `0x18f68` of `DxeCore.efi`, inside `CacheRangeOperation` (`0x18f34`) running
+> `dc civac` (`0x1e260`) forward over the `Display Reserved` framebuffer at `0xa0ec5000` — the tail of
+> `SerialPortWrite`'s `WriteBackInvalidateDataCacheRange ((VOID *)FbBase, FbLength)`
+> (`FrameBufferSerialPortLib.c:276`), 9.9 MB per printed line. So nothing is stopped: the guest is running the
+> instrument's own digest loop. That loop is named here — `P2UsbCensus ()` is called at the tail of
+> `P2Digest ()` (`mu-basecore-local.patch:1749`), which `CoreDisplayDiscoveredNotDispatched ()` calls once and
+> then 40 more times with `P2Hold ()` between (`Dispatcher.c:2912`, `:2914-2917`), itself called once from
+> `DxeMain.c:576` after `CoreDispatcher ()`. So `P2 USB n=` is a pass counter — the baselines carry one pass
+> (`FREE` ×1, `WALK` ×5, `BIN` ×4) against `panel4201`'s 21/106/82 — and with the panel's ~90 s load offset the
+> probe's xHCI polls (`@17.1s`), hub notification (`@18.2s`) and wall (`@18.7s`) all land in the 27 s window in
+> which `P2UsbCensus`'s `P2Reconnect` is inside `CoreConnectController`: the driver named in 4.199/4.200 is
+> right, and the context it was placed in is not. Pass 1's census row, the only pre-connect reading, is
+> `all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77` in all four runs; passes 2-19 read
+> `pciio=1 usb2hc=1 usbio=0 blkio=0 fs=0`, so the machine publishes the USB bus protocols with nothing behind
+> them. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.201.
 >
 
 ### What exists and what is missing, so the next session starts from the right

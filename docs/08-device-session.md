@@ -41974,3 +41974,151 @@ needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines —
 returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that photograph exists.
 Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
 they were.
+
+## Step 4.201 — the re-run reproduces both armed legs and answers the wall, and the census's own call site moves every USB event in this family inside the instrument's one-shot `CoreConnectController`: DXE dispatch had already ended at the digest, whose first pass reads `pciio=0 usb2hc=0`
+
+**The re-run, and the one defect it was rerun for.** `run-hand11.sh`'s second attempt differs from its first
+by one line, and the line is in the harness and not in the instrument: `free` is a module global that phase 0's
+verdict leaves `True` and that `watch()` guards its own loop with (`while not free`), so the first attempt's
+phase 1 returned at `@0.0s breaking in (phase 1)` and its whole window was never spent. `free = False` now heads
+`watch()`, and the re-run's log says so — `@43.7s phase 1: watching what the answer moved`, then
+`@25.0s phase 1: nothing stopped in 25s after 9 answer(s)`, then its break-in. All three parts of the
+experiment came back. The runner's pre-written prediction held in every clause but the last, and the clause it
+got wrong is the one this step explains.
+
+**Part 2, the GIC writer: reproduced, and now read down to the instruction that stored.**
+`@4.9s WATCHPOINT #1 at 0x17a00000  pc=0x9c4c1b64  lr=0x9c4bf54c`, the instruction before `pc` a `bl`
+(`91f7ff97`), and the writing module an `MZ` at `0x9c4be000` — so `pc` is rva `0x3b64` and `lr` is rva
+`0x154c` of one image. That image's own bytes at rva `0x1520` are `mov w1,#0x7` / `bl 0x3b30` (ICCBPR),
+`mov w0,#0x4` / `mov w1,#0xff` / `bl 0x3b30` (ICCPMR), `mov x0,xzr` / `mov w1,#0x1` / `bl 0x3b30`
+(**ICCICR, base 0**), `mov w0,#0x17a00000` / `mov w1,#0x1` / `bl 0x3b30` (ICDDCR) — `ArmGicV2Dxe.c:632`,
+`:635`, `:486`, `:463`, in that order — and `0x154c` is the return address of the last of the four. The callee
+at rva `0x3b30` is `IoLib`'s `MmioWrite32`, whose alignment assert is a `tst x0,#0x3` at line 581
+(`mov w1,#0x245`) and whose store is `str w19,[x20]` at rva `0x3b64`. Both `pc` and `lr` land exactly where
+those two readings say they must. So the payload takes the **V2** path — the question 4.200 left open is closed
+by execution rather than by the map — the distributor it enables is the board's `0x17A00000`, the CPU interface
+is at **base 0**, which is block 0 of the redirect, and the window read all-zero at the hit and `01000000`
+through the guest afterwards. The `0x08000000` control never fired and read `unreadable` both times: this
+board's map does not declare it, which is the guest's own page tables saying what 4.200 said.
+
+**Part 1, the notification: exactly once, and the runner's own first sentence falsified.** `@18.2s HUB NOTIFY
+#1` enters `PollCount` as `00` and leaves it `00` — the routine's increment is inside the six instructions the
+trace covers and its store has not run by the sixth — and `@18.7s HUB POLL WALL #1` reads the byte as `01`.
+Then the wall's breakpoint is removed, 25 s of guest time is given at a 100 ms periodic period, and the guest is
+still standing on the wall's own first instruction with the byte still `01`: at least 250 opportunities and not
+one delivery. The first attempt's header sentence, *"HUB NOTIFY never fires"*, is falsified by that `01`, and the
+repair is a re-framing rather than a retraction — the increment lives in that callback
+(`UsbEnumer.c:1097`, its only writer), so a byte of 1 at the wall **is** the callback running once, which is the
+immediate `SignalEvent`'s own notification dispatched when the driver's TPL drops. What the sentence meant, and
+what the 25-second window exists to measure, is that it runs **once and never again**; that is now measured
+rather than argued.
+
+**Part 3, the wall: answered, and phase 1 spent its whole window — in the console, not in a driver.**
+`ANSWER: [0x9be13ce1] 01 -> wrote 0x06 through the stub (b'OK') -> reads back 06`, the wall is re-armed, and it
+is never hit again through the 25 s of phase 1; the phase-1 break-in reads `PollCount = 06`. The guest at that
+moment is at `pc=0x9ccaef68` in an `MZ` at `0x9cc96000`, i.e. rva `0x18f68`. Read against `DxeCore.efi`'s own
+disassembly that is `CacheRangeOperation` (rva `0x18f34`, `.pdata`-bounded `[0x18f34, 0x18fb4)`), whose loop
+is `x21 = Start & -LineSize`, `x22 = Start + Length`, and while `x21 < x22` call the operation on `x21` and then
+`x21 += x19`. The twenty-step trace is exactly that: `x0` walks **forward** in `0x40` steps, `0xa0ec4f80` →
+`0xa0ec4fc0` → `0xa0ec5000`, and the operation being run is the two-instruction thunk `dc civac, x0` / `ret` at
+rva `0x1e260` — `ArmCleanInvalidateDataCacheEntryByMVA`. Its only caller in the image is the function bounded
+`[0x3f2c, 0x4134]`, whose tail is `bl 0x1e5f8` (`ArmEnableInterrupts`), `bl 0x1de68`
+(`ArmDataCacheLineLength`), `adrp x2, 0x1e000 + #0x260`, and a tail branch `b 0x18f34` carrying `x0 = x21` and
+`x1 = x20` — that is `WriteBackInvalidateDataCacheRange ((VOID *)FbBase, FbLength)`, the **last statement** of
+`FrameBufferSerialPortLib.c`'s `SerialPortWrite` (`:276`), whose compiled prologue is the
+`ArmGetInterruptState`/`ArmDisableInterrupts` pair the source shows and whose `.rdata` carries
+`Display_Reserved` (rva `0x21760`) and `Display Reserved` (rva `0x21778`) in the order `GetFrameBufferMemory`
+looks them up. `0xa0ec5000` is inside `Display Reserved`, `0xA0000000 + 0x02400000` (`MemoryMapLib.c:35`), of
+which the panel's own header says the console draws `0x9e3400` — 9.9 MB write-back-invalidated 64 bytes at a
+time, per printed line. So phase 1 found nothing stopped because **nothing is stopped**: the guest is running
+the instrument's own digest loop and the break-in landed in the console print path that loop is driving. A
+second wrapper in the same image, rva `0x18ecc`, is the other one — `dc cvau` (rva `0x1e258`), then `ic ivau`
+(rva `0x1e7fc`), then `isb` (rva `0x1e7dc`), in the order `ArmCacheMaintenanceLib.c:59-82`
+`InvalidateInstructionCacheRange` writes them — named here so the two are not confused; the trace is in the
+second, not the first.
+
+**The census's own call site, and it moves every USB event in this family.** `P2UsbCensus ()` has exactly one
+call site, at the tail of `P2Digest ()` (`uefi/patches/mu-basecore-local.patch:1749`), and `P2Digest ()` is
+called from `CoreDisplayDiscoveredNotDispatched ()` — `MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:2912`, and
+then forty more times inside its own `for (Index = 0; Index < 40; Index++) { P2Hold (); P2Digest (); }` loop at
+`:2914-2917`. That function is itself called **once**, from `DxeMain.c:576`, in `DxeMain` after
+`CoreDispatcher ()` at `:562` and immediately before the Architectural-Protocol assert; `P2Hold` is a bounded
+`volatile` spin of 2,000,000,000 iterations. Three consequences, and all three change how the panels in this
+family read. **First**, `P2 USB n=` is a *pass counter* and not a boot milestone: `mP2Census` increments once
+per census call, so `n` runs to 41 and only the run's own window stops it. **Second**, what separates 4.201
+from the three baselines is how much **free running time the guest was given** and nothing else: `panel4196`,
+`panel4198` and `panel4199` each carry `P2 FREE largest=` once, `P2 WALK` five times and `P2 BIN` four times —
+one pass — against `panel4201`'s 21, 106 and 82 and `panel4201-a`'s 13, 69 and 55. **Third**, `P2 NOLOAD
+total=0 shown=0` and `P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0` are the state *at* that
+call, and "nothing was discovered and left undispatched" is only true once DXE dispatch has finished.
+
+**The clock arithmetic that follows, and it is what puts the xHCI polls, the hub notification and the wall
+inside the instrument's own `CoreConnectController`.** The panel's clock and the probe's differ by the ~90 s the
+payload takes to load — `panel4201.log`'s `Loading DxeCore at 0x009CC96000` is at `90.30s` — and two independent
+anchors fix that offset at 89.8-90.3 s. With it, the panel says: the end of DXE dispatch and pass 1's
+`P2 NOLOAD` at `104.06s`, pass 1's census row at `106.06s`, the first USB driver row
+(`Usb30EnableVbus: Failed to initialize VbusSS for core 1`) at `108.06s`, `P2 RECONN h=9C028D98 s=Success` at
+`133.57s` and `P2 RECONN sup=949+32 cfg=7+32` at `133.82s`, `P2 CONN cc=2 sup=981 cfg=39 all=170` at `133.82s`,
+`P2 RCNN rc=1 re=Success ru=32 rf=32 es=20 er=Success` at `134.07s`, and pass 2 at `146.16s`. The probe says
+its xHCI poll entries at `@17.1s`/`@17.2s`, its hub notification at `@18.2s`, its wall at `@18.7s` and its
+phase-0 break-in at `@43.7s` — panel `107.4s`, `108.7s` and `134.0s`. All four land **between** the census row
+at `106.06s` and the `P2 RECONN h=` row at `133.57s`, and that interval is exactly where `P2UsbCensus` calls
+`P2Reconnect (&GuidUsbCfg)`, whose whole body is `CoreConnectController (Buffer[Index], NULL, NULL, FALSE)` on
+each handle carrying `E722B03F` followed by a `DEBUG` of the returned status. That row is printed **after** the
+call returns, which is why it is 27 s late: the connect is what runs `XhcDriverBindingStart` and
+`UsbRootHubInit`, and the connect is what the wall was inside. `sup=949+32` and `cfg=7+32` are the 32
+`Supported` calls and 32 config accesses that connect added. Then it returns, `P2 GATE`/`P2 CONN`/`P2 RCNN`
+print, the pass ends, `P2Key` prints, and pass 2's census reads the same machine one `CoreConnectController`
+further along. The same arithmetic explains the baselines' own panels, which stop producing new rows at
+`108.31s` (`panel4199`) — probe `18.5 s`, the moment the guest reached the wall and stayed there.
+
+**What the census then says about this machine, in nineteen consecutive passes.** Pass 1's row is the only
+pre-connect reading and therefore the only one comparable across runs, because it is the same code point in the
+same state: `P2 USB n=1 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77`, byte for byte the row
+that `panel4196`, `panel4198` and `panel4199` each carry. Passes 2 through 19 read
+`pciio=1 usb2hc=1 usbio=0 blkio=0 fs=0` and never anything else, with `all=139`, `cfg=1` and `loaded=77`
+constant across all of them, and `P2 KEY 6/69 err=Device Error at=27 free=4096 miss=-1` is the run's last word.
+So the state at the end of this machine's DXE dispatch is 139 handles, one of them carrying the USB config
+protocol, and **no** handle carrying `PciIo`, `Usb2Hc`, `UsbIo`, `BlockIo` or `SimpleFileSystem`; the
+`usb2hc=1` that follows is the instrument's own `CoreConnectController` and not the machine's, in the same way
+and for the same reason that whatever lies past the wall is downstream of the write that answered it.
+
+**decides**: that the payload takes the V2 GIC path, programs `ICCICR` at base 0 (block 0 of the redirect) and
+`ICDDCR` at `0x17A00000`, and stores through `IoLib`'s `MmioWrite32` at `ArmGicV2Dxe.c:632`/`:635`/`:486`/`:463`
+— read off one `Z2` hit whose `pc` and `lr` both land where the tree's own image says they must; that
+`UsbRootHubEnumeration` runs exactly once, moving `PollCount` 0 → 1 and never again, and that 25 s at a 100 ms
+period is not enough to deliver a second notification; that the wall's answer takes and is not revisited; that
+the guest at the phase-1 break-in is inside `WriteBackInvalidateDataCacheRange` over the `Display Reserved`
+framebuffer, flushed per printed line; and that every `P2 USB`, `P2 RECONN`, `P2 GATE`, `P2 CONN` and `P2 RCNN`
+row in this run belongs to a **41-pass loop the instrument itself runs at the end of DXE dispatch**, `P2Reconnect`
+having begun `CoreConnectController` inside pass 1.
+**corrects**: 4.199's and 4.200's placement of the stop. The driver named is right — `UsbRootHubInit` is where
+the guest stands — but it stands there *inside* the instrument's own one-shot `CoreConnectController` in
+`P2Reconnect`, not inside DXE dispatch, which ended at `P2 NOLOAD total=0` ~2 s before the first xHCI poll
+entry; and the header sentence *"HUB NOTIFY never fires"* is falsified by `PollCount = 01` at the wall, so what
+runs once is the callback and what never comes is the second notification. It also corrects a reading of 4.201's
+own first log, that the extra `P2 USB` rows were the guest getting further: they are passes of one loop, and the
+`pciio=1 usb2hc=1` they settle on is downstream of the connect the census makes.
+**does not decide**: whether the connect that the wall was inside is the one that later turns `usb2hc` to 1, or
+whether an earlier connect at another handle did (`P2 CONN cc=2` counts two config handles while the panel kept
+one `P2 RECONN h=` line, and a row lost to a screen wipe is not a row that was never printed); how many of the
+41 passes the machine would reach if left alone, since the window closed at 19; and the two things 4.200 left
+open that this step does not touch, the seed/redirect byte-order question and whether `XhcDriverBindingStart`
+returned success.
+**carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the fourteen-rung
+ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and the EL3 stub's
+three fabricated structures all stand, and the panel's own header says so. The GIC redirect and the zeroed
+interrupt controller are not new; this step only confirms by execution what 4.200 derived from the map. And one
+cost is stated in the driver's own terms rather than hidden: from the moment `[x19+201]` is written the run is
+no longer a root hub waiting for its timer, it is a root hub handed the notifications a working controller would
+have supplied, and `--wallanswer 1` bounds that to one write.
+**not an action**: no `fastboot` command, no console read from the device, and no seed written anywhere but the
+QEMU command line.
+**device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+`lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken from
+this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow
+needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out screencap -p` still
+returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that photograph exists.
+Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
+they were. Nothing was flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
