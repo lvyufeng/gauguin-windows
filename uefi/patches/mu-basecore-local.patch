@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..ff51fd76 100644
+index d7c7147e..73701216 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,839 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,972 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -379,6 +379,8 @@ index d7c7147e..ff51fd76 100644
 +extern UINTN  gP2ConnCfg;
 +extern UINTN  gP2SuppCalls;
 +extern UINTN  gP2SuppCfg;
++extern UINTN  gP2EmuSupp;
++extern UINTN  gP2EmuStatus;
 +
 +//
 +// P2BRINGUP: one result character per Apriori entry, in promotion order - which
@@ -836,6 +838,90 @@ index d7c7147e..ff51fd76 100644
 +//
 +STATIC UINTN  mP2Census = 0;
 +
++//
++// P2RECONN: 4.182 measured that the E722B03F handle is connected exactly once in the
++// whole boot (`cc=1`), that the connect happens inside UsbConfigDxe's own entry point
++// printed as `K 57`, and that XhciPciEmulation is dispatched at `K 73` -- sixteen slots
++// later. So the emulation is never offered the handle. That leaves the *repair* question
++// open in a way one more passive reading cannot settle, because there are two candidate
++// barriers and either alone produces the census's `pciio = 0`:
++//
++//   - the ordering (4.182): nothing connects the handle after K 73;
++//   - the sentinel (4.181): even offered the handle, `[iface+0x8C]` is `0x00010000` and
++//     not the `1` the emulation's `Supported` requires, so it returns EFI_UNSUPPORTED.
++//
++// This *performs* the missing connect -- once, after dispatch has finished -- and reads
++// the emulation's own answer. `s=Unsupported` says both barriers are real and
++// independent, which is what 4.182 asserts and has not tested. `s=Success` says 4.181's
++// reading of the word at `+0x8C` does not describe the interface the emulation is handed
++// at connect time, and the ordering was the whole story. Neither answer is reachable
++// from a probe that only reads, which is why this one acts.
++//
++// One-shot, and that is load-bearing: P2Digest repeats by design so the panel settles
++// into a steady state (see the note above the loop), and a probe that connected on every
++// pass would report a different system on pass 2 than on pass 1. The status and the
++// counter deltas therefore go into `P2 CONN`, which repeats, and not into a line of
++// their own, which the next wipe would take.
++//
++STATIC BOOLEAN  mP2ReconnDone    = FALSE;
++STATIC UINTN    mP2ReconnStatus  = 0;
++STATIC UINTN    mP2ReconnNewSupp = 0;
++STATIC UINTN    mP2ReconnNewCfg  = 0;
++
++STATIC
++VOID
++P2Reconnect (
++  IN EFI_GUID  *Protocol
++  )
++{
++  EFI_STATUS  Status;
++  EFI_HANDLE  *Buffer;
++  UINTN       Number;
++  UINTN       Index;
++  UINTN       SuppBefore;
++  UINTN       CfgBefore;
++
++  if (mP2ReconnDone) {
++    return;
++  }
++
++  mP2ReconnDone = TRUE;
++  Number        = 0;
++  Buffer        = NULL;
++  Status        = CoreLocateHandleBuffer (ByProtocol, Protocol, NULL, &Number, &Buffer);
++  if (EFI_ERROR (Status) || (Buffer == NULL)) {
++    mP2ReconnStatus = (UINTN) Status;
++    return;
++  }
++
++  //
++  // Recursive = FALSE. The point is to offer the handle to the bindings, not to let the
++  // core cascade through whatever a successful bind would publish: if the emulation does
++  // take the handle, `P2 SUPP` and the counters say so without this step also walking a
++  // bus that this machine has no devices on.
++  //
++  SuppBefore = gP2SuppCalls;
++  CfgBefore  = gP2SuppCfg;
++  for (Index = 0; Index < Number; Index++) {
++    Status = CoreConnectController (Buffer[Index], NULL, NULL, FALSE);
++    DEBUG ((DEBUG_ERROR, "P2 RECONN h=%p s=%r\n", Buffer[Index], Status));
++    mP2ReconnStatus = (UINTN) Status;
++  }
++
++  mP2ReconnNewSupp = gP2SuppCalls - SuppBefore;
++  mP2ReconnNewCfg  = gP2SuppCfg - CfgBefore;
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 RECONN sup=%d+%d cfg=%d+%d\n",
++    SuppBefore,
++    mP2ReconnNewSupp,
++    CfgBefore,
++    mP2ReconnNewCfg
++    ));
++
++  CoreFreePool (Buffer);
++}
++
 +STATIC
 +UINTN
 +P2HandleCount (
@@ -901,13 +987,26 @@ index d7c7147e..ff51fd76 100644
 +    }
 +
 +    Words = (UINT32 *) Interface;
++    //
++    // P2RECONN: two rows, not one. The single row this replaces was 94 columns and the
++    // console is 90, so its last four characters - the ones that matter, `w8c` - were
++    // carried on the row below and step 4.181 read it short before catching itself two
++    // steps later. `%p` is 16 characters twice and `%08x` is 8 three times, so the row
++    // cannot be made short enough by trimming; it has to be cut in two, and cutting it
++    // where the words split (the version/`+0x04` pair, then the method pointer and the
++    // two gated words) keeps each half readable on its own.
++    //
 +    DEBUG ((
 +      DEBUG_ERROR,
-+      "P2 GATE h=%p i=%p w00=%08x w04=%08x w80=%08x w88=%08x w8c=%08x\n",
++      "P2 GATE h=%p i=%p w00=%08x w04=%08x\n",
 +      Buffer[Index],
 +      Interface,
 +      Words[0],
-+      Words[1],
++      Words[1]
++      ));
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 GATE2 w80=%08x w88=%08x w8c=%08x\n",
 +      Words[0x80 / 4],
 +      Words[0x88 / 4],
 +      Words[0x8C / 4]
@@ -927,7 +1026,23 @@ index d7c7147e..ff51fd76 100644
 +  // Printed on its own row and not appended to P2 USB, because that row is 70 columns
 +  // already and the console is 90 wide: a probe line that reaches the last column has
 +  // its tail continued on the row below, which is how step 4.181's first reading of the
-+  // gate went wrong. This one is 30 columns at its widest.
++  // gate went wrong. Both rows here are under 70 columns at their widest.
++  //
++  // P2RECONN: two rows rather than one, because `%x` on a status can be sixteen
++  // characters and the combined line crossed 90. This console is 90 columns wide and a
++  // full row continues on the row below, so a probe line must stay short or be read with
++  // its tail - the `P2 GATE` row is still 94 and still wrapped, and that is the standing
++  // example of what that costs. `%r` is used for the statuses, which also makes the row
++  // say `Unsupported` instead of a number.
++  //
++  // `rc=1` says the one-shot re-connect has run, `re=` is what CoreConnectController
++  // returned for it, and `ru=`/`rf=` are how many Supported calls and how many of those
++  // against the E722B03F handle it added. All four are zero on the passes before it runs,
++  // which is why `rc` exists: without it, "has not happened yet" and "happened and
++  // changed nothing" are the same row. `es=`/`er=` ask the same question of the
++  // emulation's own binding rather than of the handle - whether it was asked at all, and
++  // with what answer - counted over the whole boot, so unlike a one-shot line they cannot
++  // be lost to a screen wipe.
 +  //
 +  DEBUG ((
 +    DEBUG_ERROR,
@@ -936,6 +1051,16 @@ index d7c7147e..ff51fd76 100644
 +    gP2SuppCalls,
 +    gP2SuppCfg,
 +    gP2ConnAll
++    ));
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 RCNN rc=%d re=%r ru=%d rf=%d es=%d er=%r\n",
++    mP2ReconnDone ? 1 : 0,
++    (EFI_STATUS)mP2ReconnStatus,
++    mP2ReconnNewSupp,
++    mP2ReconnNewCfg,
++    gP2EmuSupp,
++    (EFI_STATUS)gP2EmuStatus
 +    ));
 +}
 +
@@ -981,6 +1106,14 @@ index d7c7147e..ff51fd76 100644
 +    P2HandleCount (&GuidUsbCfg),
 +    P2HandleCount (&gEfiLoadedImageProtocolGuid)
 +    ));
++
++  //
++  // P2RECONN: before the gate row, so that the row printed below is the interface as it
++  // stands *after* the one-shot re-connect rather than before it. It is one-shot, so on
++  // every pass but the first this is a no-op and the census still describes a system that
++  // stopped changing.
++  //
++  P2Reconnect (&GuidUsbCfg);
 +
 +  P2UsbGate (&GuidUsbCfg);
 +  P2Conn ();
@@ -1172,7 +1305,7 @@ index d7c7147e..ff51fd76 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1316,19 @@ CoreDispatcher (
+@@ -483,11 +1449,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -1192,7 +1325,7 @@ index d7c7147e..ff51fd76 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1360,20 @@ CoreDispatcher (
+@@ -519,6 +1493,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -1213,7 +1346,7 @@ index d7c7147e..ff51fd76 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1751,8 @@ CoreAddToDriverList (
+@@ -896,6 +1884,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -1222,7 +1355,7 @@ index d7c7147e..ff51fd76 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +2166,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +2299,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -1239,7 +1372,7 @@ index d7c7147e..ff51fd76 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2279,29 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2412,29 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1269,7 +1402,7 @@ index d7c7147e..ff51fd76 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2323,87 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2456,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1357,7 +1490,7 @@ index d7c7147e..ff51fd76 100644
      }
  
      //
-@@ -1470,6 +2436,267 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2569,267 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1625,7 +1758,7 @@ index d7c7147e..ff51fd76 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2713,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2846,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -1736,10 +1869,10 @@ index 5a8e3804..2be2f2d3 100644
    Signals all events in the EventGroup.
  
 diff --git a/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c b/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c
-index 64d7474f..b5dc3b00 100644
+index 64d7474f..0714f6a7 100644
 --- a/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c
 +++ b/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c
-@@ -9,6 +9,163 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+@@ -9,6 +9,187 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
  #include "DxeMain.h"
  #include "Handle.h"
  
@@ -1782,10 +1915,20 @@ index 64d7474f..b5dc3b00 100644
 +//
 +STATIC CONST EFI_GUID  mP2GuidUsbCfg = { 0xE722B03F, 0xB250, 0x42CE, { 0x8E, 0xBD, 0x5B, 0xD5, 0x18, 0x12, 0xD0, 0x37 }};
 +
++//
++// P2RECONN: XhciPciEmulation's own firmware-file GUID. Counters keyed on it, rather than
++// on the controller handle, so that "was this binding ever asked" is answerable without
++// also depending on *which* handle it was asked about - which is the whole question 4.183
++// is testing, and the reason a handle-keyed counter cannot answer it.
++//
++STATIC CONST EFI_GUID  mP2GuidXhciEmu = { 0xBEB12BEE, 0xF6E1, 0x11E1, { 0x9F, 0xB8, 0x6C, 0x62, 0x6D, 0xE4, 0xAE, 0xB1 }};
++
 +UINTN         gP2SuppCalls = 0;
 +UINTN         gP2SuppCfg   = 0;
 +UINTN         gP2ConnCfg   = 0;
 +UINTN         gP2ConnAll   = 0;
++UINTN         gP2EmuSupp   = 0;
++UINTN         gP2EmuStatus = 0;
 +STATIC UINTN  mP2SuppShown = 0;
 +
 +#define P2SUPP_SHOWN_MAX  24
@@ -1873,8 +2016,22 @@ index 64d7474f..b5dc3b00 100644
 +  )
 +{
 +  EFI_GUID  FileGuid;
++  BOOLEAN   HaveGuid;
 +
 +  gP2SuppCalls++;
++
++  //
++  // P2RECONN: the emulation's counters are taken here, before the handle test and
++  // regardless of it, so that a `Supported` call made against *any* controller by the
++  // XhciPciEmulation binding is counted. The `P2 SUPP` rows below stay keyed on the
++  // E722B03F handle because they are a transcript of one connect; these are a fact about
++  // a driver, and the two are different questions.
++  //
++  HaveGuid = P2DriverFileGuid (DriverBinding, &FileGuid);
++  if (HaveGuid && CompareGuid (&FileGuid, (EFI_GUID *)&mP2GuidXhciEmu)) {
++    gP2EmuSupp++;
++    gP2EmuStatus = (UINTN) Status;
++  }
 +
 +  if (!P2CarriesUsbCfg (ControllerHandle)) {
 +    return;
@@ -1893,7 +2050,7 @@ index 64d7474f..b5dc3b00 100644
 +
 +  mP2SuppShown++;
 +
-+  if (P2DriverFileGuid (DriverBinding, &FileGuid)) {
++  if (HaveGuid) {
 +    DEBUG ((DEBUG_ERROR, "P2 SUPP %g s=%r\n", &FileGuid, Status));
 +  } else {
 +    DEBUG ((DEBUG_ERROR, "P2 SUPP img? db=%p c=%p s=%r\n", DriverBinding, ControllerHandle, Status));
@@ -1903,7 +2060,7 @@ index 64d7474f..b5dc3b00 100644
  //
  // Driver Support Functions
  //
-@@ -78,6 +235,15 @@ CoreConnectController (
+@@ -78,6 +259,15 @@ CoreConnectController (
      return Status;
    }
  
@@ -1919,7 +2076,7 @@ index 64d7474f..b5dc3b00 100644
    if (gSecurity2 != NULL) {
      //
      // Check whether the user has permission to start UEFI device drivers.
-@@ -624,6 +790,19 @@ CoreConnectSingleController (
+@@ -624,6 +814,19 @@ CoreConnectSingleController (
      }
    }
  
@@ -1939,7 +2096,7 @@ index 64d7474f..b5dc3b00 100644
    //
    // Loop until no more drivers can be started on ControllerHandle
    //
-@@ -646,6 +825,12 @@ CoreConnectSingleController (
+@@ -646,6 +849,12 @@ CoreConnectSingleController (
                                    RemainingDevicePath
                                    );
          PERF_DRIVER_BINDING_SUPPORT_END (DriverBinding->DriverBindingHandle, ControllerHandle);

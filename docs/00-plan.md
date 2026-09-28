@@ -1277,6 +1277,39 @@ Work:
 > `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`. No device was touched. See
 > `docs/08` step 4.182.
 
+> **Step 4.183 — the emulation's `Supported` *is* asked, once the handle is offered after dispatch,
+> and it answers `EFI_UNSUPPORTED`.** 4.182 asserted that the ordering barrier and 4.181's sentinel
+> were independent; that was an inference, because 4.181 read the two words at *census* time and a
+> census runs after dispatch. Separating "the ordering is the whole story" from "both barriers are
+> real" needs the ordering removed, and `Supported` has one call site, so the question cannot be asked
+> without connecting the controller — this step acts rather than reads. `P2Reconnect` was added to
+> `Dispatcher.c` and called from `P2UsbCensus` before `P2UsbGate`, one-shot and with `Recursive =
+> FALSE`; the outcome goes into a repeating `P2 RCNN` row rather than a line of its own, because
+> `P2Digest` repeats by design and a probe that connected on every pass would make the panel stop
+> being a steady state. `P2SuppNote` now resolves the caller's file GUID *before* the handle test and
+> keeps `gP2EmuSupp`/`gP2EmuStatus` keyed on `BEB12BEE` itself, so "was this driver ever asked" no
+> longer depends on which handle it was asked about. The owed `P2 GATE` split is done too:
+> `P2 GATE h=… i=… w00=… w04=…` (55 columns) plus `P2 GATE2 w80=… w88=… w8c=…` (47), replacing a
+> 94-column row on a 90-column console. Patch regenerated (14 files, 2021 insertions, 23 deletions);
+> rebuilt to `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,173,504 B, `sha256 43d8d7ab…`; the
+> base did not move a fourth time (`0x9C40B000`, same `+0x346C`); the new format strings were read
+> back out of the built inner FVMAIN before the run. **The reading, one distinct line across all 24
+> census passes**: `P2 SUPP n=17` — 17 bindings exist after dispatch, against the 7 that existed at
+> `K 57` — and among the 17 rows is `P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Unsupported`;
+> `P2 RECONN h=9C028D98 s=Not Found`, `sup=949+17 cfg=7+17`; `P2 GATE2 … w88=00000001
+> w8c=00010000` read unwrapped 24 of 24; `P2 CONN cc=2 sup=966 cfg=24 all=170`; `P2 RCNN rc=1 re=Not
+> Found ru=17 rf=17 es=20 er=Unsupported`. So the emulation is offered the handle, **is asked**, and
+> refuses; `all` rose by exactly one, so the re-connect did not recurse; and `es=20` says its binding
+> was asked 20 times across the boot, 19 of them about other handles — it was loaded and working all
+> along, and this handle was the one thing it was never offered. **This eliminates one of 4.182's
+> three repairs**: re-connecting the handle after `K 73` does not work. Two remain and they are not
+> equally cheap — reorder the Apriori (a platform change this project can make and re-measure), or
+> change the sentinel `UsbStartController` writes (inside a shipped binary this project cannot
+> rebuild). That is a decision, not a measurement, and it is the next step. Instrument:
+> `P2Reconnect`, `gP2EmuSupp`/`gP2EmuStatus` (added), `P2 GATE` split,
+> `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`. No device was touched. See
+> `docs/08` step 4.183.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

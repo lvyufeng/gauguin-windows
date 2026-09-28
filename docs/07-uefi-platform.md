@@ -3591,6 +3591,27 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `tools/build-apriori-variant.sh`. No firmware source outside those two files was changed, no device
 > was touched. See `docs/08` step 4.182.
 
+> **Step 4.183 — reordering is the only repair left that this platform can make.** 4.182 listed three
+> candidate fixes for the unreachable `XhciPciEmulation` binding: reorder `APRIORI.inc`, re-connect
+> the `E722B03F` handle after `K 73`, or change the sentinel `UsbStartController` writes. This step
+> tests the second by performing it — a one-shot `CoreConnectController` on the `E722B03F` handle from
+> DxeCore's own digest, after dispatch, `Recursive = FALSE` — and it **does not work**: with 17 driver
+> bindings present instead of 7, `XhciPciEmulation` (`BEB12BEE-…`) is offered the handle, is asked, and
+> answers `EFI_UNSUPPORTED`, exactly as 4.181's sentinel reading predicted. `P2 RECONN h=9C028D98 s=Not
+> Found`, `P2 CONN cc=2 sup=966 cfg=24 all=170`, `P2 RCNN … es=20 er=Unsupported`. So the ordering and
+> the sentinel are two independent barriers, and removing either alone leaves the binding impossible.
+> The platform consequence is the useful part: of the two remaining repairs, only the Apriori
+> reordering is a change this repository can make — the sentinel is written inside the shipped
+> `UsbConfigDxe`, and 4.181 already established that the three Bitra variants share the convention, so
+> no binary swap avoids it. What is *not* decided is whether reordering is sufficient: 4.181's evidence
+> says the interface the platform produces carries `+0x8C = 0x00010000` regardless of when it is
+> offered, so a reorder changes *when* the emulation is asked without satisfying the gate it then
+> applies — which means the honest next platform question is whether the two changes are jointly
+> necessary, and that is a decision to be made before another build. Instrument: `P2Reconnect` (added), `gP2EmuSupp`/
+> `gP2EmuStatus` (added), `Mu_Basecore/.../Dispatcher/Dispatcher.c`,
+> `Mu_Basecore/.../Hand/DriverSupport.c`, `tools/build-apriori-variant.sh`. No firmware source outside
+> those two files was changed, no device was touched. See `docs/08` step 4.183.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

@@ -37651,3 +37651,209 @@ writes `0x00010000`" is the next question, and the phone still gets a vote in it
   `lsusb` shows only root hubs and the host's own mouse. Nothing was written to it at any point.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
   ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.
+
+## Step 4.183 — the emulation's `Supported` **is** asked, once the handle is offered to it after dispatch, and it answers `EFI_UNSUPPORTED`: so the ordering 4.182 found and the sentinel 4.181 found are two independent barriers, and "re-connect the handle" is not a repair
+
+### What 4.182 left, and why one more reading could not settle it
+
+4.182 ended with two candidate barriers to `XhciPciEmulation` binding, and stated that they are
+independent:
+
+> *"the ordering (4.182): nothing connects the handle after `K 73`"* — and *"the sentinel (4.181):
+> even offered the handle, `[iface+0x8C]` is `0x00010000` and not the `1` the emulation's `Supported`
+> requires, so it returns `EFI_UNSUPPORTED`."*
+
+Both are statements about what the code *would* do. The first was measured (4.182's `cc=1`, the seven
+bindings, the `K 57`/`K 73` gap). The second was inferred: 4.181 read the two words off an interface at
+*census* time, and a census runs after the digest, which runs after dispatch — so nothing in either
+step shows that the interface the emulation would be handed at *bind* time carries the same words.
+
+The only way to separate "the ordering is the whole story" from "both barriers are real" is to remove
+the ordering and see whether the binding takes the handle. That is an action, not an observation:
+`Supported` is called from exactly one place, so there is no way to ask the question without
+connecting the controller.
+
+### The instrument, and the two things it had to be careful about
+
+`P2Reconnect (EFI_GUID *)` was added to `Mu_Basecore/…/Dispatcher/Dispatcher.c` immediately after
+`mP2Census`, and called from `P2UsbCensus` **before** `P2UsbGate` so that the gate row describes the
+interface as it stands after the connect rather than before it:
+
+```c
+if (mP2ReconnDone) { return; }
+mP2ReconnDone = TRUE;
+SuppBefore = gP2SuppCalls;  CfgBefore = gP2SuppCfg;
+for (Index = 0; Index < Number; Index++) {
+  Status = CoreConnectController (Buffer[Index], NULL, NULL, FALSE);
+  DEBUG ((DEBUG_ERROR, "P2 RECONN h=%p s=%r\n", Buffer[Index], Status));
+  mP2ReconnStatus = (UINTN) Status;
+}
+```
+
+Two design notes, both of which decide whether the reading is trustworthy:
+
+- **It is one-shot, and that is load-bearing.** `P2Digest` repeats by design — the framebuffer console
+  has no scrollback, so the digest is printed 41 times so that whatever is on the screen whenever
+  someone looks is the reading. A probe that connected on every pass would make pass 2 a different
+  system from pass 1, and the panel would stop being a steady state. So the connect happens once, and
+  its *outcome* goes into `P2 CONN`/`P2 RCNN`, which repeat, rather than into a line of its own, which
+  the next wipe would take.
+- **`Recursive = FALSE`.** The point is to offer the handle to the bindings, not to let the core
+  cascade through whatever a successful bind would publish. `all` went from `169` to `170` — exactly
+  one more `CoreConnectController` — which is the check that this stayed true.
+
+One counter had to move to answer a question the handle-keyed ones cannot. `P2SuppNote` now resolves
+the caller's firmware-file GUID **before** the `E722B03F` test and keeps two counts keyed on
+`BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1` itself:
+
+```c
+UINTN gP2EmuSupp = 0;      // Supported calls made *by the emulation's binding*
+UINTN gP2EmuStatus = 0;    // ... and the last answer it gave
+```
+
+A handle-keyed count cannot answer "was this driver ever asked"; a driver-keyed one cannot say about
+what. The rows stay handle-keyed because they are a transcript of one connect, and these are a fact
+about a driver.
+
+`P2 GATE` was also split into two rows, which 4.181 and 4.182 both said was owed and neither did:
+
+```
+P2 GATE h=%p i=%p w00=%08x w04=%08x      (55 columns)
+P2 GATE2 w80=%08x w88=%08x w8c=%08x      (47 columns)
+```
+
+The single row it replaces was 94 columns on a 90-column console, so its last four characters — the
+`w8c` word, the one that matters — were carried on the row below. `%p` is 16 characters twice and
+`%08x` is 8 three times, so the row could not be trimmed short enough; it had to be cut, and it is cut
+where the words split.
+
+`tools/regen-mu-basecore-patch.sh` regenerated the patch — **14 files changed, 2021 insertions(+),
+23 deletions(-)** — and `tools/build-apriori-variant.sh xhci-host` rebuilt through all four gates.
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (**new**, re-connect probe) | 1,173,504 | `43d8d7abb83656d60588efad038070c0a8b7b31ae6d5976600f0bedce4e76cbc` |
+| `/tmp/xhci-reconn-payload.raw` (inflated outer blob) | 3,145,840 | `947af18c8c760205b2e0a5c834cfea2a36e8ed6c4d01657251ec6e4f0c426e2b` |
+
+The new format strings were read back **out of the built inner FVMAIN** before the run
+(`fvmain_of_fd`), which is how the previous build's missing `--xhci-host` was caught: all five present,
+and the old 94-column `P2 GATE` format string absent.
+
+Pass 1 (`run35-plain.sh`) is spent only to re-read the module base, and it did not move a fourth time:
+`PC 0x00009C40E46C (0x00009C40B000+0x0000346C) [ 0] DALSys.dll`, `FAR 0xAFAFAFAF…`. It carries no
+instrument reading of its own — it dies *before* the digest block, so no `P2` row appears in its panel
+at all. Pass 2 (`run35.sh`, `BASE=0x9c40b000`, `gdbprobe35.py`, 280 s) reaches the digest, **24 census
+passes**.
+
+### The reading
+
+The reconnect fires on the first census pass. On that pass the panel carries, in order:
+
+```
+306 |P2 USB n=1 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77|
+307 |P2 SUPP n=17|
+308 |P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Unsupported|
+309 |P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Unsupported|
+310 |P2 SUPP B7F50E91-A759-412C-ADE4-DCD03E7F7C28 s=Unsupported|
+311 |P2 SUPP 9FB4B4A7-42C0-4BCD-8540-9BCC6711F83E s=Unsupported|
+312 |P2 SUPP 1FA1F39E-FEFF-4AAE-BD7B-38A070A3B609 s=Unsupported|
+313 |P2 SUPP 2D2E62CF-9ECF-43B7-8219-94E7FC713DFE s=Unsupported|
+314 |P2 SUPP 6B38F7B4-AD98-40E9-9093-ACA2B5A253C4 s=Unsupported|
+315 |P2 SUPP 51CCF399-4FDF-4E55-A45B-E123F84D456A s=Unsupported|
+316 |P2 SUPP 51CCF399-4FDF-4E55-A45B-E123F84D456A s=Unsupported|
+317 |P2 SUPP 408EDCEC-CF6D-477C-A5A8-B4844E3DE281 s=Unsupported|      (x5, rows 317-321)
+322 |P2 SUPP CCCB0C28-4B24-11D5-9A5A-0090273FC14D s=Unsupported|
+323 |P2 SUPP 240612B7-A063-11D4-9A3A-0090273FC14D s=Unsupported|
+324 |P2 SUPP 961578FE-B6B7-44C3-AF35-6BC705CD2B1F s=Unsupported|
+325 |P2 RECONN h=9C028D98 s=Not Found|
+326 |P2 RECONN sup=949+17 cfg=7+17|
+327 |P2 GATE h=9C028D98 i=9BECC3B8 w00=00010004 w04=00000000|
+328 |P2 GATE2 w80=9BEBC650 w88=00000001 w8c=00010000|
+329 |P2 CONN cc=2 sup=966 cfg=24 all=170|
+330 |P2 RCNN rc=1 re=Not Found ru=17 rf=17 es=20 er=Unsupported|
+```
+
+**Row 309 is the whole step.** `BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1` — `XhciPciEmulation` — is
+offered the `E722B03F` handle, because the connect is made after dispatch has finished, and it answers
+`s=Unsupported`. `B7F50E91` (`XhciDxe`) is offered it too and declines for the same reason.
+
+The four counters say what happened, and they are one distinct line across all 24 census passes:
+
+- **`n=17`** — 17 driver bindings exist at the moment of the re-connect, against the **7** that existed
+  at `K 57` (4.182's reading, still on the panel as row 214). The gap between 7 and 17 is exactly the
+  set of drivers dispatched between `K 57` and the digest, and `XhciPciEmulation` (`K 73`) is in it.
+- **`ru=17` / `rf=17`** — the single re-connect made 17 `Supported` calls, all 17 against the
+  `E722B03F` handle. 17 bindings, 17 calls, one loop iteration: the scan was complete.
+- **`cc=2` / `all=170`** — the handle has now been connected twice in the boot, and the core's total
+  `CoreConnectController` count went up by exactly one. So the re-connect did not recurse and nothing
+  it triggered created a handle.
+- **`re=Not Found`** — `CoreConnectController` returned `EFI_NOT_FOUND`: no driver bound the
+  controller. That is the expected code for "every binding was asked and every one declined".
+- **`es=20` / `er=Unsupported`** — the emulation's own binding was asked **20** times across the boot,
+  one of them the re-connect's, and the last answer it gave was `Unsupported`. So the driver was
+  loaded, running, and being offered controllers from `K 73` onward the whole time; the one thing it
+  was never offered was *this* handle.
+
+### What this decides
+
+**The two barriers are independent, and 4.182's assertion is now a measurement.** 4.181's sentinel
+reading survives the strongest test available to it: the interface is handed to the emulation with
+`w88=00000001 w8c=00010000` — read directly, unwrapped, on rows 327/328, 24 times out of 24 — and the
+emulation refuses.
+
+**And it eliminates one of 4.182's three candidate repairs.** 4.182 listed: reorder the Apriori;
+re-connect the handle after `K 73`; change what `UsbStartController` writes. The second is now tested
+and **does not work** — re-connecting is not a repair, because the emulation declines the interface
+for a reason that has nothing to do with when it is asked. Two candidates remain, and they are not
+equally cheap: reordering the Apriori is a platform change this project can make and re-measure, and
+the sentinel is written by a shipped binary this project cannot rebuild. That is the shape of the next
+step, and it is a decision rather than a measurement.
+
+### Rows
+
+- **instrument** (three files): `Dispatcher.c` — `P2Reconnect` (one-shot, `Recursive = FALSE`), its
+  call from `P2UsbCensus` before `P2UsbGate`, and the `P2 RCNN` row split out of `P2Conn`;
+  `Hand/DriverSupport.c` — `mP2GuidXhciEmu`, `gP2EmuSupp`, `gP2EmuStatus`, and `P2SuppNote` restructured
+  so the file-GUID lookup happens before the handle test; `P2UsbGate` split into `P2 GATE` + `P2 GATE2`;
+  `tools/regen-mu-basecore-patch.sh` (14 files, 2021 insertions, 23 deletions);
+  `tools/build-apriori-variant.sh xhci-host`; `run35-plain.sh`, `gdbprobe35.py`, `run35.sh`
+  (`BASE=0x9c40b000`).
+- **acts, for the first time in this project**: this probe changes the system rather than reading it.
+  That is deliberate and bounded — one connect, `Recursive = FALSE`, once — and the counters
+  (`all=170`, `cfg=24`, 24 identical `P2 CONN` rows) are the evidence that the bound held.
+- **answers the question 4.182 raised but did not test**: are the ordering and the sentinel two
+  barriers or one? Two. `P2 SUPP BEB12BEE-… s=Unsupported`, `n=17`, `es=20 er=Unsupported`.
+- **eliminates one repair**: re-connecting the handle after `K 73` does not make the emulation bind.
+- **pays the debt 4.181 recorded**: the `P2 GATE` row is now two rows, 55 and 47 columns, and
+  `w8c=00010000` is read with no wrap on 24 of 24 passes. Of the 1222 rows in this panel, 31 are still
+  exactly 90 columns and all of them are pre-existing (`P2 APRI first/last` and the `smem_get_addr`,
+  `DALLOG` and `PlatformUpdateSmB` lines); no new probe row is.
+- **reproduces 4.181 and 4.182 exactly**: the gate words, the handle `h=9C028D98`, the interface
+  `i=9BECC3B8`, the seven `P2 SUPP` rows at `K 57`, `BEB12BEE` at `K 73`, `P2 STATS discovered=83
+  apriori=69/70 started=76 diag=7 noload=0`, `K 83 SO 76/69`.
+- **base unmoved for the fourth step in a row**: `0x9C40B000`, same `+0x346C`.
+- **closes**: 4.182's *"does not close: which repair to make"* — partly, and in the direction that
+  removes an option rather than adding one; and 4.181's and 4.182's owed `P2 GATE` split.
+- **does not close**: **which of the two remaining repairs to make** (reorder the Apriori, or change
+  the sentinel `UsbStartController` writes — the second needs a binary this project cannot rebuild);
+  the first P3 clause; and the phone. The phone's predictions are unchanged and now stack: a device run
+  should print `P2 SUPP n=` with more than seven, `cc` greater than `1` only if something re-connects,
+  and `w88=00000000 w8c=00000001` if its PMIC path reaches `UsbStartController (0, 1)`.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression;
+  `0x12000c`, QEMU RAM here and the clock controller's register on the board; the seeded SMEM
+  target-info word, without which no run carries the digest rows; and this repository tracks no INF of
+  a shipped binary.
+- **a limit this step does add**: the re-connect is made from DxeCore's own digest, which runs after
+  the dispatcher has finished. A *consumer* on the phone may connect the handle at a different point
+  in its own bring-up, and nothing here models that. What is measured is "given the handle after
+  dispatch, the emulation refuses" — not "no ordering anywhere in any firmware would help".
+- **not an action**: nothing was flashed, no partition was written, no stub, firmware source or
+  Microsoft image was changed beyond the probes described, and the only behaviour changed is inside
+  DxeCore under this project's own instrument. `userdata` (107 GB, unbacked), the partition table and
+  the firmware LUN remain untouched. The porting goal is unchanged and unmet: no Windows 11 image runs
+  on gauguin, P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun,
+  and the end state remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing.
+  Nothing was written to it at any point.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
+  ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.
