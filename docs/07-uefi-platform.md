@@ -3811,6 +3811,30 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > debt. **The next seed is named, not run**: bit 30 at host `0x40100000`. Nothing was flashed, no partition
 > was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.189.
 >
+> **Step 4.190 — the vote's poll is what the run was waiting on, and setting it moves the wall one row.**
+> 4.189 named its next seed — bit 30 of `0x100000` — and left it unrun. Run here as four bytes of
+> `0x40000000` at host `0x40100000`: under the stage-2 map that is IPA `0x100000`, the declared
+> `{"GCC CLK CTL", 0x00100000, 0x00200000}` region's block 0, whose pool page `0x40000000` is the
+> page 4.188's `0x4011A004` seed already occupies. 4.189's command with one `-device loader` line
+> added and all five of its blobs kept. The probe now single-steps **nine** instructions at `0x11734`
+> and reads both registers back through the guest, which **confirms on the machine what 4.189 could
+> only read out of the file**: `w10 = 0x61` at `pc=0x9C37174C` is the caller's leftover and
+> `w10 = 0x1` at `pc=0x9C371750` is the **mask**, `w9` falls `0x20`→`0x0` as `ldr w9,[x8]` completes,
+> the guest reads back `[0x152010] = 01000000` and `[0x100000] = 00000040`, and at the poll's return
+> `0x11760`, **`w0 = 0x1`** — the helper `0x9B00` returns on its first pass with the bit set,
+> `cbz w8,0x11770` is not taken, and the `Activate Failure` log and the `HALclkFabiaPLL.c +184` assert
+> are never reached. The console then runs **exactly one row further**: `Unable to set rail[…]` twice
+> against 4.189's once, the failure line and the assert block **gone**, and a freeze at **105.57 s** —
+> the same instant 4.189 froze. The panel is 253 rows against 4.189's 328, its header over-counting by
+> the same 80-row in-place rewrite, with the four GAP(s) at the same four instants and the two panels
+> agreeing row for row to the tail. **So the seed relocated a wall rather than removing one**, and it
+> demonstrates rather than argues 4.188's *"the same kind of stop one register down"*. **Not
+> established**: where the run stops now, whether that stop is a self-branch or another bounded poll,
+> and whether the RSC/rail rows and `gNpaClientSS1Bus is NULL` are one debt. **Named for the next
+> step**: a probe that samples the PC instead of watching five named sites. The command line now
+> carries six fabricated loader blobs. Nothing was flashed, no partition was written,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.190.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

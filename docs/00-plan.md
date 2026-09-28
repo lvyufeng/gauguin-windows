@@ -1546,6 +1546,38 @@ Work:
 > `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc61…`, and the phone's state is 4.188's (TWRP
 > `d25f844e`, `fastboot devices` empty, no photograph supplied). See `docs/08` step 4.189.
 >
+> **Step 4.190 — the vote's poll is what held the run, and pre-setting it moves the wall one row.**
+> 4.189 named its next seed and did not run it. Run here: four bytes of `0x40000000` — bit 30, the
+> poll's own mask — at host `0x40100000`, i.e. IPA `0x100000`, in the declared
+> `{"GCC CLK CTL", 0x00100000, 0x00200000}` region's 2 MB block, whose pool page `0x40000000` is the
+> **same redirected page** 4.188's fifth blob sits on at `0x4011A004`. The run's command line is
+> 4.189's with one `-device loader` line added (`/tmp/cc-vote.bin`, sha256
+> `d88c86f1…`) and all five of 4.189's blobs kept. The probe single-steps **nine** instructions at the
+> vote instead of four, so the load that produces the mask is inside the window, and reads both
+> registers back through the guest's own address space. **The machine now confirms what 4.189 could
+> only read out of the file**: `w10` is `0x61` at `pc=0x9C37174C` (the `ldr`'s own address, a caller's
+> leftover) and `0x1` at `pc=0x9C371750` (the instruction after it) — **the mask is 1** — while `w9`
+> goes `0x20`→`0x0` as `ldr w9,[x8]` completes, and the guest reads back `[0x152010] = 01000000` and
+> `[0x100000] = 00000040`. Then, at the poll's return address `0x11760`, `w0 = 0x1`: **the helper
+> `0x9B00` returns on its first pass with the bit already set**, `cbz w8,0x11770` is not taken, and
+> the `HAL_clk_FabiaPLLEnableVote Activate Failure` log and the `HALclkFabiaPLL.c +184` assert are
+> never reached. The 300-second panel (`work/out/qemu-panel-4.190-vote.txt`, sha256 `caddc293…`, 253
+> rows, the same four GAP(s) at the same four instants as 4.189's) agrees row for row with 4.189's
+> to the tail and differs in exactly two ways: `Unable to set rail[…]` appears **twice** where 4.189
+> had it once, and the failure line and the three-row assert block are **gone**. The console then
+> freezes at **105.57 s** — the same instant 4.189's froze — with nothing for the remaining ~195 s.
+> **So the seed did not remove a wall; it relocated one, one printed row further on.** Which is the
+> answer to 4.188's *"the same kind of stop one register down"*: the stop past the GDSC **is** a rail
+> vote, and what this run was waiting on at the vote **is** the poll — demonstrated, not argued.
+> **Not established**: where the run stops now, and whether that is a self-branch or another bounded
+> poll; whether the `gNpaClientSS1Bus is NULL` row and the RSC rail failures are one debt or several;
+> and the hardware question is untouched, since the bit written here is fabricated by an instrument.
+> **The next move is named**: a probe that **samples the PC** rather than watching five named sites —
+> the first step here that could name a wall it was not told about in advance. The command line now
+> carries **six** fabricated loader blobs, and every row past the vote is said with all six, plus the
+> EL3 stub's three structures, in place. Nothing was flashed, no partition was written,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.190.
+>
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

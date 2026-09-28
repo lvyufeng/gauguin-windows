@@ -39802,3 +39802,212 @@ established**.
   supplied**. Two physical actions are outstanding and neither can be taken from this host: reboot to the
   bootloader, and a screen photograph.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.190 — the vote's poll is what held the run: pre-setting bit 30 of `0x100000` carries the run past 4.189's assert and exactly one row further, where the console freezes at the same instant it froze before
+
+**The question.** 4.189 closed the account of *where* the run stops — `ClockDxe+0x11734`,
+`HAL_clk_FabiaPLLEnableVote`, writing bit 0 at `0x152010` and polling bit 30 of `0x100000` — and
+named the next move rather than running it: *"**the next seed is named rather than guessed: bit 30 at
+host `0x40100000`** — a 4-byte blob carrying `0x40000000` at IPA `0x100000`, which is the same kind
+of fabricated status bit as 4.188's and would carry the run past this poll as that one carried it
+past the GDSC."* Its *does not close* bullet was *"whether the `0x100000` bit-30 poll would pass on
+hardware"*. This step runs that seed, and asks two things of it: whether the vote's poll is in fact
+what the run was waiting on, and what lies past it.
+
+**The seed.** Four bytes of `0x40000000` — bit 30, the poll's own mask, `orr w1, wzr, #0x40000000` —
+written to host `0x40100000`, which is IPA `0x100000` under the stage-2 map: the declared
+`{"GCC CLK CTL", 0x00100000, 0x00200000}` region falls in 2 MB block 0, whose pool page is
+`0x40000000`. That is the **same redirected page** 4.188's fifth blob occupies at `0x4011A004`, one
+offset away from the register 4.189 showed the poll reads. `/tmp/cc-vote.bin`, 4 bytes,
+sha256 `d88c86f15bbea365d658ad95a81d45367c465f7af6f7264fb077f01747ddc77d`.
+
+`work/out/qemu-probe-4.190/run-vote.sh` is 4.189's `run-rail.sh` with **one line added** — a sixth
+`-device loader,file=/tmp/cc-vote.bin,addr=0x40100000,force-raw=on` — and all five of 4.189's blobs
+kept. Removing any of them would move the wall rather than answer the question, since the run reaches
+this vote only because of them.
+
+**The probe, and the four things it now watches.** `work/out/qemu-probe-4.190/voteprobe.py` is
+`railprobe.py` with the same declared `/pmic/target` suppression and the same four breakpoints, plus:
+
+- a fifth breakpoint at **`CLK + 0x11760`**, the instruction the `bl 0x9B00` at `0x1175C` returns to —
+  the first instant at which the poll's answer exists as a register;
+- **nine** single-steps at the vote instead of four, so that `0x1174C` (`ldr w10,[x0,#0x10]`, the
+  mask) and `0x11754` (`str w11,[x8]`, the write) are both *executed* before the probe reads anything
+  back — 4.189 could only read the mask out of the file, because its four steps stopped one
+  instruction short of the load;
+- a **read back through the guest's own address space** of both registers, `0x152010` and `0x100000`,
+  after those nine steps;
+- and a change of failure mode: a stop at none of the five sites is now **logged and continued past**
+  (up to `--maxunknown`, default 12) rather than ending the watch, because what this run is for is the
+  stop *after* the vote.
+
+**The vote, on the machine, all nine instructions.** Verbatim from
+`work/out/qemu-probe-4.190/vote-run.log`:
+
+```
+@15.2s VOTE #1  x0=0x9c389598  name=None
+        rec: 0000000000100000 0000000000152010 0000000000000001 000000009c38b8d0 0000000000000061 0000000000000000
+        lr=0x9c365ed0  rva=0x5ed0
+        step 0 pc=0x9c371738 x8=0x9c38b8d0 w9=0x20 w10=0x61
+        step 1 pc=0x9c37173c x8=0x9c38b8d0 w9=0x20 w10=0x61
+        step 2 pc=0x9c371740 x8=0x152010 w9=0x20 w10=0x61
+        step 3 pc=0x9c371744 x8=0x152010 w9=0x20 w10=0x61
+        step 4 pc=0x9c371748 x8=0x152010 w9=0x20 w10=0x61
+        step 5 pc=0x9c37174c x8=0x152010 w9=0x0 w10=0x61
+        step 6 pc=0x9c371750 x8=0x152010 w9=0x0 w10=0x1
+        step 7 pc=0x9c371754 x8=0x152010 w9=0x0 w10=0x1
+        step 8 pc=0x9c371758 x8=0x152010 w9=0x0 w10=0x1
+        read back through the guest: [0x152010]=01000000  [0x100000]=00000040
+@15.2s AFTER POLL #1  w0=0x1  (bit 0 of w0 = set)
+```
+
+Read against the listing 4.189 recorded, the nine steps are the routine's own first nine
+instructions and they say four things, three of them new:
+
+- **The mask is `1`, and it is now witnessed rather than inferred.** At `pc=0x9c37174c` — the
+  address of `ldr w10,[x0,#0x10]`, one instruction after the probe's old fourth step — `w10` is still
+  `0x61`; at `pc=0x9c371750`, the instruction after it, `w10 = 0x1`. The `0x61` in `w10` through
+  steps 0–5 is a caller's leftover and the load replaces it with the record's `+0x18`, exactly as the
+  disassembly said. **4.189's self-correction is confirmed by the machine it corrected.**
+- **The read of the written register is zero, and the write lands.** `w9` goes `0x20` → `0x0` at step
+  5 (that is `ldr w9,[x8]` at `0x11748` completing) and the guest's own read of `0x152010` after the
+  `str` returns `01000000` — bit 0 set, nothing else. The `0x20` in `w9` before it is another
+  leftover, and it is why the old four-step window could not tell a read from a leftover.
+- **The seeded word is where the poll reads and nothing overwrote it.** The guest's read of `0x100000`
+  returns `00000040` — `0x40000000` little-endian, this step's blob, bit 30. The routine polls that
+  register and never writes it, which the unchanged value confirms.
+- **And the poll passes.** `AFTER POLL #1` at `0x11760` carries `w0 = 0x1`: the helper at `0x9B00`
+  returned on its first pass with the bit already set, rather than falling out of its 2000-iteration
+  loop with zero as it did in every run 4.188 and 4.189 recorded. `cbz w8, 0x11770` is not taken, the
+  `"HAL_clk_FabiaPLLEnableVote Activate Failure"` log at `0x11770` and the `HALclkFabiaPLL.c +184`
+  assert at `0x11788` are never reached, and the run returns to `Clock_SourceOn` at `0x5ED0` with
+  `w0 = 1`.
+
+The probe's own `Z0` insert packets all answered `OK` — the four of 4.189 plus the new one at
+`0x9c371760` — and the base-verification line is again the `WARNING` 4.189 explained: this stub
+answers a read of an unmapped address with zeros, so a single early read cannot tell "wrong base"
+from "not loaded yet", and the evidence the base is right is the four `Z0` `OK`s, the fires, and the
+nine single-step PCs, which are the routine's instructions one after another.
+
+**What the console shows.** `work/out/qemu-panel-4.190-vote.txt`, sha256
+`caddc293039845535ea78446b347b9156f09e708308675858e0bab6390d7820f`: **253 rows**, 4 GAP(s), weakest
+margin 1.00, 43,949 characters under 1.5, over the same 300.2 s and 1198 screens. Its four gaps are
+at **the same four instants** as 4.189's — 90.57 s, 96.57 s, 102.57 s, 103.07 s, with the same
+row-counts — which is the first sign that the two runs share their whole history up to the wall.
+
+Diffed against 4.189's 328-row panel, and accounting for the fact that 4.189's own header over-counts
+by the 80-row in-place rewrite 4.189 documented (241 distinct rows there, 237 here):
+
+| | 4.189 (no seed) | 4.190 (bit 30 seeded) |
+|---|---|---|
+| `Failed to get valid RSC address for rail[…]` | 3 | 3 |
+| `Unable to init rail[…]` | 3 | 3 |
+| `Unable to set rail[…]` | **1** | **2** |
+| `HAL_clk_FabiaPLLEnableVote Activate Failure` | 1 | **0** |
+| `ASSERT HALclkFabiaPLL.c +184: 0` | 1 | **0** |
+
+The two panels agree row for row to their tails. Both runs print, in order, `P2 SUPP
+BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success`, then
+`DALLOG Device [0x0]: DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v`, then
+`SSUsb1InitCommon: gNpaClientSS1Bus is NULL)`. At that point 4.189's run prints the failure line and
+the three-row assert block and stops; this run prints **one more row** — a second `Unable to set
+rail[…]` — and stops. Nothing else differs. **The seed moved the wall by exactly the amount it was
+aimed at: the vote and its assert are gone, and the run is one console row further on.**
+
+**The freeze is at the same instant, and it is still a freeze.** The panel's per-sample progress log
+(`work/out/qemu-probe-4.190/panel4190.log`) logs every sample at which the console changed. Its last
+entry is at **105.57 s**, and there are no further entries for the remaining ~195 s of the window:
+four to five rows changing per 0.25 s sample right up to 105.57 s, then nothing at all. 4.189's run
+froze at the same point in its own history. So this seed did not remove a wall; it **relocated one**,
+and the new one is one printed row further along and is not silent for being quiet — the console
+simply stops.
+
+**What this decides, and what it does not.**
+
+- **It decides that the poll is what the run was waiting on.** The only change between the two runs
+  is four bytes at `0x40100000`, the register the routine polls; the assert that ended 4.189's run is
+  gone, and the console advanced. There is no other reading of that difference.
+- **It decides, on the machine, the two things 4.189 could only read out of the file** — the mask is
+  `1` and the write lands at `0x152010` — and it retires 4.189's `w10 = 0x61` misreading for good,
+  since the load that produces the mask is now inside the window.
+- **It does not decide where the new stop is.** The console's last row names a rail the run could not
+  set, but a `DALLOG … Unable to set rail` row is what the code prints *before* it does anything else,
+  so where the CPU actually is now, whether it is spinning in another bounded poll or halted on
+  another self-branch, is **not established**. The probe's five breakpoints say only that the run does
+  not pass through `0x11734`, `0x11E5C`, the two DALSys sites or `0x11760` again. The next move is a
+  probe that **samples the PC** rather than watching named sites — the first step in this project that
+  would be able to name a wall it was not told about in advance.
+- **It does not decide the hardware question.** The bit 30 written here is fabricated by an
+  instrument, on the same page as 4.188's fabricated bit 31; whether the real `0x100000` bit 30 is
+  set by the time this vote runs on gauguin is untouched by anything in this step.
+- **And the loader now carries six blobs, not five.** 4.188's seed was the fifth of the `-device
+  loader` writes on this command line; this step's is the **sixth**. Verbatim, in the order QEMU
+  applies them: `/tmp/rsc-word.bin` at `0x46C2000C`, `/tmp/rsc-enable.bin` at `0x46C20D18`,
+  `/tmp/pdc-cap.bin` at `0x424A1008`, `/tmp/apcs-clk.bin` at `0x46D21700`, `/tmp/gdsc-clk.bin` at
+  `0x4011A004`, and `/tmp/cc-vote.bin` at `0x40100000`. Each is a value handed to the guest that the
+  guest did not produce, and the last two land on the same redirected 2 MB page. They sit on top of
+  the **three** structures the EL3 stub fabricates, which the panel's own header describes: the SMEM
+  target-info container at `0x1fd4000`, the SMEM `0xc0` word, and the AOP command-DB record. **Every
+  row this run prints past the vote is said with all nine in place**, and the ninth is new here.
+
+**Rows.**
+
+- **instrument**: `work/out/qemu-probe-4.190/voteprobe.py`, sha256
+  `60b5f13ea3ea7c041c7e1694d7b456ac71806f7585810fde6d82e3d7f19ab132`, run by
+  `work/out/qemu-probe-4.190/run-vote.sh`, sha256
+  `a397e2505ca0a66d6a0a58a31fb02eea0e13f84240d417f55e55339713dab6a3`, produced
+  `work/out/qemu-probe-4.190/vote-run.log`, sha256
+  `ab7db17ad71cc5126ba08af11f357f6140c6278444a03fa10af90d69673fa376`, and
+  `work/out/qemu-panel-4.190-vote.txt`, sha256
+  `caddc293039845535ea78446b347b9156f09e708308675858e0bab6390d7820f`. The panel command's exit
+  status is **1**, which is that script's own convention and not an error: `tools/qemu-panel-read.py`
+  ends `return 1 if (gaps or weak or bad_seed or bad_aop or drift) else 0` (line 1694), and this run
+  has 4 GAP(s).
+- **shows**: the vote's bounded poll of `0x100000` bit 30 is the one thing standing between the run
+  and everything after it. With four bytes of `0x40000000` at `0x40100000` the helper returns `1` on
+  its first pass, the `HAL_clk_FabiaPLLEnableVote Activate Failure` line and the `HALclkFabiaPLL.c
+  +184` assert do not appear at all, and the console runs one row further before freezing at the same
+  instant it froze before.
+- **adds**: the machine-level witness of the mask (`w10` `0x61` → `0x1` across `0x1174C`→`0x11750`)
+  and of the write (`[0x152010] = 1` read back through the guest), the guest's read of the seeded
+  register (`[0x100000] = 0x40000000`), the return value of the poll (`w0 = 1` at `0x11760`), and the
+  new seed itself as a named, hashed, four-byte blob.
+- **corrects**: nothing in 4.188 or 4.189. This step confirms 4.189's correction of its own probe log
+  and adds no correction of its own. One process note for provenance: the first launch of
+  `run-vote.sh` was killed by this session's tooling before it produced anything, a second launch was
+  made, and the surviving run is a **single** QEMU and a **single** probe — verified in `ps` — so the
+  panel above is one run and not an interleaving. The stale `vote panel exit=143` text that the two
+  scripts' overlapping writes left at the top of `run-vote.log` is that kill and nothing else.
+- **closes**: 4.189's *"whether the `0x100000` bit-30 poll would pass on hardware"* is **still open**
+  — this step answers it only under an instrument that pre-sets the bit. What it closes is 4.188's
+  *"the same kind of stop one register down"*: the stop past the GDSC **is** a rail vote, and the
+  thing this run was waiting on at the vote **is** the poll, both now demonstrated rather than argued.
+- **does not close**: where the run stops now, and whether that stop is a self-branch or a poll;
+  whether `SSUsb1InitCommon`'s `gNpaClientSS1Bus is NULL` is an absent peer or a second instrument
+  debt; whether the three `Failed to get valid RSC address for rail[…]` pairs and the two
+  `Unable to set rail[…]` rows are the same debt as the vote; why the fault site
+  `DALSys+0x346C` executes twice without killing the run when probe-less runs die there; which build
+  the on-device payload is and why it carries thirteen instruments rather than fourteen.
+- **carries the standing limits unchanged**: nothing was flashed and no partition was written by this
+  project; no stub or Microsoft image was changed; no volume with a patched `UsbConfigDxe` has left
+  this host. Every reading in this step is QEMU's and the device was not read at all.
+  `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, and the stock `boot`
+  restore path (`~/backup/gauguin/images/part-boot.img`, sha256
+  `50ef59beb17e75de1e749b7d261eb41a18d9cca025befb3357e43e239de78ef3`) is unchanged from the `EXPECT`
+  pinned at `tools/restore-stock-boot.sh:36`. `userdata` (107 GB, unbacked), the partition table and
+  the firmware LUN remain untouched.
+- **not an action**: this step read QEMU and not the device; it wrote nothing anywhere but
+  `/tmp/cc-vote.bin` and its own `work/out` artifacts. The porting
+  goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged from 4.188's reading and not re-observed this step. The phone was left
+  in TWRP recovery (`adb devices` = `d25f844e`, `ro.product.board = gauguin`, `adb shell id` =
+  `uid=0(root)`, `2717:ff68` on bus 003) with `fastboot devices` empty, so the P3 `fastboot boot`
+  workflow still needs a physical reboot to the bootloader, and `adb exec-out screencap -p` still
+  returns 53 bytes, so there is still no screenshot route and **no photograph of the 4.187 P3
+  payload's judgement lines has been supplied**. Two physical actions are outstanding and neither can
+  be taken from this host: reboot to the bootloader, and a screen photograph.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
+  ~3.4 s.
