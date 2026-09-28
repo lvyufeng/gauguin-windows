@@ -3691,6 +3691,52 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `tools/patch-usbcfg-sentinel.py` (`--site host,index`), `tools/build-apriori-variant.sh`
 > (`usb-sentinel-host+index`), `gdbprobe38c.py`/`gdbprobe38e.py`. No device was touched. See `docs/08`
 > step 4.186.
+>
+> **Step 4.187 — the zeroed `IMEM Cookie Base` is not why `UFSDxe`'s `ARID 0x0` attach fails; the row above
+> it on the same panel is the instrument's and the attach is not.** The confounder was real and is now
+> measured on both sides. On the plan's side: `tools/qemu-panel-read.py`'s `low_regions` (`:459`) returns
+> **57** regions from the board's generated `MemoryMapLib.c`, `l2_plan` (`:496`) expands each to every 2 MB
+> block it touches and takes the union — **55** blocks, assigned densely from `0x40000000`, pool
+> `0x40000000..0x46E00000`, exactly the figure the instrument's own header prints — and `block_for_ipa`
+> (`:541`) puts `0x146AA000` (`IMEM Cookie Base`) and `0x14680000` (`IMEM Base`) both in block 163 → pool
+> `0x46400000`, and `0x0011A004` (`GCC CLK CTL`) in block 0 → `0x40000000`, which is the same redirect
+> 4.186's `ClockDxe` poll reads. On the run's side: at `UFSDxe` RVA `0x4468`, `x8 = 0x146aa000` and 32 bytes
+> at it are zero. That address is not the probe's guess — it is the value of the platform config key
+> `SharedIMEMBaseAddr` (the driver's literal at RVA `0x14720`), read through the getter `0x4c00` at `0x4444`
+> and dereferenced at `0x445c`, and `uefiplat.cfg:113` is where the number comes from. The compare at
+> `0x4468` (`0x4460: mov w10,#0xdb40`, `0x4464: movk w10,#0xc1f8,lsl #16`) against `0xC1F8DB40` therefore
+> cannot pass, `0x440c` returns failure, and `UFSDxe` prints its own `ERROR: Failed to Get Shared Imem Boot
+> Device type` (`0x14688`, loaded at `0x4324`/`0x4328`) — **a host artifact, and the redirect is why it
+> appears**. The failure is not what makes the attach fail, and the second breakpoint is what says so:
+> `EfiEntry` at `0x2678 bl 0x4304` / `0x267c and w8,w0,#0xff` / `0x2680 cbz w8,0x26a8` is a **fork, not a
+> gate** — the IMEM answer only chooses which of two doors reaches `UfsSmmuConfig` (`0x2684` when the record
+> says type 8, `0x2B5C` when it does not and the `UfsSmmuConfigForOtherBootDev` key, `= 1` at
+> `uefiplat.cfg:149`, is non-zero) — and the `0x2B5C` door never reads IMEM. The probe read `x30` at
+> `UfsSmmuConfig`'s entry as `0x9C2E7B60` = base + `0x2B60`, the return from `0x2b5c: bl 0x24d8`: **this run
+> is on the door with no IMEM read in it.** That confirms 4.141's and 4.142's route independently — at the
+> callee rather than at the branch, in a differently-patched payload and at a different load address — which
+> is what promotes it from one live capture to a behaviour of the build. The same panel places the arm:
+> of `UfsSmmuConfig`'s four failure prints only `UFS IOMMU domain attach ARID 0x0 failed` is present
+> (`domain create failed`, `LocateProtocol failed` and `domain configure failed` are absent — `grep -c` over
+> the 203 rows gives 0, 0, 0, 1), the attach being `0x25F0: ldr x12,[x13,#16]` / `0x25F4: blr x12` called
+> with `x1 = "\_SB_.UFS0"` and `w2 = w3 = 0` and failing into `x19 = #0x8000000000000007` at `0x260C`, which
+> the next row prints as `status 0x7`. So in this run the protocol was obtained, a domain was created and
+> configured, and the **attach is the first of the four steps that failed** — a statement about the model's
+> arm order, with 4.142's caveat (the phone's `HALIOMMUDxe` would have filled the slot this model leaves
+> empty) untouched. Two counts are corrected in place: 4.186's and this step's earlier *"the platform's 55
+> declared low regions"* is **57** regions touching **55** 2 MB blocks. Instrument:
+> `work/out/qemu-probe-4.187/gdbprobe4187.py` and `run.sh` (log `gdb4187-stdout.log`, sha256
+> `ac84dd4bf62b6beea919063c3f5f402cece5ca3142411c487dd38504ffade445`; two `Z0` sites read once each then
+> disarmed, nothing written to guest memory — four probe bugs are recorded as method, because each produced
+> output that read like a measurement) and the panel
+> `work/out/qemu-panel-4.187-ufsdxe-imem.txt` (sha256
+> `8d4517c517bbbfba51b1dbe164a52f52eed7e2078167c39cc4ed8325e83e0362`, 203 rows, payload
+> `/tmp/xhci-sentinel-pair.raw`, sha256 `a64010f4…`, 14 of its rows filling all 90 columns and none of the
+> five it is read for among them). **Not an action**: nothing was flashed, no partition was written, no stub
+> or Microsoft image was changed, and `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc61…`. The phone
+> was found booted into TWRP recovery on `adb` (`d25f844e`, `ro.product.board = gauguin`) rather than in
+> fastboot, which is a device-state change this project did not make and does not act on. See `docs/08` step
+> 4.187.
 
 
 ### What exists and what is missing, so the next session starts from the right

@@ -38689,3 +38689,307 @@ with a name on it; it is a named GDSC in a named register block, on a machine th
   was written to it at any point.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s, so
   a phone belongs on the chipset controller `0000:00:14.0`.
+
+## Step 4.187 — the instrument's zeroed `IMEM Cookie Base` is not why the UFS `ARID 0x0` attach fails: the page *is* zeroed and the driver *does* read it, but the run reaches `UfsSmmuConfig` through the `UfsSmmuConfigForOtherBootDev` door, and that door never reads IMEM at all
+
+### The question, and why it was not rhetorical
+
+Steps 4.141 and 4.142 read `UFSDxe`'s `P2Record` status to the third arm of its own `UFSSmmuConfig` — the
+vtable call that attaches `\_SB_.UFS0` at ARID 0 — and both left the same sentence standing: 4.142's *"the
+machine model manufactures the empty slot; the arm this step proves is therefore proven for the model, and
+the phone's outcome is a device question."* Every one of those readings comes off a run under
+`--el3-zero-mem`, and `UFSDxe` dereferences an address that flag rewrites before it does anything else. The
+panel this step reads prints both rows side by side, in the driver's own words:
+
+```
+100 |ERROR: Failed to Get Shared Imem Boot Device type|
+101 |UFS IOMMU domain attach ARID 0x0 failed|
+102 |UFSSmmuConfig failed, status 0x7|
+103 |Error: Image at 0009C2E5000 start failed: Device Error|
+104 |K 28 SD 27/69 free=1024 D3C16B1F-3F48-54CA-84CD-B58F228DE601|
+```
+
+`device/config/uefiplat.cfg:113` sets `SharedIMEMBaseAddr = 0x146AA000`; `{"IMEM Cookie Base", 0x146AA000,
+0x001000}` is one of the regions the platform's own generated `MemoryMapLib.c` declares below
+`LOW_MMIO_LIMIT`; and `--el3-zero-mem` redirects every such region to a block of a pool that is all zeros.
+Row 100 is therefore a host artifact if any row in this project is, and the question this step exists to
+answer is whether **row 101 belongs to the same class** — whether the page this instrument zeroes is what
+makes the attach fail. If it did, then 4.141's arm, 4.142's reading and the USB side's own `UsbConfigInit:
+Failed to attach USB Arid 0x0 HAL IOMMU domain Result =  (0x4)`
+(`work/out/qemu-panel-4.177-xhci-nopmicrec.txt:166-182`) would all three carry nothing about gauguin.
+
+It does not, and the reason is one word wide: the run that fails does not read IMEM on its way to the
+attach.
+
+### What the plan redirects, measured rather than assumed
+
+`tools/qemu-panel-read.py`'s own functions, run against this board's package root
+(`tools/qemu-panel-read.py:219`, `work/uefi/Mu-Silicium/Platforms/Xiaomi/gauguinPkg`):
+
+- `low_regions` (`:459`) returns **57** regions.
+- `l2_plan` (`:496`) expands each region to *every* 2 MB block it touches and takes the union — **55**
+  distinct blocks, assigned densely from `ZERO_MEM_POOL_BASE = 0x40000000`, so the pool is
+  `0x40000000..0x46E00000`. That is the instrument's own header line, verbatim: *"the 55 2 MB block(s)
+  holding this platform's declared regions below 0x40000000 redirected to 0x40000000..0x46e00000, one
+  block each"*.
+- `block_for_ipa` (`:541`) is a lookup and not an arithmetic, because the pool is assigned densely and out
+  of order:
+
+| address | region | 2 MB block | pool block |
+|---|---|---|---|
+| `0x146AA000` | `IMEM Cookie Base` | 163 | `0x46400000` |
+| `0x14680000` | `IMEM Base` | 163 | `0x46400000` |
+| `0x0011A004` | `GCC CLK CTL` | 0 | `0x40000000` |
+| `0x01FD4000` | — (the `EnvDxe` word) | 15 | `0x40C00000` |
+
+So the cookie page *is* in the plan and its guest address is `0x464AA000`, fifty-two pool blocks into a
+region the instrument never writes anything else to. **The instrument does zero the word `UFSDxe` reads.**
+Two smaller facts come out of the same table: `0x146AA000` and `0x14680000` share block 163 and therefore
+share one pool block, and `0x0011A004` is in block 0 — which is the block `ClockDxe+0x11E8C` polls in
+4.186, the same redirect seen from the other side.
+
+A correction falls out of the same measurement and belongs here rather than in a footnote: 4.186's and
+4.187's summaries call these *"the platform's 55 declared low regions"* (`docs/08` step 4.186's closing
+bullets, the `docs/00` blockquote for that step, and this step's own `docs/00` entry before it was
+corrected). The map declares **57**, and 55 is the count of *blocks they touch*. The distinction is not
+cosmetic in this step and only in this step: "the flag rewrites 55 declared regions" would leave two of the
+57 unaccounted for, and `IMEM Cookie Base` — one of the two that shares a block — is exactly the kind of
+region a reader checking the claim would go looking for.
+
+### The live reading: the address is the config's, and the word at it is zero
+
+`work/out/qemu-probe-4.187/gdbprobe4187.py` (log `gdb4187-stdout.log`, sha256
+`ac84dd4bf62b6beea919063c3f5f402cece5ca3142411c487dd38504ffade445`) arms one `Z0` on the cookie compare at
+`UFSDxe` RVA `0x4468` — the instruction after `0x445c: ldr w9,[x8]`, where `x8` is the value the config key
+at RVA `0x14720` supplied, and that key's own bytes read `SharedIMEMBaseAddr` — and one on
+`UfsSmmuConfig`'s entry at RVA `0x24D8`. It writes nothing to memory.
+The run is 4.186 pass 4's machine and payload (`/tmp/xhci-sentinel-pair.raw`, sha256 `a64010f4…`) with the
+same four `loader` blobs, so what it reads is that configuration's own behaviour and not a fresh one:
+
+```
+@7.7s first stop PC=0x9c2e9468  bytes at 0x9c2e5000 = b'MZ'  (expected b'MZ')
+@7.7s CMP  #1  EL1  x8=0x146aa000  [x8]=0x00000000  [x8+4]=0x00000000  [x8+0x50]=0x00000000
+       0x146aa000  0000000000000000000000000000000000000000000000000000000000000000
+       (nothing written: x8's target is left as the redirect made it)
+```
+
+`x8` is `0x146AA000` — the key `SharedIMEMBaseAddr`'s value, which is `uefiplat.cfg:113`'s number and not a
+guess of this step's — and all 32 bytes at it are zero, so the `cmp w9, w10` at `0x4468` against
+`0xC1F8DB40` (`0x4460: mov w10,#0xdb40`, `0x4464: movk w10,#0xc1f8,lsl #16`) cannot be what passes.
+`0x440c`'s two gates are both live in the same reading: it reads that key through the getter `0x4c00` and
+refuses if the getter fails (`0x4450: cbnz x8, 0x44d0`) or if the value is zero (`0x4458: cbz w8, 0x44d0`),
+and only then dereferences it at `0x445c`. So the driver prints `ERROR: Failed to Get Shared Imem Boot
+Device type` (its own literal at RVA `0x14688`, loaded at `0x4324`/`0x4328`) and `0x4304` returns **0** — the
+predicate's answer for "this is not a UFS boot device". The record it wanted is a magic word followed by a
+count and the boot device's type (`[x8]` = `0xC1F8DB40`, `[x8+4] >= 3` at `0x4478`, `[x8+0x50]` passed to
+`0x43a8` at `0x4490`), and the whole page it lives on is this instrument's zero pool.
+
+**The redirect does mask the boot-device-type read, and row 100 is a host artifact.** That much is now
+measured at both ends: the number is the config's, the zero is the pool's, and the row is the driver's.
+
+### The route: the run that fails does not read IMEM at all
+
+The second breakpoint is the one that decides the step, and `EfiEntry`'s control flow is where the answer
+is visible — at RVA `0x2678`, one call past the predicate:
+
+```
+2678: bl 0x4304              ; the predicate; it prints the IMEM row itself when it fails
+267c: and w8, w0, #0xff
+2680: cbz w8, 0x26a8         ; type != 8 -> the ForOtherBootDev route
+2684: bl 0x24d8              ; type == 8 -> UfsSmmuConfig, called directly
+2688: mov x26, x0            ; 268c: cbz x26, 0x26d4 -> carry on with the rest of the driver
+...
+26a8: mov w0, wzr ; mov w1, wzr
+26b0: bl 0x8ccc
+26b4: adrp x0, 0x14000 ; 26b8: add x0, x0, #0x230     ; "UfsSmmuConfigForOtherBootDev"
+26c0: bl 0x4c00              ; the config getter, out-pointer [sp,#100]
+26c4: cbz x0, 0x2b54         ; key found -> test its value
+26c8: mov x26, xzr ; 26cc: str wzr, [sp,#100] ; 26d0: b 0x2d44   ; not found -> success, no SMMU work
+...
+2b54: ldr w8, [sp, #100]
+2b58: cbz w8, 0x2d40         ; value 0 -> skip the SMMU configuration and report success
+2b5c: bl 0x24d8              ; value non-zero -> UfsSmmuConfig, by the other door
+2b60: mov x26, x0            ; this is the return site, and the probe reads it as such
+```
+
+This is a **fork, not a gate.** Both of the predicate's answers reach `UfsSmmuConfig` — one at `0x2684`,
+one at `0x2B5C` — and what the IMEM read decides is only *which door*. The second door is open on this
+board because `device/config/uefiplat.cfg:149` sets `UfsSmmuConfigForOtherBootDev = 1`, so a run whose IMEM
+page reads zero still configures the SMMU. The probe names the door this run used:
+
+```
+@7.8s SMMU #1  EL1  x30=0x9c2e7b60
+       which is 0x2B5C - the UfsSmmuConfigForOtherBootDev key is present and non-zero
+```
+
+`x30` at a callee's entry is the **return** address, so `0x9C2E7B60` is base + `0x2B60`, the instruction
+after `0x2b5c: bl 0x24d8` — the second door. **The run whose panel prints `UFS IOMMU domain attach ARID 0x0
+failed` reached `UfsSmmuConfig` without reading IMEM on the way**, and the two rows the panel puts next to
+each other are two symptoms of one instrument — the first caused by it, the second not — whose adjacency is
+what made them look like one chain.
+
+That is 4.141's and 4.142's finding, confirmed live and independently rather than re-derived. 4.142 read the
+same side from the gate's own polarity (`0x4340: cmp w8, #0x8 ; cset w0, eq`) and from the configuration
+map's `UfsSmmuConfigForOtherBootDev = 0x1`; this step reads it at the *callee*, in a differently-patched
+payload (the USB sentinel pair, whose `UsbConfigDxe` is not the shipped one) and at a different load address
+(`0x9C2E5000` here against 4.141's `U = 0x9C37F000`). A route established at the branch and confirmed at the
+return site, in another run, is the kind of agreement this project's steps have learned not to assume.
+
+### Where in `UfsSmmuConfig` the run stops, off the same panel
+
+The same panel answers a second question with an absence rather than a row. `UfsSmmuConfig` has four
+failure prints, and this panel carries exactly one of them:
+
+| print | RVA | status stored | in this panel |
+|---|---|---|---|
+| `UFS IOMMU LocateProtocol failed 0x%x` | `0x1417D` | — | **absent** |
+| `UFS IOMMU domain create failed` | `0x141A3` | `0x8000000000000013` | **absent** |
+| `UFS IOMMU domain configure failed` | `0x141D0` | `0x8000000000000003` | **absent** |
+| `UFS IOMMU domain attach ARID 0x0 failed` | `0x141FE` | `0x8000000000000007` | present |
+
+`grep -c` over the 203 rows returns 0, 0, 0 and 1. The attach is `0x25F0: ldr x12,[x13,#16]` /
+`0x25F4: blr x12` — the protocol's third entry, called with `x1 = "\_SB_.UFS0"` (`0x25E4`) and `w2 = w3 = 0`
+(the ARID and its flags, which is why the row prints `ARID 0x0`) — and its failure stores
+`x19 = #0x8000000000000007` at `0x260C`, which is the `0x7` the next row prints as
+`UFSSmmuConfig failed, status 0x7`. The configure call that precedes it (`0x25B8: blr x11`, vtable `[+64]`,
+with `w1` taken from the `EnableUfsIOC` key — `0x256C`, config value `0` at `uefiplat.cfg:148`) returned
+success, or its row would be on the panel. So in this run the protocol was obtained, a domain was created,
+it was configured, and the **attach is the first step that failed**.
+
+That is a statement about the model's arm order and not about the phone, and 4.142's caveat is untouched by
+it: on the phone `HALIOMMUDxe` runs before `UFSDxe` and would have installed the protocol, so the empty slot
+the model manufactures is the model's own doing. What this step adds is that the arm 4.141 named is reached
+by a route with no IMEM read in it, which is what makes the arm's status carry information about gauguin
+that the row above it does not.
+
+### The probe, and four things it had to learn
+
+The instrument is one file, `work/out/qemu-probe-4.187/gdbprobe4187.py`, driven by `run.sh` in the same
+directory, and it took four corrections to read anything:
+
+- **A `Z0` breakpoint re-triggers on the instruction it is parked at.** The first pass issued `c` in a loop
+  and recorded **40** consecutive "hits" at the same PC: the machine was still parked at the site, so each
+  `c` reported the same instruction again and no code ran. The fix is in the file with its reason written
+  out — *"a second, third, fortieth 'hit' at the same address is the same instruction reported again and not
+  the code running"* — and it is what lets the run get from the first site to the second: each site is read
+  once and then disarmed with `z0`.
+- **A hit budget shared between the sites starves the later one.** `while … (hits_cmp + hits_smmu) <
+  max_hits` spent its whole allowance on the cmp site because the cmp comes first in program order.
+- **`x30` at a callee is the return address, not the `bl`.** The first `CALLERS` table was keyed on
+  `0x2B5C` and `0x2684`; the live values are one instruction later, `0x2B60` and `0x2688`, and the probe
+  printed *"a call site this probe does not name"* until the table was keyed where the value actually
+  points.
+- **A probe window that outlives the panel's loses its summary.** With `--hunt 170` against the panel's
+  `--seconds 150`, qemu exits first, the next `sendall` raises `BrokenPipeError`, and the traceback aborted
+  the script before it printed its totals. The socket calls are wrapped now, and the log ends with *"the
+  gdb socket closed (BrokenPipeError) - the panel's own window ran out and it took the machine with it;
+  every reading above was taken before this"*.
+
+None of that is a finding about the phone. It is recorded because a probe that reports the same instruction
+forty times, or a route it has mis-keyed by one instruction, produces readings that look like measurements —
+and because the previous window's carried hypothesis was formed from a panel on which these two rows were
+adjacent, which is the same class of mistake.
+
+### What this decides, and what it corrects
+
+**Decides**: the two rows are not one chain. `--el3-zero-mem` masks `UFSDxe`'s boot-device-type read — row
+100 is a host artifact, and the redirect is *why* it appears — but the run reaches `UfsSmmuConfig` by the
+`UfsSmmuConfigForOtherBootDev` door, which never reads IMEM, so no zero the instrument writes is upstream of
+`UFS IOMMU domain attach ARID 0x0 failed`. The class the step was chartered to test splits: one row is the
+instrument's, the other is the driver's.
+
+**Corrects the hypothesis this step was launched on**, which is not written in any of these documents and
+should be recorded as what it was: a working inference carried into this window from the prior one, that if
+the zeroed `IMEM Cookie Base` caused the UFS attach failure it would equally explain the USB side's
+`Failed to attach USB Arid 0x0`, making both rows artifacts. It is refuted, and refuted by the second
+breakpoint rather than by the first: the cookie site alone would have supported the hypothesis, because the
+address *is* the config's and the word *is* zero.
+
+**Corrects the count**: 4.186 and this step's own earlier summaries say *"the platform's 55 declared low
+regions"*; the map declares **57** regions, which touch **55** 2 MB blocks, and 55 is the number the pool has
+blocks for. Both numbers are now stated where each belongs.
+
+**Confirms 4.141 and 4.142 independently**, at the callee rather than at the branch, in a different payload
+and at a different load address — which is what promotes their route reading from one live capture to a
+behaviour of the build.
+
+### Rows
+
+- **instrument**: `work/out/qemu-probe-4.187/gdbprobe4187.py` and `run.sh`, whose log
+  `gdb4187-stdout.log` is sha256 `ac84dd4bf62b6beea919063c3f5f402cece5ca3142411c487dd38504ffade445` — two
+  `Z0` sites (`0x9C2E9468` the cookie compare, `0x9C2E74D8` `UfsSmmuConfig`'s entry at base
+  `0x9C2E5000`), one read each then disarmed, nothing written to guest memory; the panel
+  `work/out/qemu-panel-4.187-ufsdxe-imem.txt`, sha256
+  `8d4517c517bbbfba51b1dbe164a52f52eed7e2078167c39cc4ed8325e83e0362`, 203 rows from 600 screens over
+  150.1 s, payload `/tmp/xhci-sentinel-pair.raw` sha256 `a64010f4…`, the four `loader` blobs at their 4.186
+  pass-4 addresses, and the panel's own header lines confirming 55 blocks and the pool's extent; the live
+  `low_regions`/`l2_plan`/`block_for_ipa` result read out of `tools/qemu-panel-read.py` at its gauguin
+  package root; and `aarch64-linux-gnu-objdump` on `device/dxe/UFSDxe.efi`
+  (`c8bc07eb9d18da5472951936631eb758ea9b1d49248842112aa47218b9dca7d6`) read at `0x24D8`–`0x2628`,
+  `0x2660`–`0x26D8`, `0x2B40`–`0x2B80`, `0x4304`–`0x4374`, `0x440C`–`0x4468` and `0x4C00`–`0x4C30`.
+  Superseded probe runs of this step (`qemu-panel-4.187-ufsdxe-halted.txt`, `-cmp.txt` through `-cmp4.txt`,
+  and their logs) are left on disk as the record of the four bugs above. `uefi/patches/mu-basecore-local.patch`
+  is **not** regenerated: no instrument source changed.
+- **shows**: that the address `UFSDxe`'s cookie compare dereferences is `0x146AA000`, the value in the
+  platform config, and that the 32 bytes at it are zero; that `--el3-zero-mem` redirects it because 57
+  declared regions touch 55 2 MB blocks of a pool that runs `0x40000000..0x46E00000`; that the run reaches
+  `UfsSmmuConfig` from `0x2B5C`, the route the `UfsSmmuConfigForOtherBootDev` key opens, which is entered
+  only when `0x4304`'s predicate answers *not* 8 and therefore never reads IMEM; and that of the four
+  failure prints inside `UfsSmmuConfig` only the attach's is on this panel, so the attach is the first step
+  of the four that failed.
+- **adds**: the plan's own numbers as a measurement rather than a description (`57` regions, `55` blocks,
+  the four row-address→pool-block pairs including `0x11A004` = block 0, the same block 4.186's `ClockDxe`
+  poll reads); the `EfiEntry` fork written out instruction by instruction, with `0x2684` and `0x2B5C` as the
+  two doors and the `cset`/`cmp #0x8` polarity that names them; 4.141's and 4.142's route re-derived live at
+  the callee in a differently-patched payload; the absence-and-presence table over `UfsSmmuConfig`'s four
+  failure prints, which is what places the failure at the attach call and its vtable entry `[+16]`; and the
+  four probe bugs as method, because each one produced output that read like a measurement.
+- **corrects**: the working hypothesis this step was launched on (the zeroed IMEM page as the cause of the
+  ARID-0 attach failure, and by extension of the USB-side `Arid 0x0` row) — refuted, and refuted only by the
+  *second* breakpoint, since the cookie site alone is consistent with it; 4.186's and this step's earlier
+  *"the platform's 55 declared low regions"*, which is **57** regions touching **55** 2 MB blocks; and
+  nothing else — 4.141's arm, 4.142's caveat about the manufactured empty slot, and 4.180's two-alternatives
+  record all stand as written.
+- **closes**: the instrument-confounder question for the UFS cluster. Rows 100 and 101 are different
+  classes: 100 is the redirect's, 101 is the driver's, and the panel's adjacency of them is not evidence of
+  a chain. The `P2Record` value 4.141 read is therefore not devalued by the flag under which it was read,
+  which is the one thing that would have reached back into that step.
+- **does not close**: whether the phone's own `IMEM Cookie Base` holds a valid `0xC1F8DB40` record or a type
+  in 0..0xb — the redirect makes that page unreadable under this instrument, and on the device it is a real
+  page, so it is now a device question with **no bearing on the failing route**; whether the phone's
+  `HALIOMMUDxe` has installed the protocol before `UFSDxe` looks, which 4.142 left open and this step does
+  not touch; whether the attach succeeds on hardware; the `gcc_usb30_prim_gdsc` bit-31 poll of 4.186 and its
+  device prediction; `Supported`'s entry counter; the first P3 clause; and `P2 WHY`'s `O` at SEQ/WHY index
+  42.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression at
+  `0x12000C`; the seeded SMEM target-info word and the AOP gate word, both fabricated and both flagged in
+  the panel header this step reads; the stage-2 redirection of the 55 blocks the platform's 57 declared low
+  regions touch; and that this repository has no source for the drivers it reads — the disassembly is the
+  whole of what is known about them.
+- **a note on the instrument's own data**: this panel has **14** rows that fill all 90 columns and continue
+  on the row below, at panel indices 68, 82, 144, 145, 147, 148, 150, 152, 154, 156, 158, 160, … — its own
+  header lists them. **None of the five rows this step reads is among them**: 100, 101, 102, 103 and 104 are
+  56, 46, 39, 61 and 67 characters, so each is complete as printed. The two rows whose *presence* and
+  *absence* carry the finding are checked the same way, and the four `UfsSmmuConfig` prints are 32 to 51
+  characters each.
+- **not an action**: nothing was flashed, no partition was written, no stub or Microsoft image was changed,
+  and no volume with a patched `UsbConfigDxe` has left this host. `userdata` (107 GB, unbacked), the
+  partition table and the firmware LUN remain untouched. `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The porting goal is unchanged
+  and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and
+  P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.
+- **device state**: **changed, and not by this project.** `adb devices` now lists `d25f844e`, and the props
+  read `ro.product.board = gauguin` with `ro.build.display.id = twrp_gauguin-eng 127 SP2A.220701.001
+  eng.dhollmen.date=Wed Jul 27 18:15:22 +1 2022 test-keys` — the phone is booted into **TWRP recovery**,
+  kernel `4.19.113-perf`, with `adb shell id` returning `uid=0(root)`. Two readings follow and neither is
+  more than it is: this tells whether TWRP was booted or flashed to `recovery` **not at all** (`fastboot
+  boot` leaves no trace, and the props do not distinguish the two), and the device is therefore **not in
+  fastboot mode** — `fastboot devices` is empty, so the P3 `fastboot boot` workflow cannot run until it is
+  rebooted to the bootloader. `/dev/mem` and `/dev/kmem` do **not** exist on this kernel, so the phone's
+  `0x146AA000` cannot be read from here and this step's newly-open device question is not answerable
+  through TWRP. Nothing was written to the device at any point by this project, and none of the numbers in
+  this step came from it.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+  The phone enumerated as `2717:ff68` on bus 003, which is the port `0000:00:14.0`'s root hub serves and not
+  the dock's.

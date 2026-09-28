@@ -1399,6 +1399,50 @@ Work:
 > (`usb-sentinel-host+index`), `gdbprobe38c.py`/`gdbprobe38e.py`. **Still open**: whether the GDSC operation
 > completes on hardware, whether `Supported` is reached at all on the device, the first P3 clause, and
 > `P2 WHY`'s `O` at SEQ/WHY index 42. No device was touched. See `docs/08` step 4.186.
+>
+>
+> **Step 4.187 — the instrument's zeroed `IMEM Cookie Base` is not why the UFS `ARID 0x0` attach fails, and
+> the row beside it is.** The page really is zeroed and `UFSDxe` really does read it — measured, not
+> described: `low_regions` returns **57** declared regions, `l2_plan` turns them into **55** 2 MB blocks in a
+> pool `0x40000000..0x46E00000`, and `block_for_ipa` puts `0x146AA000` in block 163 → pool `0x46400000`; and
+> live at UFSDxe RVA `0x4468`, `x8 = 0x146aa000` — the `SharedIMEMBaseAddr` config key's own value, its
+> literal at RVA `0x14720` — with 32 zero bytes at it, so `ERROR: Failed to Get Shared Imem Boot Device type`
+> (the driver's literal at `0x14688`) is a **host artifact** and `--el3-zero-mem` is why it appears. But the
+> run reaches `UfsSmmuConfig` by the *other* of the two doors `EfiEntry` opens: `0x2678 bl 0x4304` /
+> `0x267c and w8,w0,#0xff` / `0x2680 cbz w8,0x26a8` is a **fork and not a gate**, and the `0x2B5C` side needs
+> only `UfsSmmuConfigForOtherBootDev = 1`, which `uefiplat.cfg:149` sets, and never reads IMEM at all. The
+> second breakpoint proves which door this run used: `x30 = 0x9C2E7B60` at `UfsSmmuConfig`'s entry is base +
+> `0x2B60`, the return from `0x2b5c: bl 0x24d8`. So rows 100 and 101 of one panel are two classes, the
+> panel's adjacency of them is not a chain, and 4.141's `P2Record` value is not devalued by the flag it was
+> read under — which was the only outcome that would have reached back into that step. Of the four failure
+> prints inside `UfsSmmuConfig`, only `UFS IOMMU domain attach ARID 0x0 failed` is on this panel
+> (`domain create failed`, `LocateProtocol failed` and `domain configure failed` are **absent**, `grep -c`
+> over the 203 rows returning 0, 0, 0, 1), so the attach — `0x25F0: ldr x12,[x13,#16]` / `0x25F4: blr x12`,
+> called with `x1 = "\_SB_.UFS0"` and `w2 = w3 = 0`, status `0x8000000000000007` stored at `0x260C` and
+> printed as `status 0x7` by the very next row — is the first of the four that failed. Two counts corrected
+> in place: 4.186's and this step's earlier *"the platform's 55 declared low regions"* is **57** regions
+> touching **55** 2 MB blocks, and `0x0011A004` is block **0** → pool `0x40000000`, which is the same
+> redirect 4.186 saw from the other side. Instrument: `work/out/qemu-probe-4.187/gdbprobe4187.py` (log
+> `gdb4187-stdout.log`, sha256 `ac84dd4b…`, two `Z0` sites read once each then disarmed, nothing written to
+> guest memory) and `work/out/qemu-panel-4.187-ufsdxe-imem.txt` (sha256 `8d4517c5…`, 203 rows, payload
+> `/tmp/xhci-sentinel-pair.raw`, sha256 `a64010f4…`); the four probe bugs are recorded as method, because
+> each produced output that read like a measurement. **Corrected, not carried**: this step's own working
+> hypothesis — that the zeroed IMEM page was the *cause* of the ARID-0 attach failure and by extension
+> explained the USB side's `UsbConfigInit: Failed to attach USB Arid 0x0 … (0x4)` — is **refuted**, and
+> refuted only by the second breakpoint, since the cookie site alone is consistent with it. **Still open**:
+> whether the phone's own `IMEM Cookie Base` holds a valid `0xC1F8DB40` record (a device page the redirect
+> makes unreadable here, and now a question with no bearing on the failing route), whether the phone's
+> `HALIOMMUDxe` has installed the protocol before `UFSDxe` looks (4.142's caveat, untouched), the
+> `gcc_usb30_prim_gdsc` bit-31 poll and its device prediction, `Supported`'s entry counter, the first P3
+> clause, and `P2 WHY`'s `O` at SEQ/WHY index 42. **Device state changed, and not by this project**: `adb
+> devices` now lists `d25f844e`, with `ro.product.board = gauguin` and `ro.build.display.id = twrp_gauguin-eng
+> 127 SP2A.220701.001 eng.dhollmen…` — the phone is booted into **TWRP recovery** with a root ADB shell, so
+> `fastboot devices` is empty and the P3 `fastboot boot` workflow cannot run until it is rebooted to the
+> bootloader; whether TWRP was booted or flashed to `recovery` is **not** decidable from the props (a
+> `fastboot boot` leaves no trace), and `/dev/mem` does not exist on that kernel, so the phone's
+> `0x146AA000` cannot be read from there. Nothing was flashed, no partition was written, `userdata` and the
+> partition table are untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08`
+> step 4.187.
 
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
