@@ -1655,7 +1655,12 @@ Work:
 > whether a real capability block at `0x0A60C100` holds a non-zero `CapLength` — and the honest statement
 > is that no reading exists, not that a reading disagrees. (4.194: `0x0A60C100` is `USB30_PRIM + 0xC100`,
 > the project's own arithmetic, not a read; the live tree claims that window as `dwc3@a600000`'s global
-> register block, and 4.192's probe pins the `CapLength` read at `0x0A600000` and pool `0x41A00000`.) **One map gap named**: the platform's own
+> register block. **4.195: the answer was in the module all along** — the assert is `XhcReadOpReg`'s own
+> line 121, reached through `XhcReadCapReg8` at `0x4230`, so `CapLength` *is* read, from the capability
+> block at the DWC3 base `0x0A600000` = guest IP `0x41A00000`; `0x0A60C100` is the block *after* xHCI
+> (`DWC3_GLOBALS_REGS_START`), and the instrument's zero model is what makes the byte zero. 4.192's probe
+> asked its question of the identity address — which the redirect answers with the zero model — and its
+> pool reads came back `unreadable`, a method defect now recorded.) **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts
 > `/soc/qusb@88e3000` and `/soc/ssphy@88e8000` (`/proc/iomem` confirms `088e3000-088e33ff :

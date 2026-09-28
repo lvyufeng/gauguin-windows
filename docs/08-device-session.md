@@ -40830,3 +40830,185 @@ it is not needed for anything this project has asked the phone, since `/proc/iom
   device's storage was written, so `userdata`, the partition table and the firmware LUN are all as they
   were.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.195 — the wall's own image read directly: `XhcReadOpReg`'s line-121 assert, a halt routine that writes `PSHOLD`, and a `CapLength` the instrument zeroes on purpose
+
+**The question.** Step 4.194 closed with `CapLength` still open, and with the honest form of the statement
+being "that no reading exists, not that a reading disagrees". The reading was looked for on the phone, where
+the DWC3 turns out to be in *device* mode with no host instance to read. This step reads the other end —
+not the register, but the module that asked for it: the built bitra `XhciDxe` the console names by GUID,
+sitting in this repository's own build tree. No QEMU run was made and nothing on the device was touched.
+
+**The console row is the image's own string, byte for byte.** The panel wraps its rows at 90 columns, so the
+row that reads `/work/03bd7a86-8a25-4392-add6-4c5c70a05f9e/workspace/Build_S_BP/4678/code/source/msm_amss/`
+(row 395) is the first 90 characters of one message, row 396
+(`sm8250_boot/boot_images/QcomPkg/Drivers/XhciDxe/XhciReg.c:121 ASSERT: (Xhc->CapLength != 0`) the next 90,
+and row 397 a lone `)`. Concatenated they are 181 characters, and those 181 characters are **equal, byte for
+byte, to the 147-character path string at RVA `0x10F22` of
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/Ffs/B7F50E91-A759-412C-ADE4-DCD03E7F7C28XhciDxe/B7F50E91-A759-412C-ADE4-DCD03E7F7C28SEC2.1.pe32`
+followed by the literal `:121 ASSERT: (Xhc->CapLength != 0)`.** The path is the *Qualcomm build tree's* own
+(`.../Build_S_BP/4678/code/source/msm_amss/sm8250_boot/boot_images/...`), which is why its line numbers are
+not the ones in this repository's `Mu_Basecore` mirror: that copy carries the same assert at **106** (read)
+and **142** (write), and the console says 121. The image carries `XhciReg.c` alone at `0x10FB6` — the
+basename the edk2 assert handler prints in the following row, `ASSERT XhciReg.c +121: 0`.
+
+The second identity is the one 4.192 already had without knowing it. The module is
+`B7F50E91-A759-412C-ADE4-DCD03E7F7C28` (row 394, `s=Success`); the trace's `bytes at the wall:
+e80740f9e8ffffb4` are the first eight bytes at **RVA `0xFE24`** of this image; and the trace's
+`MZ at 0x9bdfa000` dump of `header[0:0x40]` is equal to the file's first 0x40 bytes, `e_lfanew = 0xe58`
+included. (The file begins with a 4-byte FFS section header, so the PE starts at offset 4 — the first parse
+of it failed on exactly that and on nothing else. With the header stripped, `.text` is VA `0x1000`
+RAW `0x1000` VSZ/RSZ `0x14000`, `ImageBase` 0, `SizeOfImage` `0x17000`, entry `0x1000`.)
+
+**How `CapLength` becomes zero, in the image's own instructions.** `XhcReadCapReg8` is at RVA `0x4230`: it
+loads `Xhc->PciIo` (`ldr x0,[x0,#8]`), calls `Mem.Read` with `BarIndex = 0`, `Width = 1` byte and
+`Count = 1`, pre-zeroes the destination byte, and only on a non-zero return prints and stores `0xFF`. **It
+does not add `CapLength` and it does not assert.** It is called from exactly one place, `0x3F6C`, with
+`Offset = 0`, and its result goes straight into `Xhc->CapLength` (`strb w0,[x19,#264]` at `0x3F70`). A BAR0
+whose first byte reads zero therefore makes `CapLength` zero *silently*.
+
+Five capability reads follow, none of which can assert either — `XhcReadCapReg32` (RVA `0x42A0`) at offsets
+`4`, `8`, `0x10`, `0x14`, `0x18`, i.e. `HCSPARAMS1`, `HCSPARAMS2`, `HCCPARAMS1`, `DBOFF`, `RTSOFF` — and then
+the first **op**-register access of the create path, `XhcReadOpReg (Xhc, 8)` at `0x4020`, which is
+`XHCI_PAGESIZE` (the next instruction masks its low 16 bits). `XhcReadOpReg` at RVA `0x4310` does
+`ldrb w8,[x0,#264]` then `cbz w8,0x435C`; the failure arm sets `mov w19, #0x79` — **121** — and prints the
+string above. The console's 121 is therefore the read helper's, and it *could not* have been the write
+helper's: **`XhcWriteOpReg` (RVA `0x43C8`, same shape, `mov w19, #0x9D` = 157) has no caller anywhere in
+this image** — no `bl` reaches it across the whole `0x1000..0x15000` disassembly.
+
+**What the assert ends in, and the register it writes.** The halt routine is at RVA `0xFE04`, and its first
+act is a 32-bit store: `adrp x8,0x10000` / `mov w1,wzr` / `ldr w0,[x8,#1036]` (the word at file offset
+`0x1040C`) / `bl 0x10368`, where `0x10368` is the store itself — `and x9,x8,#0x3` guarding an
+`(Address & 3) == 0` assert whose string is `IoLibArm.c` line **543** — with body `str w1,[x8]`. Then
+`str xzr,[sp,#8]`, `ldr x8,[sp,#8]`, `cbz x8,0xFE24`: exactly the two alternating PCs `0x9BE09E24` and
+`0x9BE09E28` the 4.192 trace recorded as "twenty single steps over exactly two alternating PCs". Exactly two
+instructions call this routine, `0xD384` and `0xDA54`; `0xDA48` is a twin of the same shape; and the two
+print helpers are `0xD2D8` (the `%a:%d ASSERT: ...` printer, `0x210`-byte frame) and `0xD1D4` (the error
+print, called with `w0 = 0x80000000` = `EFI_D_ERROR` — which is exactly why rows of this class reach the
+console while the `EFI_D_INFO` banners do not). **So the machine that stopped at 4.192 was spinning in the
+assert path's own halt, not in a hardware poll**, and the `XHCI` `CapLength` assert is the last thing the
+payload said.
+
+**The word it writes is `PSHOLD` — the identity Step 4.123 established, confirmed in a second image, and one
+record that contradicted it is retired.** The dword at file offset `0x1040C` is `0x0C264000`, and
+`Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c:73` declares
+`{"PSHOLD", 0x0C264000, 0x00001000, AddDev, MMIO, UNCACHEABLE, MmIO, NS_DEVICE}`. The kernel's own power-off
+path does the same thing to the same register: `drivers/power/reset/msm-poweroff.c:20` is
+`writel(0, msm_ps_hold)`. **None of that is new here.** Step 4.123 had it, in the *same* routine shape in
+another image — EnvDxe's `DebugAssert` at `0x9794`, `adrp x8,0x9000` / `mov w1,wzr` /
+`ldr w0,[x8,#1588]` (`.data` RVA `0x9634` = `0x0C264000`) / `bl 0x7D2C` / `str xzr,[sp,#8]` /
+`ldr x8,[sp,#8]` / `cbz x8,0x679C`, with the same `IoLibArm.c:543` store helper — and it drew the same
+conclusion there, that "on the device an assert in this build ends with the board powering down". What this
+step adds is that the shape is **not EnvDxe's alone**: bitra `XhciDxe` carries its own copy at `0xFE04`,
+reached from `XhcReadOpReg`'s assert, so every stop this project has read at a `0xFE*`/`0x97*` halt pair is
+the same build family's assert terminator and not a driver-specific watchpoint. And two sentences written at
+4.193 **contradict 4.123 and are retired**: `docs/08-device-session.md:27423` calls `0x0C264000` "a UART data
+register", and `:27429` concludes from the same three instructions that "the terminal going quiet is the
+UART's FIFO not draining rather than the guest pausing to print". Both describe this routine, whose address
+word is `PSHOLD` and whose store is a power-down request, so the silence past an assert row is the halt
+itself and not a FIFO. Two further things follow for this instrument. The request lands on a redirected block
+— `0x0C264000` is block 97, pool `0x42A00000`, so the store goes to guest IP `0x42A64000`, a zero-model page
+nothing reads — which is why the guest spins instead of stopping the way the board would. And whether the SoC
+would take that store as a power-off or as a restart is not decided here; what is decided is that the halt is
+an assert halt that *asks the board to stop*, which is a different thing from a hang, and that the instrument
+is what swallows the request.
+
+**The instrument's arithmetic, re-derived from the tool rather than remembered.** Importing
+`tools/qemu-panel-read.py`: `low_regions("work/uefi/Mu-Silicium/Platforms/Xiaomi/gauguinPkg")` gives **57
+regions**, `l2_plan(regs, 0x9C000000)` gives **55 blocks**, and the pool is **dense in rank** —
+`pool(block) = 0x40000000 + rank(block) * 0x200000`, not block index times block size. So `0x0A600000` is
+block 83, rank 13, pool `0x41A00000`, and **the byte the assert fires on is read from guest IP
+`0x41A00000`**; `0x0A60C100` is the same pool block, guest IP `0x41A0C100`; `0x088E3000` and `0x088E8000` are
+block 68, pool `0x41200000`, guest IPs `0x412E3000` and `0x412E8000`; `0x0C264000` is pool `0x42A00000`,
+guest IP `0x42A64000`; and the pool spans `0x40000000..0x46E00000`. (`l2_plan(regs, 0)` refuses outright —
+55 blocks need `0x6E00000` bytes running `0x40000000..0x46E00000`, which would reach the load address; the
+load address is a required argument, and that guard is a property of the tool to respect, not a defect.)
+**4.192's probe read the wrong address on both of its routes**: the identity reads at `0x0A600000` returned
+`00000000`, but that address is served by the guest's own redirect to the pool, so a zero there is the zero
+model and says nothing about any register; and the two pool reads (`0x41A00000`, `0x41C00000`) came back
+`unreadable`, because nothing on this host has such a page mapped. The value that decides this assert has
+therefore still never been read — and unlike 4.194's version of that sentence, the route to it exists in
+principle (a host-side read of the guest pool page, or a read taken through the guest's own address space);
+it simply was not the one the probe took. **That gap between the question asked and the address read is the
+method defect this step records.**
+
+**What the payload is asserting on, and why that is a fact about the instrument.** Block 83 is declared by
+the platform's own map (`USB30_PRIM 0x0A600000 + 0x00200000`, `USB_RUMI 0x0A720000 + 0x00010000`), so under
+`--el3-zero-mem` the payload's BAR0 read at the DWC3 base is served by the zero model, and the first byte of
+the capability block is *the instrument's own zero*. The live kernel performs the identical read on silicon:
+`dwc3_power_off_all_roothub_ports()` in `drivers/usb/dwc3/host.c` does `HC_LENGTH(readl(xhci_regs))` at
+`dwc->xhci_resources[0].start`, which `core.c` sets to the core base — so the capability block is at the DWC3
+base `0x0A600000`, and `0x0A60C100` is `+0xC100 = DWC3_GLOBALS_REGS_START`, the block *after* xHCI, which is
+what `USB30_PRIM + 0xC100`, 4.194's own arithmetic, happens to name. This is the same shape of finding as
+4.193's `gcc_usb30_prim_gdsc` reading `use = 1` on the phone, except that here the fabricated value **is**
+the wall: the instrument zeroes a register the payload requires to be non-zero, and no further reading of
+the console can change that. What a later step may test — and what this step does **not** do — is seed that
+block so its first word is non-zero; a map edit, which would replace the zero model with plain RAM there, is
+not a reading either.
+
+**Two negative scans, and three method limits.**
+- The code-materialised value `0x0A600000` occurs at exactly **three sites across 460 built images and the 86
+  in `device/dxe`, and all three are `UsbConfigDxe`**: `0983C7F2-…@0x7138` and `@0x8EF8` in the build tree and
+  `CD823A4D-…@0x5180`, while the installed `device/dxe/UsbConfigDxe.efi` carries the same two RVAs `0x7138`
+  and `0x8EF8`. The value `0x0A60C100` occurs as a code constant **nowhere in either tree**, which confirms
+  4.194's reading that it is this project's arithmetic and not a word any module materialises. Neither
+  `XhciDxe` nor `XhciPciEmulation` materialises any of the four bases, so the BAR base reaches `XhciDxe` at
+  run time through `PciIo` and not as a constant inside the image that asserts on it.
+- The constant `0x0C264000` occurs as a **code** constant **zero** times in all 546 images of both trees, and
+  as **raw bytes** in **450 of 460** built images and **86 of 86** installed ones. A raw scan stopping at
+  `.text` alone would find it in 85 built images and all 86 installed ones; in the image that matters here
+  the section it lives in is `.data`. So "the census finds no module that names `PSHOLD`" and "almost every
+  module contains `PSHOLD`" are both true, and the difference is *materialisation as an immediate* versus *a
+  data word*. Every census this project runs should say which of the two it measured.
+- The ADRP/ADD matcher's ASCII artifacts in the `0x41000000`–`0x42000000` window (`0x414D4354` "TCLM",
+  `0x41544942` "BIT A", `0x41545346` "FSTA", `0x41615252` "RRaA") are the instrument reading data-like byte
+  sequences as constants — the same family as the earlier `0x0A600005`. They are recorded as noise, not as
+  hardware.
+- The 4.192 payload `/tmp/xhci-sentinel-pair.raw` contains none of the three module GUIDs, none of the wall
+  bytes, no `XhciReg.c` and no `(Xhc->CapLength != 0)` string, so no built image can be located inside it.
+  That is a **container limit** — the payload is fabricated — and it is precisely why this step read the
+  module from the build tree instead of from the payload that runs it.
+
+**Rows.**
+
+- **artifacts**, all host-side and none of them a device read: the built image
+  `work/uefi/Mu-Silicium/Build/gauguinPkg/DEBUG_CLANGPDB/FV/Ffs/B7F50E91-A759-412C-ADE4-DCD03E7F7C28XhciDxe/B7F50E91-A759-412C-ADE4-DCD03E7F7C28SEC2.1.pe32`
+  (94,212 B, sha256 `32b05c59…`), its header-stripped copy `/tmp/xhcidxe-bitra.bin` (sha256 `d579eaa0…`) and
+  the 20,078-line full `.text` disassembly `/tmp/xhci-bitra.asm` (sha256 `5ca9a209…`); four census runs of
+  `/tmp/census4.py` over both trees for `0x0C264000`, `0x0A600000` and `0x0A60C100`; and one live
+  `l2_plan()` re-derivation from `tools/qemu-panel-read.py`. Nothing was written outside `docs/`.
+- **shows**: the console row is the image's own string byte for byte, so the module, the file and the line
+  are three independent confirmations of the same identity and not three inferences from one; the assert is
+  `XhcReadOpReg`'s because the write helper is unreferenced in this image; the halt routine writes `PSHOLD`
+  and then spins, so the stop is a deliberate halt that requests a power-down rather than a hardware poll
+  that never completes; and `CapLength` is zero because the instrument's own zero model serves the read,
+  which makes the wall a property of the instrument before it is a property of the phone.
+- **decides**: `CapLength` *is* read, and it is read from the capability block at the DWC3 base `0x0A600000`
+  = guest IP `0x41A00000`; `0x0A60C100` is not that block but the global/OTG block `+0xC100` after it; the
+  halt that ends the run is the same `DebugAssert`-writes-`PSHOLD`-and-spins routine Step 4.123 measured in
+  EnvDxe, here in a second image and at `XhcReadOpReg`'s own assert, which retires 4.193's "UART data
+  register" label and its FIFO explanation of the silence; and 4.192's probe answered a different question
+  from the one it was written to ask.
+- **does not decide**: whether the SoC reads a zero in `PSHOLD` as a power-off or a restart; whether the
+  payload would clear this assert if block 83's first word were seeded non-zero, since that seed has not been
+  written; whether `XhcReadCapReg8`'s single call site is the `XhcCreateUsb3Hc` of this build's source or an
+  earlier function that merely looks identical (the call graph is measured, the symbol names are inferred
+  from the EDK2 source this repository mirrors); and still nothing about the live phone's own capability
+  block, because no host instance exists there to read one from.
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the fourteen-rung
+  ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and the EL3
+  stub's three fabricated structures all still stand; `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5` and was read, not written.
+- **not an action**: no QEMU run, no `fastboot` command, no console read from the device, no edit to
+  `MemoryMapLib.c` and no seed written anywhere. The porting goal is unchanged and unmet — no Windows 11
+  image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not
+  begun, and the end state remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged, and still not enumerating. The 60-row poll ran to its end at 20:07:50 with
+  every row `adb=[] fastboot=[] usb=[0]`; live `adb devices` and `fastboot devices` are both empty and
+  `lsusb` shows no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken
+  from this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot`
+  workflow needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out
+  screencap -p` still returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that
+  photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
+  firmware LUN are all as they were.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.

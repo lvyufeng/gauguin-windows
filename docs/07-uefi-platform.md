@@ -3895,7 +3895,8 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `GSNPSID = 0x5533330a`, a DRD core with a GEN1 SuperSpeed PHY and BC/OTG3/ADP/HNP/SRP all absent in
 > capabilities — but it is in **`device`** mode with an empty `/sys/kernel/debug/usb/xhci/`, so there is
 > no host-mode profile to read and **the `CapLength` question 4.192 left open stays open for want of a
-> reading, not against evidence**. The map gap — **corrected in Step 4.194**: `Platforms/Xiaomi/gauguinPkg/…/MemoryMapLib.c`
+> reading, not against evidence** (4.195 reads the *module* instead: the assert is `XhcReadOpReg`'s own
+> line 121, reached through `XhcReadCapReg8`, on a byte the instrument's zero model supplies). The map gap — **corrected in Step 4.194**: `Platforms/Xiaomi/gauguinPkg/…/MemoryMapLib.c`
 > declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at `0x18280000`, and **no row
 > *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts `qusb@88e3000` and `ssphy@88e8000`
 > (`/proc/iomem`: `088e3000-088e33ff : qusb_phy_base`). It does declare `{"PERIPH_SS", 0x08800000,
@@ -3906,6 +3907,45 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > block, where the kernel's regdump reads `GSNPSID = 0x5533330a`. Also `ufshc@1d84000` carries no `iommus` property, and there is no framebuffer route at all,
 > so `先读屏` remains a photograph. Nothing was flashed, no partition was written,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.193.
+>
+> **Step 4.195 — the wall's own image, read off this tree: the assert is `XhcReadOpReg`'s line 121, the
+> halt writes `PSHOLD`, and the byte it faults on is the instrument's own zero.** 4.194 left `CapLength`
+> at "no reading exists". The reading taken here is not of the register but of the module that asks for it,
+> and it settles three things. (1) **Identity, twice over.** The panel wraps at 90 columns, so its three
+> rows reassemble to 181 characters that are byte-identical to the 147-character path string at RVA
+> `0x10F22` of the built bitra `XhciDxe`
+> (`Build/gauguinPkg/DEBUG_CLANGPDB/FV/Ffs/B7F50E91-…XhciDxe/…SEC2.1.pe32`, sha256 `32b05c59…`) plus
+> `:121 ASSERT: (Xhc->CapLength != 0)`; the file's first 0x40 bytes equal the 4.192 trace's
+> `header[0:0x40]` dump at `0x9BDFA000`, `e_lfanew = 0xe58` included; and the wall bytes
+> `e80740f9e8ffffb4` are the first eight at RVA `0xFE24`. The line numbers differ from this repository's
+> `Mu_Basecore` mirror (106 read / 142 write) only because that path is the Qualcomm build tree's own.
+> (2) **The assert is the read helper's, and could not have been the write helper's.** `XhcReadCapReg8`
+> (`0x4230`) neither adds `CapLength` nor asserts; it is called once, at `0x3F6C` with `Offset = 0`, and
+> stored to `Xhc+264` at `0x3F70`, so a BAR0 byte of zero becomes `CapLength = 0` silently. Five capability
+> reads follow (`0x42A0` at `4`, `8`, `0x10`, `0x14`, `0x18`), then the first op-register access
+> `XhcReadOpReg (Xhc, 8)` at `0x4020`, where `cbz w8,0x435C` sends `mov w19, #0x79` (**121**) to the print.
+> `XhcWriteOpReg` (`0x43C8`, `mov w19, #0x9D` = 157) **has no caller anywhere in the image**. (3) **The
+> halt is deliberate, and the register it pets is `PSHOLD`.** `0xFE04` is `MmioWrite32(0x0C264000, 0)`
+> followed by `str xzr,[sp,#8]` / `ldr x8,[sp,#8]` / `cbz x8,0xFE24` — the `0x9BE09E24` / `0x9BE09E28`
+> pair 4.192 recorded — with the address loaded from `.data` offset `0x1040C` and stored through the helper
+> at `0x10368`, whose own assert is `IoLibArm.c` line 543; its only two callers (`0xD384`, `0xDA54`) are on
+> the assert path. **`0x0C264000` is `PSHOLD`** (`MemoryMapLib.c:73`), and the kernel's own power-off driver
+> writes zero to it (`msm-poweroff.c:20`), so the stop is a halt that asks the board to power down; in the
+> instrument that store lands on redirected block 97 (pool `0x42A00000`, guest IP `0x42A64000`) and is
+> dropped, which is why the console goes silent rather than rebooting — the identity itself is Step 4.123's,
+> measured in EnvDxe's copy of the same routine, and the sentences written at 4.193 that called
+> `0x0C264000` "a UART data register" and blamed the FIFO for the silence are retired by this step. The
+> instrument's arithmetic, re-derived live: 57 regions → 55
+> blocks, the pool dense in rank (`0x40000000 + rank * 0x200000`), so the assert fires on guest IP
+> `0x41A00000`; `0x0A60C100` is that same block at `+0xC100`, the global/OTG block *after* xHCI, matching
+> `DWC3_GLOBALS_REGS_START` and the kernel's `HC_LENGTH(readl(xhci_regs))` at the core base. 4.192's probe
+> read the identity address (`0x0A600000`, served by the redirect, so zero by construction) and its pool
+> reads came back `unreadable` — a method defect recorded, not a hardware finding. Negative scans:
+> `0x0A600000` is materialised at **three sites in 546 images, all `UsbConfigDxe`**; `0x0A60C100` at none;
+> and `0x0C264000` at **no** site as an immediate yet as raw bytes in 450 of 460 built and 86 of 86
+> installed images — so a census must say which of the two it measured. A candidate next experiment (seed
+> block 83's first word non-zero) is **not** made. Nothing was flashed, no partition was written,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.195.
 >
 
 ### What exists and what is missing, so the next session starts from the right
