@@ -3835,6 +3835,52 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > carries six fabricated loader blobs. Nothing was flashed, no partition was written,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.190.
 >
+> **Step 4.191 — answering the wait moves the run into a second module, and into that module's assert.**
+> 4.190's *"whether that stop is a self-branch"* is asked here by answering it. Two runs and one control
+> on the same command line: the control (`wallprobe.py`) arms the same five sites and answers nothing
+> and stops at 105.58 s on 4.190's own last row, with zero `usb_lane`, zero `XhciReg` and zero
+> `CapLength` in its panel. The two answered runs arm `ClockDxe+0x11CBC` as well and clear the bit the
+> poll tests through the guest's own store path — `[0x11A01C]`, `[0x11A034]`, `[0x11A060]`, each `0x1 →
+> 0x0`, six answers, every one `b'OK'`, every one reading back `0x0`, with `AFTER POLL` returning
+> `w0 = 0x1` both times. **The console then moves 79 rows and 0.75 s**: 105.57 s → **106.32 s**, ending
+> on `usb_lane: 0`, `P2 SUPP F056673C…` (UsbfnDwc3Dxe) reporting `Unsupported` at 105.32 s and `Access
+> Denied` at 106.07 s **in the same run**, and then bitra `XhciDxe`'s
+> `ASSERT: (Xhc->CapLength != 0` at `XhciReg.c:121`. The owner is settled by provenance rather than by
+> resemblance: `tools/make_xbl_binaries.py` sets `SIBLING_SOURCE = "bitra"` and maps `XhciDxe` there,
+> the image carries that string at its own `0x10F03` and `ASSERT %a +%d: %a` at `0x133F0`, and the
+> local `XhciReg.c` has the assert at line 106 immediately before the BAR read at
+> `Xhc->CapLength + Offset` — so a zero capability length is exactly what the BAR read would follow.
+> The dynamic core-base query evidently succeeded: neither panel prints `core base`, `Capability
+> length`, `XhcCreateUsb3Hc`, `XhcReadCapReg:` or `Pci Io read error`. **Not established**: whether this
+> new stop is a `CpuDeadLoop` or a return, and `XhcReadCapReg8`'s value is never seen because the
+> instrument never reaches the read. Two readings are **withdrawn**: the stuck-PC reading
+> (`0x9BE09E24`, base `0x9BDFA000`) has no artifact in the tree, and "both panels end on the identical
+> eight-row sequence" is false. The command line still carries **six** fabricated loader blobs, and
+> every row past the vote is said with all six in place. Nothing was flashed, no partition was written,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.191.
+>
+> **Step 4.192 — the stop on XhciDxe's `CapLength` assert is a `CpuDeadLoop`, and the module is named
+> from the machine.** 4.191 could not tell a self-branch from a poll off a panel. This run answers it
+> with the CPU: six breakpoints, 4.191's command line and the same six fabricated blobs, nine answers
+> at the wait (three more than 4.191's two survived), then an empty `c` for 25 s — the guest's own word
+> that it is free — then `\x03`. `pc = 0x9BE09E24`, twenty steps over two alternating PCs, `x8 = 0x0`
+> throughout, and `MZ` found at `0x9BDFA000` after 15 pages, RVA `0xFE24`. The image is bitra's
+> `XhciDxe.efi` by two independent machine readings: `x21 = 0x9BE0AFB6` → RVA `0x10FB6` holds
+> `XhciReg.c` in bitra's copy and an empty run in `9707f`'s, and the sixteen bytes at RVA `0xFE24`
+> occur at exactly that RVA in only two of 6,857 `.efi` under `Binaries/`. `SIBLING_SOURCE = "bitra"`
+> fixes which one the payload carries. The two instructions decode as `ldr x8,[sp,#8]` and
+> `cbz x8, 0xFE24`, a two-instruction self-branch with a zero operand — `CpuDeadLoop`, in the same
+> image the assert came from. A deviating first attempt (arming only `0x11CBC`, which stops the console
+> at 102.56 s on a fault dump no other panel holds) is preserved as `hand6-onesite-*` because it shows
+> the probe is not a neutral observer. The XHCI block reads zero through the guest at `0x0A600000`,
+> `+4`, `+0x1000`, `0x0A720000` and `0x0A800000` — consistent with `CapLength == 0`, indistinguishable
+> from a wrong core base, and zero here because no blob populates it, so it is a consistency check and
+> not a hardware finding. The reading 4.191 withdrew (`0x9BE09E24`, base `0x9BDFA000`, RVA `0xFE24`) is
+> **restored** by this run's own bytes, and two probe defects are recorded rather than quietly fixed
+> (`sp` printed from x13 instead of the stack pointer, and a PE/COFF read skipped by a `0x400` bound).
+> Nothing was flashed, no partition was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See
+> `docs/08` step 4.192.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

@@ -1578,6 +1578,57 @@ Work:
 > EL3 stub's three structures, in place. Nothing was flashed, no partition was written,
 > `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.190.
 >
+> **Step 4.191 — answering the wait at `ClockDxe+0x11CBC` carries the console past 4.190's wall into a second module's assert.**
+> 4.190 left two things unnamed: where the run stops once the vote's poll is passed, and whether that stop
+> is a self-branch. Run here, twice, with a third run as the control on the same command line: the site
+> `ClockDxe+0x11CBC` — the `tbnz w9,#0` of the wait — is **answered**. `x19` names the register block the
+> poll tests, and the bit is cleared **through the guest's own store path** (`M` packet, then read back
+> through the guest): `[0x11A01C] = 0x1 → 0x0`, `[0x11A034] = 0x1 → 0x0`, `[0x11A060] = 0x1 → 0x0`, twice
+> each, six answers, every one `b'OK'` and every one reading back `0x0`. `AFTER POLL` then returns
+> `w0 = 0x1` both times. **The console moves**: from 105.57 s and `SSUsb1InitCommon: gNpaClientSS1Bus is
+> NULL)` — where 4.190's run and this step's own control both stop, row for row identical — to **106.32 s**
+> and a second module's failure: `usb_lane: 0`, `P2 SUPP F056673C… s=Access Denied`, `P2 SUPP B7F50E91…
+> s=Success`, then `…/QcomPkg/Drivers/XhciDxe/XhciReg.c:121 ASSERT: (Xhc->CapLength != 0` and
+> `ASSERT XhciReg.c +121: 0`. **Which module is established by provenance, not resemblance**:
+> `tools/make_xbl_binaries.py` takes `XhciDxe` from `SIBLING_SOURCE = "bitra"`, that image carries
+> `ASSERT: (Xhc->CapLength != 0` at its own `0x10F03` and the `ASSERT %a +%d: %a` renderer at `0x133F0`,
+> and the local source's `XhcReadOpReg` has `ASSERT (Xhc->CapLength != 0);` at `XhciReg.c:106` immediately
+> before the BAR read. So the stop is a real assert on a zero capability length, and every one of the
+> three runs that reached this point had all **six fabricated loader blobs** in place — the capability
+> length it tests is not hardware's. **Not established**: whether that new stop is a `CpuDeadLoop` or a
+> return — a panel cannot tell a self-branch from a poll, and the walk that was to name the module was
+> the one whose socket broke — and the hardware question is untouched. Two readings are **withdrawn**
+> here: the stuck-PC reading (`0x9BE09E24` / base `0x9BDFA000`) has no artifact anywhere in the tree, and
+> the claim that 4.190's and 4.191's panels end on the identical row sequence is false — 4.190's panel
+> has zero `usb_lane`, zero `XhciReg` and zero `CapLength`. See `docs/08` step 4.191.
+>
+> **Step 4.192 — the wall past that assert is a `CpuDeadLoop` in bitra XhciDxe's own image, named from the machine.**
+> 4.191 left open whether the stop on `Xhc->CapLength != 0` is a self-branch or a poll, which a panel
+> cannot tell apart. Run here with the same six breakpoints 4.190 and 4.191 armed and the same command
+> line — the first attempt at this step armed **only** `0x11CBC` and the run went elsewhere (console
+> frozen at 102.56 s on a DALSys fault dump no other panel contains, because the `/pmic/target`
+> suppression never ran), so the deviating attempt is kept beside the good one as a record that the
+> probe is part of the experiment. The trace run reproduces 4.191's handshake row for row, goes **three
+> answers further** than 4.191's two (nine, not six — those died on a `BrokenPipeError`), and the
+> guest's own verdict that it is free is an empty `c` for 25 s: `nothing stopped in 25s after 9
+> answer(s)`. Break-in then gives `pc = 0x9BE09E24`, `lr = 0x9BE09E20`, and twenty single steps over
+> **exactly two PCs, alternating**, with `x8 = 0x0` every time. The walk down finds `MZ` at
+> `0x9BDFA000` (RVA `0xFE24`), and the module is named twice over from the machine: `x21 = 0x9BE0AFB6`
+> → RVA `0x10FB6`, which is the string `XhciReg.c` in `Binaries/bitra/…/XhciDxe.efi` and an empty run
+> in `9707f`'s copy, and the sixteen bytes at RVA `0xFE24` occur at that RVA in two of 6,857 images.
+> The two instructions are `ldr x8,[sp,#8]` / `cbz x8, 0xFE24` — the branch target is the load itself
+> and the word is zero — so it is a two-instruction self-branch, `CpuDeadLoop`, in the same image the
+> assert was rendered from. **So both of 4.190's and 4.191's open questions are now closed, and in the
+> same direction**: the first stop was a poll the instrument can answer, the second is a dead end it
+> cannot. The block the assert is about reads zero through the guest (`USB30_PRIM 0x0A600000` and the
+> other four addresses), which is consistent with `CapLength == 0` but indistinguishable from a wrong
+> core base, and is zero here because no blob populates it — a consistency check, not a hardware
+> finding. **Restored**: the stuck-PC reading 4.191 withdrew for want of an artifact (`0x9BE09E24`,
+> base `0x9BDFA000`, RVA `0xFE24`) is exactly what this run shows, and the note that the descent from
+> `0x9BE09000` would have found `0x9BD05000` is corrected — the walk finds an `MZ` fifteen pages below.
+> **Offered and not taken**: a seventh blob at the XHCI IPA the machine read as zero, which is what
+> would let the `CapLength` assert be passed the way the wait was. See `docs/08` step 4.192.
+>
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

@@ -40011,3 +40011,398 @@ simply stops.
   be taken from this host: reboot to the bootloader, and a screen photograph.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
   ~3.4 s.
+
+## Step 4.191 — answering the wait at `ClockDxe+0x11CBC` carries the console past 4.190's wall into a second module's assert, on bitra XhciDxe's `CapLength != 0`
+
+4.190 named exactly one thing as what it did not close: *"where the run stops now, and whether that stop
+is a self-branch or a poll."* This step asks that. The command line, the six fabricated loader blobs and
+the EL3 flags are byte for byte 4.190's, so the only variable is the probe, and the machine answers two
+questions at once: the thing holding the run at 105.5 s **is a poll**, and it is a poll the instrument can
+be answered out of. Fed the bit it was asking for, the console runs one console-second and nine rows
+further and dies in a **different module** — bitra's `XhciDxe`, on `ASSERT: (Xhc->CapLength != 0`,
+rendered on the panel as `ASSERT XhciReg.c +121: 0`.
+
+**The site.** The wait is inside `ClockDxe` at RVA `0x11C88`, and the file's own bytes are:
+
+    11cb0: b9400268  ldr  w8, [x19]        ; the node's register block -- 0x11A01C on this machine
+    11cb4: 32000108  orr  w8, w8, #0x1     ; the driver itself sets bit 0
+    11cb8: b9000268  str  w8, [x19]
+    11cbc: b9400269  ldr  w9, [x19]        ; <-- the site this step watches
+    11cc0: 3707ffe9  tbnz w9, #0, 0x11cbc  ; and waits for the hardware to clear it
+
+The panel's silent window and this wait are the same thing, and that is measured rather than argued:
+after the console's last row at 105.58 s, the first run of this step sampled the PC 24 times from 46.2 s
+to 92.2 s of its own clock and **every one of the 24** landed on the two instructions above — 13 at
+`0x9C371CBC`, 11 at `0x9C371CC0`, with `lr = 0x9C371CB0`, `x19`-derived `x0 = 0x9C387F10` (the node),
+`x1 = 0x9C38A7B0` (the descriptor), `x2 = 4`, `x3 = 8` and `sp = 0x9FFCE710` on all of them, and the
+bytes at that PC `690240b9 e9ff0737`.
+
+**What the node is, from the machine and not from the file.** The third run of this step armed the node
+method's own entry, `0x11C88`, and asked the guest. It answered: `x0 = 0x9C387F10` (the node),
+`x1 = 0x9C38A7B0` (the descriptor), `lr = 0x9C363A48` (`ClockDxe + 0x3A48`), and
+`node[0x00] = 0x11A01C` — *the register block the poll tests is the literal the file encodes* — with
+`node[0x08] = 0x9C38B9A0`, `[0x10] = 0x8`, `[0x30] = 0x9C37A0C0`, `[0x38] = 0x9C37A138`,
+`[0x40] = 0x9C389620`, `[0x48] = 0x1`; the descriptor's own bytes `01060000 0000ff00`, with the
+halfwords at `+2` and `+4` both zero, which is the early-out the file's assembler predicts. The same run
+stopped at that entry **257,662 times** and did not report `0x11CB0` once.
+
+**The two probe defects, both named here and both cured here.**
+The reason that run saw 257,662 entry stops and zero stops past the helper is the instrument, not the
+guest: a handler in this family ended with `c`, and on this stub `sendpkt` discards the reply — and the
+reply to a `c` is the *next* stop's `T` packet. So every entry stop swallowed the post-helper stop behind
+it. The fourth run then showed the other half of the same problem from the other side: it armed
+`0x11CB0` and `0x11CBC`, and its log has **four identical `PRE-STORE` stops** at `0x11CB0`, every one
+reading `x19 = 0x11A01C`, `x0 = 0x9C387F10`, `x1 = 0x9C38A7B0`, `x2 = 4`, `x3 = 8`,
+`lr = 0x9C371CB0` and `[0x11A01C] = 0x0`, with the code at the site `680240b9`. Four reports of one
+instruction, all before the `str` at `0x11CB8` ever retired — because `QEMU`'s gdbstub breakpoints are
+translation-block entry traps, so a `c` sent from the trapped PC re-traps that same instruction for ever
+and the guest executes nothing at all. 4.190's handler ends in `s` and 4.190's run moves; that is the
+control. So the fifth and sixth runs end **every** handler with exactly one `s`, and the loop's own `c`
+resumes from an address no breakpoint sits on.
+
+**What the machine said when it was answered.** Six arrivals, on three register blocks, each twice — and
+the same six in both runs:
+
+    [0x11A01C] = 0x1  [x19+4] = 0x105   reads back 0x0 after the write   lr = 0x9C371CB0
+    [0x11A034] = 0x1  [x19+4] = 0x1
+    [0x11A060] = 0x1  [x19+4] = 0x1
+    [0x11A01C] = 0x1  [x19+4] = 0x1
+    [0x11A034] = 0x1  [x19+4] = 0x1
+    [0x11A060] = 0x1  [x19+4] = 0x1
+
+Every write used the same `M` packet the vote run's readbacks validated, and every read back through the
+guest. The `[x19+4]` word starts at `0x105` and becomes `0x1` — the programming half of the block
+already done by the time the wait is entered. The two rounds are separated by a second `VOTE` pair, and
+`AFTER POLL` returns `w0 = 0x1` both times. The breakpoint at `0x11CBC` did not fire again **inside the
+recorded window**, which is the guest's own word that it left the wait and did not come back to it before
+the watch ended. The window is not the whole intended watch: both answered runs died on a `BrokenPipeError`
+in `sendpkt ("c", …)` when the panel reader exited first (`answer3 panel exit=1`, `answer4 panel exit=1`
+in `hand4-outer.log` / `hand5-outer.log`), so neither reached `--hunt 285`, and what is claimed here is
+limited to what was recorded.
+
+**What this decides.** The stop is a poll: the guest is asking the hardware to clear a bit the guest
+itself set, and the instrument can answer it. Answered, the console moves. That is 4.190's open question
+closed on its first half — the second half, whether the *next* stop is a self-branch, is a different stop
+and not this one.
+
+**What it does not decide.** Every bit involved is written by an instrument, so what this shows is that
+*no driver is blocked by anything a seven-word seam cannot answer*; it does not show that the real
+`0x11A01C` clears its own bit 0, and the run says nothing about whether the real XHCI register block
+holds a capability length. It also does not say where the CPU is when the console goes quiet at 106.32 s:
+no probe sampled past `0x9C371CC0`, and the walk that was to name that module is the one that crashed.
+
+**Rows.** Step 4.191, the two answered runs and the control, all on the same command line:
+
+- **instrument**: `work/out/qemu-probe-4.191/hand4probe.py`, sha256
+  `d9e73f713531034e18f7210cce6cd33b184d25f8c7b5fb223ee0e85ba8bd31aa`; `run-hand4.sh`
+  `50781e93fa7ae7f4fca19b336f84fdf3b4ceee3aa534865ebb54d1989cf2c807`; `run-hand5.sh`
+  `c97844d9895301a5f1f33c30591c47520c828f6484ea87061e1ae9beb54d66db`. The site table is the file's:
+  `SITE_REG = DALSys+0x335C`, `SITE_FAULT = DALSys+0x346C`, `SITE_VOTE = ClockDxe+0x11734`,
+  `SITE_GDSC = +0x11E5C`, `SITE_AFTER = +0x11760`, `SITE_POLL = +0x11CBC`; `REG_WRITE = 0x152010`,
+  `REG_POLL = 0x100000`. Args `--hunt 285 --wait 90 --steps 9 --cap 20 --hold 30`.
+- **shows**: the run's last console row moves from **105.57 s** (4.190's `252` of 253, and this step's
+  own unanswered control at 105.58 s, `256` of 257) to **106.32 s** (`331` of 332 in the fifth run,
+  `258` of 259 in the sixth), and the rows past the old stop are nine the unanswered runs never printed:
+  `P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Access Denied` at 106.07 s,
+  `P2 SUPP B7F50E91-A759-412C-ADE4-DCD03E7F7C28 s=Success` at 106.32 s, `usb_lane: 0`, the
+  `/work/03bd7a86-8a25-4392-add6-4c5c70a05f9e/workspace/Build_S_BP/4678/code/source/msm_amss/` path,
+  `sm8250_boot/boot_images/QcomPkg/Drivers/XhciDxe/XhciReg.c:121 ASSERT: (Xhc->CapLength != 0`,
+  `)`, `ERROR: C90000002:V03000007 I0 B7F50E91-A759-412C-ADE4-DCD03E7F7C28`, and
+  `ASSERT XhciReg.c +121: 0`.
+- **the control, and why the comparison is single-variable**: `work/out/qemu-probe-4.191/wallprobe.py`
+  (sha256 `4a6715372c512c8773a853021768a561a2ce8280d4210670950c13c39435f6bf`) armed the same five sites,
+  ran the same nine single-steps at the vote and got the same record, and differed in one thing only —
+  it had **no** breakpoint in the wait and answered nothing. Its panel,
+  `work/out/qemu-panel-4.191-wall.txt` (sha256
+  `2c821e59bc6e656a06571e918aa2bca082262c274a94a468133b881d931f7306`), holds 257 rows and stops at
+  105.58 s on exactly 4.190's last row. It contains **no** `usb_lane`, **no** `XhciReg`, **no**
+  `CapLength`, and its last `F056673C` row at 105.33 s reads `s=Unsupported`, not `s=Access Denied`.
+  So the nine rows above are the answer's doing and not the run's.
+- **adds**: the wait's own register contents (`0x11A01C` / `0x11A034` / `0x11A060`, cfg word `0x105`
+  then `0x1`), the accepted answer and its readback, the node's field dump from the third run, the
+  machine-level witness of the two probe defects, and a second `P2 SUPP` status for the same driver —
+  `F056673C` reports `Unsupported` at 105.32 s and `Access Denied` at 106.07 s in the same run.
+- **corrects**: a claim carried out of 4.191's earlier runs — *"the stuck PC is `0x9BE09E24` with
+  `lr = 0x9BE09E20`, in a module based at `0x9BDFA000`, RVA `0xFE24`, a `CpuDeadLoop` reached from an
+  exception handler"* — **has no artifact in this tree.** `grep -rin` for `9be09e24`, `9be09e20` and
+  `9bdfa000` across `docs/`, `work/out/` and `tools/` returns zero hits; no probe in any run sampled a
+  PC past `0x9C371CC0`; and the wallprobe walk that was to name the module **crashed before it ran** —
+  `if mem(a, 2) == b"MZ"` raised `BrokenPipeError`, so `pc-module.bin` was never written and no base was
+  ever produced. The bytes at bitra `XhciDxe` RVA `0xFE24` do decode as `e80740f9` / `e8ffffb4`
+  (`ldr x8,[sp,#8]` / `cbz x8, .-4`, a self-loop), but without a base that decode names nothing, and the
+  intended 0x600-page descent from `0x9BE09000` would have found `0x9BD05000` — the
+  `P2 BIN def=9BD05000..9CAD2FFF` HOB — and not an `XhciDxe` base. The finding is **retired**, not
+  replaced. A second correction: *"both panels end on the identical eight-row sequence"* is **withdrawn**
+  — the eight-row sequence is this step's alone, and 4.190's panel has none of it.
+- **closes**: 4.190's *"where the run stops now, and whether that stop is a self-branch or a poll"* — the
+  stop at 105.5 s is a poll, it is `ClockDxe+0x11CBC`, and the guest leaves it when it is answered.
+- **does not close**: whether the *new* stop (the `CapLength` assert) is a `CpuDeadLoop` or a return,
+  which is what the sixth run of this step was built to ask and what the next step has to answer; what
+  `XhcReadCapReg8` actually reads, i.e. which BAR the guest's `UsbConfig` returned; whether the real
+  `0x11A01C` clears its own bit 0; whether `SSUsb1InitCommon`'s `gNpaClientSS1Bus is NULL` is an absent
+  peer or a second instrument debt; what populates the `0x105` word on the first wait block; the node's
+  name and clock id (`name_of` still returns `None`); and the hardware question generally, since every
+  bit involved is fabricated.
+- **the two rows above the assert are identified, not guessed**: `ERROR: C90000002:V03000007 I0 <caller>`
+  is `SerialStatusCodeHandler.c`'s third branch — `AsciiSPrint (BufferPtr, sizeof (Buffer),
+  "ERROR: C%08x:V%08x I%x", …)` at line 87, `" %g"` for the caller GUID at 92, and `" %x"` for `Data`
+  at 100 **skipped when `Data == NULL`** — so a row ending at the GUID is a report whose payload was
+  NULL (docs/08-device-session.md:31778-31829). `ASSERT XhciReg.c +121: 0` is rendered by the literal
+  `"ASSERT %a +%d: %a"` at bitra `XhciDxe.efi` offset `0x133F0`, with `%a` = `XhciReg.c`, `+%d` = `+121`
+  and `%a` = `0`.
+- **the assert's owner is established by provenance, not by resemblance**: the guest's XHCI stack is
+  bitra's build because `tools/make_xbl_binaries.py` sets `SIBLING_SOURCE = "bitra"` (line 140) and maps
+  `XhciDxe`, `XhciPciEmulationDxe` and `UsbInitDxe` to their bitra directories in `SIBLING_BLOBS`
+  (lines 142-146), copied verbatim with INF and `.depex`. That build,
+  `work/uefi/Mu-Silicium/Binaries/bitra/QcomPkg/Drivers/XhciDxe/XhciDxe.efi` (94,208 B, sha256
+  `d579eaa0c1238b7dfd7de00ff98f4171a57be49df9cdfae793a421eb5cc00275`), carries
+  `ASSERT: (Xhc->CapLength != 0` at `0x10F03` immediately followed by its
+  `/work/03bd7a86-8a25-4392-add6-4c5c70a05f9e/…` build path, `XhciReg.c` at `0x10FAC`, and the
+  `XhcReadCapReg: Pci Io read error` / `XhcReadOpReg: Pci Io Read error` strings at `0x10ED0` and
+  `0x10FC0`. The local source is
+  `work/uefi/Mu-Silicium/Mu_Basecore/MdeModulePkg/Bus/Pci/XhciDxe/XhciReg.c`, where `XhcReadOpReg`
+  begins at line 98 and carries `ASSERT (Xhc->CapLength != 0);` at line **106**, followed by
+  `Xhc->PciIo->Mem.Read (Xhc->PciIo, EfiPciIoWidthUint32, XHC_BAR_INDEX, Xhc->CapLength + Offset, 1,
+  &Data)`. Neither panel prints `core base`, `Capability length`, `XhcCreateUsb3Hc`, `XhcReadCapReg:` or
+  `Pci Io read error`, so the dynamic core-base query inside `XhciPciEmulationDxe` succeeded and what
+  failed is the read of the capability length itself. `XhciPciEmulationDxe.efi` is where that query
+  lives: `XhcPciEmulationDriverBindingStart` at `0x60C7`, `Unable to get core type` at `0x61A0`,
+  `Unable to get core base address` at `0x61EF`.
+- **the GUIDs, re-read**: `B7F50E91-A759-412C-ADE4-DCD03E7F7C28` is `XhciDxe`;
+  `BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1` is `XhciPciEmulationDxe`;
+  `F056673C-EC45-5D81-B2B0-848EBF31C42F` is `UsbfnDwc3Dxe`'s `FILE_GUID`, read out of
+  `uefi/Binaries/gauguin/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf:9`. `usb_lane` is **not** a
+  driver name: it is a DAL property string of `usb_shared_ss_phy_init` inside the frozen
+  `device/dxe/UsbConfigDxe.efi`, at `0x109FA`, beside `ss_phy_cfg_addr` at `0x109C0`,
+  `ss_phy_cfg_val` at `0x109D0` and `GetCoreBaseAddr` at `0xDF1B`.
+- **the address map, recomputed from the instrument rather than remembered**: `tools/qemu-panel-read.py`
+  loaded as a module gives 57 regions below `0x40000000`, 55 redirected 2 MB blocks and a pool of
+  `0x40000000..0x46E00000`. `GCC CLK CTL 0x00100000+0x200000` → block 0 → `0x40000000` (so IPA
+  `0x100000`, `0x11A01C` and `0x152010` all live there); `TCSR_TCSR_REGS 0x01FC0000+0x40000` → block 15
+  → `0x40C00000` (so 4.190's `0x1E00000` → `0x40C00000`); `USB30_PRIM 0x0A600000+0x200000` → block 83 →
+  `0x41A00000`; `USB_RUMI 0x0A720000+0x10000` → block 83 → `0x41A00000`;
+  `USB30_SEC 0x0A800000+0x11B000` → block 84 → `0x41C00000`; the four `*_CLK_CTL 0x18280000+` → block
+  193 → `0x46C00000`. The `0x41E00000` that earlier notes carried is **retired**: computation puts
+  nothing there.
+- **two process facts, for provenance**: both the fifth and sixth runs ended on a `BrokenPipeError` in
+  `sendpkt ("c", …)` → `getpkt` → `s.sendall (b"+")`, because the reader exits first and the probe's
+  GDB socket breaks — `hand5-stdout.log` carries the traceback and `hand4-outer.log` / `hand5-outer.log`
+  read `answer3 panel exit=1` / `answer4 panel exit=1`. The logs are complete for what they recorded;
+  what they lost is the *tail* of the watch, not any stop. And the fourth run's panel was killed by
+  `timeout 420` (`answer2 panel exit=143`), so it has no panel at all — it is cited for its probe log
+  only. One thing that looked like a frozen run and was not: a redirected Python stdout is
+  block-buffered, so a finished run prints nothing until the buffer flushes.
+- **the fourth run reached the site**: `hand3-run.log` (38 lines, sha256
+  `100629437c3d8bdfccb51c578db939fab9d842568ba2f7f8c0818f1b2c19035b`) has four `PRE-STORE` stops at
+  `0x11CB0`; the run was ended by the operator and not starved. A correction to the record: the hash
+  carried for this file earlier was `2b0bdc8d…`, which is `hand4-run.log`'s.
+- **reproduction**: `work/out/qemu-probe-4.191/hand4-run.log` (55 lines, sha256
+  `2b0bdc8d15d70c4be01576c8b287013efb930621240e9a4490f447fdec473bac`) and `hand5-run.log` (55 lines,
+  sha256 `7b131fdfb9fa8d5a80a02715d1873e74bb37fc64d96b5e96636e3b74d70b4965`) differ on **10 of 55 lines
+  and only in timestamps** (0.1 s of drift). The stop this step is about was seen twice.
+- **panels**: `work/out/qemu-panel-4.191-answer3.txt` (sha256
+  `209e648fbb605fa949361cc1039663bc41811f2b2f650a2812ea48b4a13f1c7b`, header `332 rows, weakest margin
+  1.00 of 60 sub-blocks, 51823 characters under 1.5`, 4 GAPs at 90.57 / 96.32 / 101.07 / 102.57 s) and
+  `work/out/qemu-panel-4.191-answer4.txt` (sha256
+  `21e4374d342491f5390b0053933abc0d1b3c146b2463fd446cbf79ed679640d1`, header `259 rows, weakest margin
+  1.00 of 60 sub-blocks, 51791 characters under 1.5`, 3 GAPs). Row-count differences between panels are
+  the reader's own documented sampling artefact, not new text; what carries the claim is the **row
+  content and its timestamp**, which are identical in both. The GAP timestamps are not the last rows:
+  the per-row times are in `panel4191e.log` / `panel4191f.log`, and the last row of both is at 106.32 s.
+  The panels' exit status is **1**, which is that script's own convention — it ends
+  `return 1 if (gaps or weak or bad_seed or bad_aop or drift) else 0` — and not an error.
+- **carries the standing limits unchanged**: nothing was flashed and no partition was written by this
+  project; no stub or Microsoft image was changed; no volume with a patched `UsbConfigDxe` has left this
+  host. Every reading in this step is QEMU's and the device was not read at all.
+  `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, and the stock `boot`
+  restore path (`~/backup/gauguin/images/part-boot.img`, sha256
+  `50ef59beb17e75de1e749b7d261eb41a18d9cca025befb3357e43e239de78ef3`) is unchanged from the `EXPECT`
+  pinned at `tools/restore-stock-boot.sh:36`. `userdata` (107 GB, unbacked), the partition table and the
+  firmware LUN remain untouched.
+- **every row past the vote is said with six fabricated loader blobs in the command line** —
+  `/tmp/rsc-word.bin` (`da60b92bc70e999c07a6ded180a16c1e801e89a5722b565ea242d6aff2f507d8`, `0x46C2000C`),
+  `/tmp/rsc-enable.bin` (`79eb7289e99667fd6c4c4da0d1abb84ab14e287710937b521cd762b2ed70999e`, `0x46C20D18`),
+  `/tmp/pdc-cap.bin` (`6e90b5d2b8ce7b775b3f74bafd0a28d18344b287eff41d0cf938f18344ea8fa2`, `0x424A1008`),
+  `/tmp/apcs-clk.bin` (`00e90d4e0ff1dc06cfce8a932627c2e53fb70b64de52876961ac9e0728c42d5c`, `0x46D21700`),
+  `/tmp/gdsc-clk.bin` (`6d58692645c9d1cfaf13541cbd258f86193ef63c2f1d38f6bbca9617372d7bd6`, `0x4011A004`) and
+  `/tmp/cc-vote.bin` (`d88c86f15bbea365d658ad95a81d45367c465f7af6f7264fb077f01747ddc77d`, `0x40100000`) —
+  plus the EL3 stub's three fabricated structures and the SEEDED SMEM word, on payload
+  `/tmp/xhci-sentinel-pair.raw` (sha256
+  `a64010f46a2e002176670347bd62601a522bddf9717728e891904d4a7b973159`). This step added **no** seventh
+  blob; it read.
+- **not an action**: this step read QEMU and not the device; it wrote nothing anywhere but its own
+  `work/out` artifacts. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin,
+  P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
+  state remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged from 4.188's reading and not re-observed this step. The phone was left in
+  TWRP recovery (`adb devices` = `d25f844e`, `ro.product.board = gauguin`, `adb shell id` =
+  `uid=0(root)`, `2717:ff68` on bus 003) with `fastboot devices` empty, so the P3 `fastboot boot`
+  workflow still needs a physical reboot to the bootloader, and `adb exec-out screencap -p` still
+  returns 53 bytes, so there is still no screenshot route and **no photograph of the 4.187 P3 payload's
+  judgement lines has been supplied**. Two physical actions are outstanding and neither can be taken
+  from this host: reboot to the bootloader, and a screen photograph.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+## Step 4.192 — the wall past the `CapLength` assert is a `CpuDeadLoop` in bitra's own `XhciDxe`, named from the machine by two registers and a page walk
+
+**The question.** 4.191 answered the wait at `ClockDxe+0x11CBC`, the console moved 79 rows and 0.75 s,
+and it ended on bitra XhciDxe's `ASSERT: (Xhc->CapLength != 0`. It left one thing open and said so:
+whether that stop is a `CpuDeadLoop` or a poll. A panel cannot tell a self-branch from a poll — both
+look like a console that stopped printing — so the question needed the CPU, not the screen. This step
+is that question asked of the machine and answered.
+
+**The run, and why it wears 4.190's shape.** The probe is `hand6probe.py`
+(`sha256 525f7552d1cb8a9c7f43362089fe3242b6b8bf8e9439dedb73fb0efbb72123e6`), driven by
+`run-hand6.sh` (`sha256 40f1cb04ff2473be53f9d2f47d62682c141c577a73e20c13d3178837d202f495`). Its site set
+is **site for site** the six 4.190 and 4.191 armed — `DALSys+0x335C`, `DALSys+0x346C`,
+`ClockDxe+0x11734`, `+0x11E5C`, `+0x11760` and `+0x11CBC` — and its command line is 4.191's, with the
+same six fabricated `-device loader` blobs and the same EL3 flags, unchanged. That sameness is the
+point and not decoration, because the **first** attempt at this step did not have it and the run went
+elsewhere: a version that armed **only** `0x11CBC` (preserved as `hand6-onesite-probe.py`,
+`sha256 71baa624…`, with `hand6-onesite-*.log` and `panel4192-onesite.log`
+`sha256 463abf45…`) has a console that stops at **102.56 s** on a DALSys register-and-stack dump
+(`000009FFCE…`, `43444156` = `VADC` at `000009FFCEAA0`) that appears in **no** other panel this project
+holds, and its guest spins at a full core. The reason is in the probe: arming only the new site meant
+the `/pmic/target` suppression every 4.190 and 4.191 probe performs — `P0=0` when `x0 == 0x9C16A278` —
+never ran. **The probe is part of the experiment, not a neutral observer**, and the one-site run's
+non-advancement is recorded here as a fact about the probe, not as a finding about the firmware.
+
+**The handshake, identical to 4.191's, and then three answers further.** The run reproduces the
+answered runs row for row: `@6.9s REG x0=0x9C16A278 entry0.name='/pmic/target'` and the zeroing,
+`@7.9s REG x0=0x9C028838 …vadc`, the two `FAULT`s at `0x9C40E46C` with `x21=0x9C028838`, `@15.2s
+GDSC #1 x0=0x9C385410`, `@15.3s VOTE #1` with the same six-qword record
+(`…00100000 …00152010 …00000001 …9C38B8D0 …00000061 …00000000`, `lr=0x9C365ED0 rva=0x5ED0`), the same
+nine single steps ending `step 8 pc=0x9C371758 x8=0x152010 w9=0x0 w10=0x1`, the same readbacks
+`[0x152010] = 01000000` / `[0x100000] = 00000040`, and `AFTER POLL #1 w0=0x1`. Then the wait, on the
+same three blocks: `0x11A01C` (`[x19+4] = 0x105`), `0x11A034`, `0x11A060`, each `0x1`, each answered
+through the guest's own store path, each reading back `0x0`, then `VOTE #2` and `AFTER POLL #2` with
+`w0 = 0x1`. **This run then goes three answers further than 4.191's two, which died on a
+`BrokenPipeError` after the sixth** — nine answers in all, the eighth and ninth taken without detail
+lines because the probe prints the first seven in full.
+
+**The guest's own verdict that it has gone free.** After the ninth answer the probe stepped off the
+site and issued a plain `c` with a 25-second window. Nothing came back, and that emptiness is the
+verdict, not a failure: `@40.7s nothing stopped in 25s after 9 answer(s) -- the guest is free`. This is
+what 4.191 could only infer from a log that simply ended. One process fact belongs here: the probe's
+`--answers 12` threshold was never reached and the `--idle 18` check it guards therefore never ran, so
+the effective test was the `--stall 25` window and the run is recorded as free at nine answers, not
+twelve.
+
+**The wall, read off the machine.** `\x03` break-in returned `T02thread:01;` and `pc = 0x9BE09E24`,
+with sixteen bytes at it: `e80740f9e8ffffb4fd7b41a9ff830091`. `lr = 0x9BE09E20`. `x8 = 0x0`,
+`x0 = 0x0`, `x26 = 0x9CCC5000` (DxeCore), `x29 = 0x9FFCE810`.
+
+**The module, named twice over from the machine rather than once from the tree.** The page walk down
+for `MZ` — the walk 4.191's `wallprobe.py` lost to a broken socket — found it at **`0x9BDFA000` after
+15 pages**, so the PC's RVA is **`0xFE24`**. Two independent pieces of machine evidence then say which
+image that base is.
+
+- **A register names the file string.** `x21 = 0x9BE0AFB6`, i.e. RVA `0x10FB6`. In
+  `Binaries/bitra/QcomPkg/Drivers/XhciDxe/XhciDxe.efi` that RVA holds the string `XhciReg.c`; in
+  `Binaries/9707f/QcomPkg/Drivers/XhciDxe/XhciDxe.efi` the same RVA is inside an empty run and that
+  image's `XhciReg.c` sits at `0x10F77`. `x21` is the `%a` file-name argument the assert renderer was
+  handed, so the register agrees with bitra's layout and not the other's.
+- **The bytes at the RVA are nearly unique.** The sixteen bytes at RVA `0xFE24` occur at exactly that
+  RVA in **two** of the 6,857 `.efi` images under `Binaries/` — bitra's XhciDxe and 9707f's, which are
+  different files (`d579eaa0c1238b7dfd7de00ff98f4171a57be49df9cdfae793a421eb5cc00275` and
+  `4d5b1ba4503e918cfadad74979bdd5803461e7257dabf17f18d97d2641e2c88f`) of the same 94,208 bytes.
+- `tools/make_xbl_binaries.py` sets `SIBLING_SOURCE = "bitra"` and maps `XhciDxe` to
+  `QcomPkg/Drivers/XhciDxe`, so the image the payload carries is bitra's — the same copy 4.191 already
+  established carries `ASSERT: (Xhc->CapLength != 0` at `0x10F03` and `ASSERT %a +%d: %a` at `0x133F0`.
+
+**The loop itself.** Twenty single steps, **two distinct PCs, alternating**: `0x9BE09E24` and
+`0x9BE09E28`, with `x8 = 0x0`, `lr = 0x9BE09E20` and `x0 = 0x0` on every one. Decoded:
+
+    RVA 0xFE24:  f94007e8   ldr x8, [sp, #8]
+    RVA 0xFE28:  b4ffffe8   cbz x8, 0xFE24        (imm19 = -1)
+
+The branch target is the `ldr` itself, the word it loads is zero, so the branch is always taken. That
+is a two-instruction self-branch — `CpuDeadLoop` — and it lives in **bitra XhciDxe's own image**, at
+the same base the assert was rendered from. **The stop past the vote is a dead loop and not a poll.**
+
+**What this decides.** 4.191's open question, and the half of 4.190's that 4.191 could not reach. The
+run no longer stops at a register it is waiting for: past the answered wait it reaches bitra XhciDxe,
+fails a real `DebugAssert` on a zero `CapLength`, and the handler does not return. The two questions
+4.190 and 4.191 left open are now both closed, and closed in the same direction — the first stop was a
+poll the instrument can answer, and the second is a dead end the instrument cannot.
+
+**What it does not decide.** The hardware question, and it is worth being exact about why. The block
+the assert is about reads **zero** through the guest — `USB30_PRIM 0x0A600000`, `+4`, `+0x1000`,
+`USB_RUMI 0x0A720000` and `USB30_SEC 0x0A800000` all `00000000`, while pool `0x41A00000` and
+`0x41C00000` are unreadable because the guest's own page tables do not map them and the IPA reads go
+through the redirect the stage-2 plan builds. That is arithmetically consistent with `CapLength == 0`
+and therefore with the assert, but a zero read cannot be told apart from a wrong core base — both read
+zero — and the block is zero here for the plain reason that **no blob of this instrument populates
+it**. So this is a consistency check and not a hardware finding. Also open: whether a real gauguin
+XHCI block holds a non-zero capability length, whether the driver's core-base query would succeed on
+hardware, and whether the `F056673C` `Unsupported` → `Access Denied` pair is a second debt.
+
+**Rows.** Step 4.192, the trace run and the two runs it supersedes, all on the same command line:
+
+- **instrument**: QEMU `-M virt,secure=on,virtualization=on,gic-version=2 -cpu max -m 4096`, the
+  payload at `0x48010000` behind the EL3 stub, and the GDB stub on `/tmp/g4192.gdb`. The probe arms
+  six `Z0` breakpoints, waits 90 s, answers, and after the guest goes free breaks in with `\x03`,
+  single-steps 20 times, walks down for `MZ`, and reads the XHCI-register IPAs.
+- **shows**: `pc = 0x9BE09E24` at break-in; `MZ` at `0x9BDFA000` after 15 pages; RVA `0xFE24`; 20 steps
+  over exactly two PCs; `x8 = 0x0` at every step; `lr = 0x9BE09E20`.
+- **the control, and why this run is single-variable**: the site set, the command line, the six
+  fabricated loader blobs and the EL3 flags are 4.190's and 4.191's, and the log reproduces their
+  handshake line for line before doing anything new. The deviating attempt is kept beside it as
+  `hand6-onesite-*`, so the difference is on the record rather than argued.
+- **names the module from the machine**: `x21 → RVA 0x10FB6 → "XhciReg.c"` in bitra's image and not in
+  9707f's; the sixteen bytes at RVA `0xFE24` occur at that RVA in two of 6,857 images; and
+  `SIBLING_SOURCE = "bitra"` fixes which one the payload carries.
+- **restores a reading 4.191 withdrew**: 4.191 retired the stuck-PC reading — `PC = 0x9BE09E24`,
+  `lr = 0x9BE09E20`, base `0x9BDFA000`, RVA `0xFE24`, `CpuDeadLoop` — because **no artifact in the
+  tree** carried it (zero grep hits for `9be09e24`/`9be09e20`/`9bdfa000` across `docs/`, `work/out/`
+  and `tools/`). This run is that artifact: every one of those four numbers, and the loop's identity,
+  now comes off the machine. 4.191's accompanying note that the intended descent from `0x9BE09000`
+  "would have found `0x9BD05000`" is also corrected — the walk down from `0x9BE09E24` does find an
+  `MZ`, fifteen pages below, at `0x9BDFA000`.
+- **closes**: 4.191's *"whether the new stop is a `CpuDeadLoop` or a return"*, and with it the second
+  half of 4.190's question. The stop is a two-instruction self-branch in the module whose assert was
+  rendered, and the assertion that produced it is a real `DebugAssert` on a zero capability length.
+- **corrects**: two defects in the probe **as it ran**, recorded rather than quietly fixed, because the
+  probe file is part of the artifact. First, the field the log prints as `sp` is **not** the stack
+  pointer: the probe read register `d` (x13 = `0x5`) where it meant register `1F`, so the line after
+  it — the `stack at sp:` dump — is a read at that wrong address and is not the stack; it is used
+  nowhere in this step, and the real SP is `x29 = 0x9FFCE810`. (That read at guest address `5`
+  returned 0x80 bytes rather than an error, which a read of an unmapped guest address should not do;
+  the stack line is doubtful on that count too and is set aside for both reasons.) Second, the PE/COFF
+  read never ran: `e_lfanew` came back `0xE58` and the probe's bound was `< 0x400`, so `SizeOfImage`,
+  the COFF stamp and the section names were not read — and the module was named from the two registers
+  above instead, which is the stronger evidence in any case.
+- **two process facts, for provenance**: the second attempt at this step (the one whose probe waited a
+  full 279 s on a `c` before it was killed) is preserved as `hand6-run-stall.log`
+  (`sha256 f828c71b…`, 57 lines, ending at `IN THE WAIT #7`); its panel stream was written to
+  `panel4192.log` and was **overwritten** when the third attempt's script ran `rm -f`, so what it
+  showed — console rows to 103.32 s and zero `usb_lane`, zero `XhciReg`, zero `CapLength` — was read
+  before the overwrite and is recorded from that reading, not from a file that still exists.
+- **does not close**: the hardware question, as spelled out above — every bit and every byte involved
+  is fabricated by this instrument, and the block the assert is about is zero because nothing populates
+  it.
+- **a decision offered, not taken**: a seventh fabricated loader blob aimed at the XHCI register block,
+  which is what would let the `CapLength` assert be passed the way the wait was passed. Its address is
+  now the machine's to name rather than the tree's to guess — the probe read `USB30_PRIM 0x0A600000` as
+  a guest address and got zero, which is the address to seed. **Not built, not run.**
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
+  fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C`
+  seed and the EL3 stub's three fabricated structures all still stand, and the panel's own header says
+  so.
+- **every row past the vote is said with six fabricated loader blobs** (`/tmp/rsc-word.bin`,
+  `/tmp/rsc-enable.bin`, `/tmp/pdc-cap.bin`, `/tmp/apcs-clk.bin`, `/tmp/gdsc-clk.bin`,
+  `/tmp/cc-vote.bin`) **and the EL3 stub's three fabricated structures in place**. This step added **no**
+  seventh blob; it read.
+- **not an action**: this step read QEMU and not the device; it wrote nothing anywhere but its own
+  `work/out` artifacts. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin,
+  P3 is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
+  state remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged from 4.188's reading and not re-observed this step. The phone was left in
+  TWRP recovery (`adb devices` = `d25f844e`, `ro.product.board = gauguin`, `adb shell id` =
+  `uid=0(root)`, `2717:ff68` on bus 003) with `fastboot devices` empty, so the P3 `fastboot boot`
+  workflow still needs a physical reboot to the bootloader, and `adb exec-out screencap -p` still
+  returns 53 bytes, so there is still no screenshot route and **no photograph of the 4.187 P3 payload's
+  judgement lines has been supplied**. Two physical actions are outstanding and neither can be taken
+  from this host: reboot to the bootloader, and a screen photograph.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
