@@ -44240,3 +44240,145 @@ needs, and the screen photograph that `先读屏，再刷下一次` requires bef
 still **no removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the partition
 table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+
+## Step 4.221 — the frozen page is a Windows Setup language dialog and not a hang with no content, the freeze is now 38 minutes wide, and the four vCPUs burn an identical 45.5% of wall each while writing almost nothing to their own RAM
+
+**What 4.220 left open.** 4.220 measured this same guest — the FAT32 stick under
+`tools/qemu-boot-win11-iso.sh`, TCG, `-smp 4` — as *idle*: half of vCPU0's instruction samples
+landed on the instruction after the ARM64 idle path's `wfi`, no vCPU above 28%, and `info jit`
+falling but non-zero. It then read frames 4–10 and found that consecutive two-minute frames differ
+only inside one 22×21-pixel element at `x 90..111, y 180..200`, redrawn sub-second. Two readings
+followed from that and both are now false for this run's later state: that the guest is largely
+idle, and that the only thing moving on screen is a small rotating stroke. This window measured
+the same guest between 06:12 and 06:34 and found neither.
+
+**The frame stopped at 05:48 and has not moved since.** The harness writes `shot-NNN.ppm` every
+two minutes and prints a colour count with each. Eighteen consecutive frames —
+`shot-021` (05:48:51) through `shot-038` (06:22:53) — plus `shot-039` and `shot-040` (06:26:54),
+are byte-identical at `sha256 8003cfa1613f3ba1c61f327c386153c3ef33cbd8cea78752fde6e7d4a754fba1`,
+and a fresh `screendump` taken through the monitor at 06:12 is that digest again. `shot-020`
+(05:46:51) is `6e1ed2f8f5892796…`, `shot-019` is `de58d9351d6859bc…`, `shot-018` is
+`baf8618a8f77d6bb…` — so the stop has an edge and it is between 05:46:51 and 05:48:51. The
+harness did **not** stop: it kept writing frames and kept printing. The colour count is the cheap
+tell and it flips at exactly that edge — `769`, `764`, `780` for the last three moving frames,
+then `889` for every frozen one and nothing else in between.
+
+**The page, read glyph by glyph.** Earlier windows transcribed this page from rendered images and
+could not read it; this one segments each text band into runs of ink columns and prints each run
+as a bitmap, which is legible where a downscaled PNG is not. At `thr 470` for body text and
+`thr 600` inside the buttons, the page resolves as:
+
+- a black rule at `y 18..19`, a light plate `y 20..48`, and dark title text at `y 29..46` reading
+  **`Windows Setup`** (runs x54..65 `W`, x72..82 `i`, x87..91 `d`, x94..98 `o`, x101..105 `w`,
+  x107..120 `s`, x125..127 `S`, x131..133 `e`, x139..144 `t`, x146..154 `u`, x156..160 `p`,
+  x163..167 `p`), with two window-control boxes outlined at `x 648..679` and `x 716..747` and a
+  box-in-box glyph at `x 692..702`;
+- a heading on one line, `y 96..126`, twenty-two runs spanning `x 93..413`, with descender
+  clusters at `x 220..232` and `x 386..398` — **read structurally only, not asserted word by
+  word**;
+- a labelled row at `y 161..182`: a label at `x 91..214` and a bordered box at `x 297..576`;
+- a labelled row at `y 220..235` whose label reads **`Time and currency format`** (runs x90..97
+  `T`, x103..113 `m`, x116..121 `e`, x128..133 `a`, x136..141 `n`, x144..150 `d`, x157..161 `c`,
+  x164..169 `u`, x172..175 `r`, x177..180 `r`, x182..187 `e`, x190..195 `n`, x198..202 `c`,
+  x204..210 `y`, x215..219 `t`, x221..227 `o`, x230..233 `r`, x235..245 `m`, x248..253 `a`,
+  x255..259 `t`) and another bordered box at `x 297..576`;
+- a footer at `y 524..539`: the four-pane Windows flag at `x 94..108` — sampled (97,530)
+  `(242,80,34)`, (105,530) `(127,186,0)`, (97,535) `(0,164,239)`, (105,535) `(255,185,0)` — then
+  **`Microsoft Support`** from `x 113..230` and **`Legal`** at `x 264..291`;
+- two bordered buttons at `y 524..547`, interiors near-white `(249,249,249)`: one at `x 510..603`
+  labelled **`Back`** (thr=600, run x544..570) and one at `x 615..708` labelled **`Next`**
+  (thr=600, run x650..674).
+
+**Two earlier withdrawals are reversed, and the reason is a threshold.** The prior record withdrew
+the filled indigo `Next` button and the `1 of 2` footer counter as "not reproduced by measurement".
+Both **are** reproduced; they were measured at `thr 470`, at which the button labels and the
+footer's thin strokes fall below the ink threshold and vanish. The button text needs `thr 600`, the
+title bar `thr 430`, the body text `thr 470`. That is a method error in the measurement, not a
+disagreement about the frame, and it is recorded here as such because two elements were removed
+from the record on the strength of it.
+
+**Two things about that page matter more than the transcription.** `Time and currency format` is a
+verbatim Windows Setup field label, the footer carries Microsoft's own marks, and the buttons are
+a wizard's `Back`/`Next` — so **this run did put a Windows Setup page on the screen**, which is
+further than 4.217's "the stick's own boot manager draws a Windows Setup window and then holds
+still" could say and is the P3 gate's own subject. And `y 240..519` is empty: at `thr 740`, light
+enough to catch a grey border or a disabled control, those rows carry nothing but the frame's own
+edges. So the page carries **two** labelled fields and not three — no third row, no keyboard or
+input-method row.
+
+**The frame furniture, so the boundaries are measured and not assumed.** A left rail `x 44..49`
+and a right rail `x 750..759`, colour `(164,190,217)`, on an indigo desktop `(24,0,82)`; rows
+`y 50..572` carry exactly nineteen non-white pixels each in `x 40..760`, six from the left rail and
+ten from the right. The framebuffer does not fill the ramfb: `y 573..579` is black `(0,0,0)` and
+`y 580..599` is indigo again.
+
+**All four vCPUs are running, at the same rate, to the same hundredth of a second.** `info cpus`
+gives the thread ids; `/proc/<tid>/stat` gives the accounting. Over a twenty-second window:
+
+```
+vCPU0 tid=498078 user=8.68s sys=0.43s total=9.11s 45.5% of wall
+vCPU1 tid=498079 user=8.68s sys=0.43s total=9.11s 45.5% of wall
+vCPU2 tid=498080 user=8.68s sys=0.43s total=9.11s 45.5% of wall
+vCPU3 tid=498081 user=8.68s sys=0.43s total=9.11s 45.5% of wall
+sum 36.44s over 20.00s wall = 182.2%
+```
+
+Four host threads agreeing to 10 ms over twenty seconds is not four threads doing four different
+jobs; it is four vCPUs running the *same* loop. This also corrects 4.220's "no vCPU exceeds 28%":
+the guest is no longer largely idle, and its load has roughly doubled since that measurement.
+
+**Every new translation block is also an invalidation.** `info jit` twice, 45 s apart, three times
+in this window: `TB count` 1,054,520 → 1,054,944 (**+424**), then 1,055,314 → 1,055,760 (**+446**),
+then 1,055,760 → 1,056,179 (**+419**) — call it 9.3–9.9 per second — with `TB invalidate count`
+82,063 → 82,487 (**+424**, equal to the first pair), `TB flush count 0` and `cross page TB count 0`
+on every read. 4.220 read a falling translation rate as "still reaching new code, not wedged in one
+loop". That reading survives — the rate has not fallen to zero, and in fact it is now slightly above
+4.220's 7/s — but the equality is the new fact: each new block arrives with one invalidation and
+there are no flushes, so the guest is repeatedly invalidating pages and re-translating them rather
+than sitting in one translated loop.
+
+**The spinning guest writes almost nothing to its own RAM.** `memsave` fails on the machine RAM
+region in this build; `pmemsave` works and needs its filename **last and quoted**. Two 16 MiB
+windows, twice, 45 s apart:
+
+```
+0x40000000: 22.14% non-zero,   33 differing dwords over 45 s,  5 differing 4K pages
+0x100000000: 70.83% non-zero, 1094 differing dwords over 45 s, 41 differing 4K pages
+```
+
+Thirty-two mebibytes sampled twice and about 1 KB plus 4 KB moved, spread over 46 pages. A guest
+decompressing an image, reading a disk or building a page table does not look like this; a spin
+that touches a lock, a counter or a flag does. The caveat the reading carries: the low 64 MiB of
+the `0x40000000` window overlaps `virt.flash1`'s address range, so that window mixes RAM with
+firmware. A third window, `0x80000000`, is entirely zero — nothing resident.
+
+**decides**: that the frame this run produced stopped between 05:46:51 and 05:48:51 — twenty
+consecutive two-minute frames, 05:48:51 through 06:26:54, sharing one digest and one colour count,
+with the harness still writing and still printing; that all four vCPUs are simultaneously busy at
+9.11 s of CPU per 20 s of wall each, identical to 10 ms, i.e. 182% of a core and the same loop on
+every core; that `TB count` advances at 9–10/s while `TB invalidate count` advances by the same
+amount and `TB flush count` stays 0, so the guest re-translates what it invalidates; that over 45 s
+the spinning guest moves about 5 KB across 32 MiB of RAM, so the spin is not doing productive work;
+that the frozen page is a Windows Setup dialog carrying the title `Windows Setup`, the field label
+`Time and currency format`, the buttons `Back` and `Next`, and a footer with the four-pane Windows
+flag and `Microsoft Support` / `Legal` — all read glyph by glyph — with two labelled fields and
+`y 240..519` empty between them; that the earlier withdrawals of the `Next` button and the `1 of 2`
+counter were a `thr 470` artifact and both elements are present; and that `serial.log` is 370 bytes
+with mtime 05:08:43, holding only the AAVMF banner and the two `BdsDxe` lines for `Boot0001 "UEFI
+QEMU QEMU USB HARDDRIVE 1-0000:00:01.0-3"`. **does not decide**: why the guest stopped — 182% of a
+core over an unchanging screen with almost no memory traffic is equally consistent with Setup
+waiting on something that never answers, a kernel-level spin, and a fault loop, and the monitor
+cannot separate them; what the heading at `y 96..126` says, which is segmented but not read; what
+the `y 161..182` label says, likewise; and whether the run would have progressed at all, since it
+is still alive at 78 minutes of its 10,800-second budget, which falls at 08:08. **Not an action**:
+`info jit`, `info cpus`, `pmemsave` and `screendump` read from the running guest's monitor socket;
+`/proc/<tid>/stat` read from the host; `sha256sum` and frame reads on files under `work/`, which is
+gitignored. No flash, no `fastboot` command, no partition written, no seed written, no console read
+from the device and no device file opened. **device state**: unchanged — `adb devices`, `fastboot
+devices`, `lsusb` and both tty globs are empty, so the three physical actions remain outstanding: a
+reset of the phone, the reboot to the bootloader the P3 `fastboot boot` workflow needs, and the
+screen photograph that `先读屏，再刷下一次` requires before any payload boots. There is still **no
+removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the partition table and
+the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
