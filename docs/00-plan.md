@@ -1170,6 +1170,39 @@ Work:
 > `tools/fv-apriori.py`'s `walk_volume`, `aarch64-linux-gnu-objdump`; none modified. No guest was
 > booted, no firmware was built, no device was touched. See `docs/08` step 4.179.
 
+> **Step 4.180 — the handle census 4.177 and 4.178 both asked for is built and read, and it says the
+> chain stops at its first link.** A `P2UsbCensus()` in `Mu_Basecore/.../Dispatcher/Dispatcher.c:547`
+> — a `P2HandleCount` wrapper over `CoreLocateHandleBuffer (ByProtocol, …)` called seven times, printed
+> as `P2 USB n=%d all=%d pciio=%d usb2hc=%d usbio=%d blkio=%d fs=%d cfg=%d loaded=%d` between `P2Bins ()`
+> and `P2Key ()` — was added, `tools/regen-mu-basecore-patch.sh` regenerated the patch, and
+> `tools/build-apriori-variant.sh xhci-host` rebuilt the payload through all four of its gates to
+> `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,173,504 B, `sha256 f2f9d948…` (the 4.177 payload
+> preserved as `prev-xhci-nocensus.img`, 1,171,456 B, `sha256 34360470…`). One page of volume growth
+> moved `DALSys`, so `run32-plain.sh` was spent on a plain run purely to read the new base off its own
+> fault dump: `0x9C40B000` against 4.177's `0x9C40D000`, same `+0x346C` offset, `FAR 0xAFAFAFAF…`.
+> `run32.sh` with `BASE=0x9c40b000` and `gdbprobe32.py` (4.177's probe, socket name only) then reaches
+> the ordinary pass and ends where 4.177 ended — `K 83 SO 76/69`, `P2 STATS discovered=83 apriori=69/70
+> started=76 diag=7 noload=0` — and the census prints **one distinct value across five passes from
+> 14.26 s to 60.55 s**, i.e. every pass after dispatch completed at 12.51 s:
+> `all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77`. `all=139` says the probe works;
+> `pciio=0` says **no handle in the system carries `gEfiPciIoProtocolGuid`**, so `XhciPciEmulation` —
+> which returned `EFI_SUCCESS` from its entry point at `K 73 Ss 67/69` — published no emulated
+> controller, and `usb2hc`/`usbio`/`blkio`/`fs` follow from that. A sixth row at `71.56 s` reads `n=3`,
+> which is a `SIGTERM`-truncated flush and not a sixth pass: `mP2Census` is only ever incremented.
+> `cfg=1` is recorded as one handle against 4.179's three install sites, not as a resolved
+> discrepancy, because `CoreLocateHandleBuffer` deduplicates by handle. The *why* was already in
+> 4.177's panel and had never been read against a handle count — `UsbConfigDxe`'s own bring-up:
+> `UsbPwrCtrlLib_Init Initialize Hardware Configuration Error[Access Denied]`,
+> `UsbConfigLibOpenProtocols: gPmicNpaClientSS1 cannot be created`, `failed to locate PMIC version
+> protocol`, `PMI version (0x0)`, and `UsbConfigInit: Failed to attach USB Arid 0x0 HAL IOMMU domain
+> Result =  (0x4)`. **The load-bearing caveat**: this volume carries no PCI host bridge driver at all
+> (`--roster`: 135 files, `XhciPciEmulation` the only `pci`-named one) and the instrument is `-M virt`
+> with `-nic none`, so `pciio=0` is consistent with either "the emulation never published" or "this
+> machine has no PCI layer to attach to" — and only the device separates them. Instrument: `P2UsbCensus`
+> (added), `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`,
+> `tools/fv-inventory.py --roster`; `tools/qemu-panel-read.py` unmodified. No device was touched. See
+> `docs/08` step 4.180.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

@@ -3523,6 +3523,29 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `work/out/boot-before-p2walk.img`, `Silicon/Qualcomm/QcomPkg/QcomPkg.dec`. No guest was booted, no
 > firmware was built and no device was touched. See `docs/08` step 4.179.
 
+> **Step 4.180 — the payload the platform build produces is now instrumented, and the instrument says
+> the PCI layer this platform never had is where the USB chain stops.** Recorded in this file because
+> it is a statement about the volume this platform's `.fdf` and `APRIORI.inc` assemble, not about the
+> guest. A `P2UsbCensus()` was added to `Mu_Basecore/.../Dispatcher/Dispatcher.c:547` and
+> `tools/build-apriori-variant.sh xhci-host` rebuilt through all four gates to
+> `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (`sha256 f2f9d948…`, 1,173,504 B — one `0x1000`
+> page larger than the 4.177 payload, which is enough to move `DALSys` from `0x9C40D000` to
+> `0x9C40B000` and therefore to invalidate every `--base` in this project after every build). The
+> census reads `all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77`, identically across five
+> passes from 14.26 s to 60.55 s — every pass after the dispatch finished. The relevant half for this
+> file is `pciio=0` against `tools/fv-inventory.py --roster`: **135 files, and not one of them is a PCI
+> host bridge.** `XhciPciEmulation` is the only file whose name contains `pci`, and its job is to
+> *fabricate* the device, not to consume a bus — its thirteen-term depex (4.178) carries no
+> `PciRootBridgeIo` term. So a zero `PciIo` count here is either the finding (`XhciPciEmulation`
+> published nothing, though it returned `EFI_SUCCESS`) or this instrument's own shape (`-M virt`,
+> `-nic none`), and no reading available inside QEMU separates the two. That is the same class of limit
+> 4.178 recorded about a-priori indices and 4.179 about GUID spelling: an artifact of this project's
+> own packaging and instrument, stated as such rather than carried as a device finding. `cfg=1` is
+> recorded against 4.179's three install sites as a discrepancy, not a resolution. Instrument:
+> `P2UsbCensus` (added), `tools/build-apriori-variant.sh`, `tools/fv-inventory.py --roster`,
+> `Mu_Basecore/.../Dispatcher/Dispatcher.c`. No firmware source outside that one file was changed, no
+> device was touched. See `docs/08` step 4.180.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

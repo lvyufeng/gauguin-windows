@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..8e11d534 100644
+index d7c7147e..837ef37b 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,631 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,743 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -779,6 +779,118 @@ index d7c7147e..8e11d534 100644
 +}
 +
 +//
++// P2BRINGUP: the handle-database census.
++//
++// Every other row of this digest describes the dispatcher's own bookkeeping:
++// discovered, promoted, loaded, started. All four stop short of *bound*. A driver
++// whose EntryPoint returned success may still have installed nothing, and binding
++// is exactly that installation - so the four steps of USB bring-up are four
++// protocol GUIDs, and each is installed by a different file:
++//
++//   PciIo          XhciPciEmulation publishes it on its root bridge handle
++//   Usb2Hc         XhciDxe installs it on the controller handle it bound to
++//   UsbIo          UsbBusDxe/UsbDeviceDxe produce it per enumerated device
++//   BlockIo        UsbMassStorageDxe produces it for a mass-storage interface
++//   SimpleFS       Fat produces it on a BlockIo it can read
++//
++// Read as a chain, those five separate three failures the `K` rows cannot tell
++// apart, because all three print `Ss`:
++//
++//   PciIo = 0                      the emulation driver never installed anything
++//   PciIo > 0, Usb2Hc = 0          XhciDxe ran but did not bind to the bridge
++//   Usb2Hc > 0, UsbIo = 0          the controller is up but no hub enumerated
++//   UsbIo > 0, BlockIo = 0         a device enumerated but is not mass storage
++//   BlockIo > 0, SimpleFS = 0      the device is there but not formatted/readable
++//
++// `cfg=` is the vendor USB Config protocol (E722B03F), counted separately: it is
++// the one term both remaining XCHI drivers are gated on and the one 4.179 could
++// not find a satisfiable publisher for, so "how many handles carry it, and on
++// which pass did that become non-zero" is the measurement that question needs.
++// `all=` and `loaded=` are baselines - if either is zero the walk itself is
++// broken and the other numbers mean nothing.
++//
++// Counted, not inspected: this asks whether a handle carries a protocol, not what
++// the handle is. CoreLocateHandleBuffer already walks the database, so this is the
++// ConnectController-side probe 4.177 and 4.178 both asked for in the one form that
++// needs no new instrument.
++//
++// Printed on every digest pass, and the pass number with it, because the number of
++// digest passes is itself unmeasured. The same counts appearing 24 times and the
++// counts changing between the first and the last are different readings: only the
++// second says a driver got bound later in the boot than the one that printed the
++// first copy.
++//
++STATIC UINTN  mP2Census = 0;
++
++STATIC
++UINTN
++P2HandleCount (
++  IN EFI_GUID  *Protocol
++  )
++{
++  EFI_STATUS  Status;
++  EFI_HANDLE  *Buffer;
++  UINTN       Number;
++
++  Number = 0;
++  Buffer = NULL;
++  Status = CoreLocateHandleBuffer (ByProtocol, Protocol, NULL, &Number, &Buffer);
++  if (Buffer != NULL) {
++    CoreFreePool (Buffer);
++  }
++
++  if (EFI_ERROR (Status)) {
++    return 0;
++  }
++
++  return Number;
++}
++
++STATIC
++VOID
++P2UsbCensus (
++  VOID
++  )
++{
++  EFI_GUID   GuidPciIo  = { 0x4CF5B200, 0x68B8, 0x4CA5, { 0x9E, 0xEC, 0xB2, 0x3E, 0x3F, 0x50, 0x02, 0x9A }};
++  EFI_GUID   GuidUsb2Hc = { 0x3E745226, 0x9818, 0x45B6, { 0xA2, 0xAC, 0xD7, 0xCD, 0x0E, 0x8B, 0xA2, 0xBC }};
++  EFI_GUID   GuidUsbIo  = { 0x2B2F68D6, 0x0CD2, 0x44CF, { 0x8E, 0x8B, 0xBB, 0xA2, 0x0B, 0x1B, 0x5B, 0x75 }};
++  EFI_GUID   GuidBlkIo  = { 0x964E5B21, 0x6459, 0x11D2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B }};
++  EFI_GUID   GuidSimpFs = { 0x964E5B22, 0x6459, 0x11D2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B }};
++  EFI_GUID   GuidUsbCfg = { 0xE722B03F, 0xB250, 0x42CE, { 0x8E, 0xBD, 0x5B, 0xD5, 0x18, 0x12, 0xD0, 0x37 }};
++  EFI_STATUS Status;
++  EFI_HANDLE *Buffer;
++  UINTN      All;
++
++  mP2Census++;
++
++  All    = 0;
++  Buffer = NULL;
++  Status = CoreLocateHandleBuffer (AllHandles, NULL, NULL, &All, &Buffer);
++  if (Buffer != NULL) {
++    CoreFreePool (Buffer);
++  }
++
++  if (EFI_ERROR (Status)) {
++    All = 0;
++  }
++
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 USB n=%d all=%d pciio=%d usb2hc=%d usbio=%d blkio=%d fs=%d cfg=%d loaded=%d\n",
++    mP2Census,
++    All,
++    P2HandleCount (&GuidPciIo),
++    P2HandleCount (&GuidUsb2Hc),
++    P2HandleCount (&GuidUsbIo),
++    P2HandleCount (&GuidBlkIo),
++    P2HandleCount (&GuidSimpFs),
++    P2HandleCount (&GuidUsbCfg),
++    P2HandleCount (&gEfiLoadedImageProtocolGuid)
++    ));
++}
++
++//
 +// P2BRINGUP: the digest is printed 41 times and the pause between the copies was
 +// CoreStall's, which is a real stall here: `MetronomeDxe` and `ArmTimerDxe` are
 +// both in the `s` set - the SEQ line says so - so gMetronome is non-NULL and
@@ -964,7 +1076,7 @@ index d7c7147e..8e11d534 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1108,19 @@ CoreDispatcher (
+@@ -483,11 +1220,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -984,7 +1096,7 @@ index d7c7147e..8e11d534 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1152,20 @@ CoreDispatcher (
+@@ -519,6 +1264,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -1005,7 +1117,7 @@ index d7c7147e..8e11d534 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1543,8 @@ CoreAddToDriverList (
+@@ -896,6 +1655,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -1014,7 +1126,7 @@ index d7c7147e..8e11d534 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +1958,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +2070,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -1031,7 +1143,7 @@ index d7c7147e..8e11d534 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2071,29 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2183,29 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1061,7 +1173,7 @@ index d7c7147e..8e11d534 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2115,87 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2227,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1149,7 +1261,7 @@ index d7c7147e..8e11d534 100644
      }
  
      //
-@@ -1470,6 +2228,265 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2340,267 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1405,6 +1517,8 @@ index d7c7147e..8e11d534 100644
 +
 +  P2Bins ();
 +
++  P2UsbCensus ();
++
 +  //
 +  // Last, so that it is the last populated row of the panel. Everything above
 +  // it is a spelling of the same reading; this is the one line to photograph.
@@ -1415,7 +1529,7 @@ index d7c7147e..8e11d534 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2503,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2617,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;

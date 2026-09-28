@@ -36922,3 +36922,208 @@ this record has not measured.
 - **device state**: the phone is off USB. It was wedged by an unsupported `fastboot fetch boot` earlier
   in this session and has not been power-cycled back to the bootloader; `fastboot devices` lists
   nothing. Nothing was written to it at any point.
+
+## Step 4.180 — the handle census is built and it is read: `pciio=0` at every digest pass, so the USB chain this port has been chasing stops at its **first** link — `XhciPciEmulation` returns success from its entry point and publishes no emulated controller, and the console of both runs names why: `UsbConfigDxe`'s own bring-up aborts at `UsbPwrCtrlLib_Init … Access Denied` and `UsbConfigInit: Failed to attach USB Arid 0x0 HAL IOMMU domain`
+
+### The question, and the probe 4.177 and 4.178 both asked for
+
+4.178's closing bullet: *"*Schedulable* is a third verb and it joins *released* and *started*; all three
+stop short of *bound*. The `ConnectController`-side probe or `P2`-side counter 4.177 asked for is still
+unbuilt, and is still the next thing to build."* Three steps had been reasoning about whether the XCHI
+stack can bind from three different kinds of evidence — a depex term, a `K` row saying an entry point
+returned `EFI_SUCCESS`, and a drain-order argument — and none of them measured a **handle**. This step
+builds that counter, rebuilds the payload around it, and reads it.
+
+### The instrument: one row, on every digest pass
+
+Added to `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c` — the same file whose `P2BRINGUP`
+digest 4.177's panel is made of — a `STATIC UINTN mP2Census`, a `P2HandleCount (EFI_GUID *)` wrapper
+over `CoreLocateHandleBuffer (ByProtocol, …)` that frees its buffer, and a `P2UsbCensus ()` that calls
+it seven times, inserted between `P2Bins ()` and `P2Key ()` so it lands inside the existing digest:
+
+```
+P2 USB n=%d all=%d pciio=%d usb2hc=%d usbio=%d blkio=%d fs=%d cfg=%d loaded=%d
+```
+
+`n` is the digest pass number and is the whole reason the row is worth printing more than once: the
+same counts appearing five times says nothing was bound later in the boot than whatever printed the
+first copy, and counts that move between the first and the last say a driver got bound after the
+dispatch the earlier rows describe. The seven GUIDs are `AllHandles`, `PciIo`, `Usb2Hc`, `UsbIo`,
+`BlockIo`, `SimpleFileSystem`, `E722B03F` and `LoadedImage`, all constructed in the function from their
+literal `EFI_GUID` initialisers, so the probe depends on nothing outside `MdePkg.dec`.
+
+The chain semantics are written into the source beside the call, because they are the reason those
+seven and not others: `pciio=0` → the emulation never installed its controller; `pciio>0 usb2hc=0` →
+`XhciDxe` did not bind; `usb2hc>0 usbio=0` → controller up, no hub; `usbio>0 blkio=0` → enumerated but
+not mass storage; `blkio>0 fs=0` → present but unreadable. Each of those five states prints an
+identical `P2 STATS` and an identical `K` row set today, which is what makes them worth separating.
+
+`tools/regen-mu-basecore-patch.sh` was run (13 files changed, 1583 insertions, 23 deletions) and
+`tools/build-apriori-variant.sh xhci-host` rebuilt the payload through all four gates — *"the array is
+exactly the INF order of APRIORI.inc: 70 entries, zero mismatches"*, *"all images structurally check
+out"*, *"matches FVMAIN.Fv.txt: 126 offsets and GUIDs, zero mismatches"*.
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (**new**, censused) | 1,173,504 | `f2f9d948d8900df5814bb32e9d3bc047ad326c2bc4612894758ee001a8cf1d72` |
+| `work/out/usb-host/prev-xhci-nocensus.img` (control, the 4.177 payload) | 1,171,456 | `34360470b8a7aafad7340e02787f72366302ab673d11bd20570cb51f4219cb79` |
+| `/tmp/xhci-census-payload.raw` (inflated outer blob) | 3,145,840 | `b6af54caf3703e5904506e38e2d59457b6372d3ccb1a7116a60564d08d6d5f8c` |
+| `/tmp/fv-census.bin` (its inner FV) | 7,540,736 | `2b563a4d3932085649bea3ee2f9613ba4a51684c21bb597ba99b53592ba4a6a0` |
+| `/tmp/fv-usb-177.bin` (the control's inner FV) | 7,536,640 | `dbeb98abb69a3c3a3b5c20914b84b6512d985f2174a1b74860656eef4a738a95` |
+
+The build is one `0x1000` page larger and the inner FV is `4096` bytes larger, which matters for the
+next paragraph.
+
+### Pass 1, and why a plain run was spent to get one address
+
+A one-page volume change moves modules. The previous instrument's `--base 0x9c40d000` was read off
+4.177's *own* exception dump rather than assumed, and the same has to be done again, so
+`work/out/qemu-probe-4.180/run32-plain.sh` runs the censused payload with no gdb probe at all and the
+fault dump answers:
+
+```
+Synchronous Exception at 0x000000009C40E46C
+PC 0x00009C40E46C (0x00009C40B000+0x0000346C) [ 0] DALSys.dll
+ESR 0x96000004  FAR 0xAFAFAFAFAFAFAFAF
+```
+
+`0x9C40B000` — the base moved by exactly `0x2000` from 4.177's `0x9C40D000`, and the fault offset is
+the same `+0x346C` (the stale `/pmic/target` record whose suppression is the instrument's own standing
+repair). Last `K` row `K 46 Ss 44/69`, the same place 4.177's unsuppressed pass died.
+
+### Pass 2, and the census
+
+`run32.sh` with `BASE=0x9c40b000`; `gdbprobe32.py` is `gdbprobe31.py` with one character changed — the
+default socket name — so the suppression, the four `loader` seeds and the three `--el3-*` flags are
+identical to 4.177. The run reaches the ordinary pass and ends where 4.177 ended:
+
+```
+K 83 SO 76/69 free=4096 CB933912-DF8F-4305-B1F9-7B44FA11395C
+P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0
+P2 SEQ [sssssssssssssssssssssssssssSssssssSsssssssssssSSsssssssssSssSssssssss]
+```
+
+so the census edit changed nothing about the boot's course, and the two runs' `K` rows agree
+row-for-row. The census itself, in full, is **six rows and one distinct value**:
+
+```
+14.26s  P2 USB n=1 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77
+25.76s  P2 USB n=2 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77
+37.54s  P2 USB n=3 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77
+49.30s  P2 USB n=4 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77
+60.55s  P2 USB n=5 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77
+71.56s  P2 USB n=3 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77
+```
+
+The sixth row is not a sixth pass. `mP2Census` is a `STATIC UINTN` that is only ever incremented, so
+`n` cannot go from 5 to 3; the line arrives at `71.56s` in the same block that re-emits `P2 BIN def`,
+`P2 APRI bytes`, `4D` and `P2 APRI matched` that had already been printed at `70.81s`/`71.06s`, and the
+reader was `SIGTERM`'d at that moment (`panel exit=143`). It is a truncated flush, and the value is
+byte-identical to the other five anyway. The reading is 5 passes:
+
+- **`all=139` is non-zero, so the instrument works.** It can see handles; a zero here would have been
+  a statement about the probe, not about USB.
+- **`pciio=0` at 14.26 s and still 0 at 60.55 s.** Dispatch is finished by `12.51s` (`K 83`), so the
+  first row already shows a post-dispatch protocol database — and there is no handle in the entire
+  system carrying `gEfiPciIoProtocolGuid`. `XhciPciEmulation` reached `CoreStartImage` and returned
+  `EFI_SUCCESS` (`K 73 Ss 67/69`), and the emulated PCI controller it exists to publish did not
+  appear. Forty-six seconds and four further digest passes later it still has not.
+- **`usb2hc=0`, `usbio=0`, `blkio=0`, `fs=0`** follow from that and add nothing new, which is the
+  point of printing them: they rule out the four states that the chain reading would otherwise have to
+  be inferred from `K` rows.
+- **`cfg=1`.** One handle carries `E722B03F`. 4.179 read three install sites in `UsbConfigDxe` — the
+  controller, and the two client records at `.data 0x112b8` — and three installs on three handles
+  would count as three. Two explanations fit one and the census cannot separate them: only the
+  controller install ran, or two of the three landed on a handle that already carried the protocol
+  (`CoreLocateHandleBuffer` deduplicates by handle, so an install onto an existing carrier is
+  invisible here). This row is recorded as one against three, not as a resolved discrepancy.
+- **`loaded=77`** against `all=139`, alongside `started=76` in the digest.
+
+### Why the chain stops at the first link, read off the console of both runs
+
+The census says *what* is absent; the panel text says *why*, and it was already in 4.177's panel — no
+step had read it, because no step had a handle count to read it against. In both runs, in
+`UsbConfigDxe`'s own output:
+
+```
+UsbPwrCtrlLibConfig_GetHWInfo Hardware Info is not available
+UsbPwrCtrlLib_Init Initialize Hardware Configuration Error[Access Denied]
+UsbConfigLibOpenProtocols: gPmicNpaClientSS1 cannot be created
+UsbConfigLibOpenProtocols: failed to locate PMIC version protocol
+UsbConfigLibOpenProtocols: PMI version (0x0)
+UsbConfigInit: Failed to attach USB Arid 0x0 HAL IOMMU domain Result =  (0x4)
+```
+
+(`work/out/qemu-panel-4.177-xhci-nopmicrec.txt:166-182`, panel rows 132-148 — **pre-existing, not a
+regression of this build**.) That is the sole publisher of `E722B03F` failing its own USB bring-up:
+no PMIC NPA client, no PMIC version, and an IOMMU-domain attach returning `0x4`. `Access Denied` is
+the same error 4.177 attributed to a guest with no real PMIC; the IOMMU line is new in this reading
+and names a second, separate dependency.
+
+### The caveat that makes the device the only instrument that settles it
+
+**This volume contains no PCI host bridge driver.** `tools/fv-inventory.py --roster` lists 135 files
+and `XhciPciEmulation` is the only one whose name contains `pci` — no `PciHostBridgeDxe`, no `PciBus`,
+no `PciRootBridgeIo` producer. The instrument is `-M virt` with `-nic none`.
+
+So `pciio=0` is consistent with two different facts and this run cannot separate them:
+
+1. `XhciPciEmulation`'s driver binding never ran, or ran and failed, so its emulated controller was
+   never published — the finding the whole P3 clause turns on; or
+2. this machine presents no PCI layer for an emulation to attach to, so a zero is what the instrument
+   produces regardless of what the driver does.
+
+Against (2): `XhciPciEmulation`'s own thirteen-term depex is `{DriverBinding} ∪ (arch − Capsule)`
+(4.178) and contains no `PciRootBridgeIo` term, and a driver whose name is *Emulation* is the one that
+fabricates the device rather than consuming a bus. That is an argument, not a measurement. **The
+measurement is the phone.** If the censused payload is booted via `fastboot boot` and its panel prints
+`P2 USB … pciio=0`, reading (2) is dead and the finding is real; if it prints any non-zero, the QEMU
+zero was the instrument.
+
+### Rows
+
+- **instrument**: `P2UsbCensus()` / `P2HandleCount()` added to
+  `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:547-615`, called at `:2595`;
+  `tools/regen-mu-basecore-patch.sh`; `tools/build-apriori-variant.sh xhci-host`;
+  `work/out/qemu-probe-4.180/run32-plain.sh` (plain, spent only to read the new DALSys base off its own
+  fault dump), `gdbprobe32.py` (`gdbprobe31.py` verbatim but for the socket name), `run32.sh`
+  (`BASE=0x9c40b000`); `tools/fv-inventory.py --roster`. `tools/qemu-panel-read.py` unmodified.
+- **builds**: the payload, through all four of its gates. The blocking `cannot apply … the tree has
+  diverged` refusal is answered by regenerating the patch first, as it was in 4.179.
+- **measures, for the first time**: a handle census in the DXE dispatcher — `all`, `pciio`, `usb2hc`,
+  `usbio`, `blkio`, `fs`, `E722B03F`, `loaded` — printed with the pass number on every digest pass.
+- **closes**: 4.177's and 4.178's *"the `ConnectController`-side probe or `P2`-side counter 4.177 asked
+  for is still unbuilt, and is still the next thing to build."* It is built and it has been read.
+- **reads, and this is the finding**: `pciio=0`, unchanged across five passes spanning 14.26 s to
+  60.55 s, i.e. every pass after dispatch completed. The USB chain is broken at its first link, and the
+  entry point that was supposed to produce that link returned `EFI_SUCCESS`.
+- **finds, and does not use as a conclusion**: `UsbConfigDxe`'s own six-line bring-up failure, present
+  in 4.177's panel and read for the first time here.
+- **records as a discrepancy, not a resolution**: `cfg=1` against 4.179's three install sites.
+- **records**: the new `DALSys` base — `0x9C40B000`, moved `0x2000` by a one-page volume change, with
+  the same `+0x346C` fault offset — as evidence that module placement in this payload is a function of
+  the volume's size and that every `--base` in this project has to be re-read after every build.
+- **does not close**: the first P3 clause. A zero `PciIo` count is not the same as a closed question,
+  because of the PCI caveat above. It narrows the question from *"did the XCHI stack bind?"* to
+  *"why did `XhciPciEmulation` publish nothing, and is the zero even real on this machine?"*
+- **cannot say**: whether the console's `Access Denied` and `0x4` are properties of the driver's
+  dependencies or of this instrument's seeds. The `/pmic/target` suppression that lets the run reach
+  the ordinary pass at all is the direct cause of two of those six lines, and the four `loader` blobs
+  are standing in for register windows the real board has.
+- **carries the standing limits unchanged**: the instrument is artificial in three named places — the
+  four `loader` blobs; the `/pmic/target` suppression, which is a gdb `write` into a running guest; and
+  `0x12000c`, QEMU RAM here and the clock controller's own register on the board. And this repository
+  tracks no INF of a shipped binary.
+- **not an action**: nothing was flashed, no partition was written, no stub, firmware source or
+  Microsoft image was changed or patched beyond the one probe described above. `userdata` (107 GB,
+  unbacked), the partition table and the firmware LUN remain untouched. The porting goal is unchanged
+  and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install
+  and P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and
+  cameras cannot be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing and
+  the only device on the host's bus 1 is a mouse. Nothing was written to it at any point.
+- **host, recorded because it is the other reason nothing enumerates**: `0000:6c:00.0` (the dock's
+  `JHL6340`) has deregistered its buses **6430 times in six hours** — one every ~3.4 s, still
+  happening — so a phone plugged into that port has a ~3-second window on the bus. The chipset
+  controller `0000:00:14.0` has never dropped a device. This is `docs/06-host-usb.md`'s subject and it
+  is why "the phone does not appear" has two independent causes on this desk.
