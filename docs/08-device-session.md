@@ -44107,3 +44107,136 @@ device file opened. **device state**: unchanged, as recorded immediately above �
 run `br7srnvmx` was still alive and CPU-bound at 17 minutes of its 10800-second budget when this
 was written, with files 3 through 9 all in the 765–779-colour band that step 4.218 identified as
 Setup's own window.
+
+---
+
+## Step 4.220 — the guest is asked for its own clock and for its own instructions, and both answer: its time is exact, it runs user-mode code, and half of vCPU0's samples are the instruction after the idle loop's `wfi`
+
+**What 4.218 did not answer.** `info blockstats` established that no block request had been pending
+for seven minutes. That rules out an I/O wait and nothing else: a guest can be awake, computing, and
+issuing no I/O, and a guest can be awake, idle, and issuing no I/O, and the two are the same
+measurement. Three further instruments were pointed at the same running guest, all through the
+monitor socket 4.218 opened. None of them is new to QEMU; all three are new to this record, and one
+of them reads the guest's *own* account of itself rather than any host-side proxy for it.
+
+**The guest's clock, read from outside.** `KUSER_SHARED_DATA` is mapped at `0xfffff78000000000`, and
+the monitor's `x` walks the current MMU, so `x/8wx 0xfffff78000000000` reads the page Windows keeps
+specifically so that it can be read without a syscall. It holds two `KSYSTEM_TIME` triples — a
+32-bit `LowPart` and two 32-bit high halves, where `High1Time` and `High2Time` agreeing is the
+seqlock's own consistency check and disagreeing means the value was caught mid-update.
+`InterruptTime` lives at `+0x08` and `SystemTime` at `+0x14`. Two reads twelve seconds apart:
+
+```
++0x00  0x00000000  TickCountLowDeprecated        +0x08  0x2741fca4  InterruptTime.LowPart
++0x04  0x0fa00000  TickCountMultiplier           +0x0C  0x00000003  InterruptTime.High1Time
+                                                 +0x10  0x00000003  InterruptTime.High2Time
+```
+
+`InterruptTime` goes `13,853,361,440` → `13,976,444,053`, i.e. **12.308261 s of guest time in
+12.306 s of host time — a ratio of 1.0002** — and `SystemTime` advances by the identical amount.
+`InterruptTime` itself reads **1,385.3 s**, which is the run's elapsed time since the firmware handed
+off, and `SystemTime` decodes to **2026-09-29T13:31:56Z**, which is the host's own local 05:31:56 at
+UTC+8. Three separate facts fall out of eleven words of guest memory: the guest's timer interrupt is
+being delivered, its monotonic and wall clocks both run at real speed, and its RTC agrees with the
+host's. **The guest is alive and is not time-warped** — which is the fact a framebuffer cannot show
+and a blockstats read cannot either.
+
+**Its own instructions, and the answer is the idle loop.** `info registers` reports the vCPU's
+program counter, so sampling it repeatedly is a crude profiler. Sixty samples of vCPU 0 gave:
+
+| PC | samples | share |
+|---|---|---|
+| `fffff800d1851afc` | 30 | 50.0% |
+| `fffff800d1612dd8` | 10 | 16.7% |
+| `fffff800d1a0d40c` | 3 | 5.0% |
+| `fffff80253…` (a second kernel module) | 8 | 13.3% |
+| `00007ff861…` (user mode) | 2 | 3.3% |
+| remainder, one each | 7 | 11.7% |
+
+Then the monitor disassembles, and the two hot addresses stop being numbers:
+
+```
+fffff800d1851af0:  d5033f9f  dsb      sy
+fffff800d1851af4:  d5033fdf  isb
+fffff800d1851af8:  d503207f  wfi                      <-- the sampled address is the next one
+fffff800d1851afc:  a8c17bfd  ldp      x29, x30, [sp], #0x10
+fffff800d1851b00:  d50323ff  autibsp
+fffff800d1851b04:  d65f03c0  ret
+...
+fffff800d1612dd8:  d53be040  mrs      x0, cntvct_el0
+fffff800d1612ddc:  910043ff  add      sp, sp, #0x10
+fffff800d1612de0:  d65f03c0  ret
+```
+
+`dsb sy; isb; wfi` followed by a function epilogue is Windows' ARM64 **idle path** — the sequence a
+processor runs when the scheduler has nothing to give it — and `mrs x0, cntvct_el0` is that path
+reading the virtual counter. So the single most-sampled address in the guest is the instruction
+immediately after `wfi`, half the time, and the second is the counter read beside it. This is the
+opposite of 4.218's reading: what looked from `blockstats` like a CPU-bound phase is, at least now,
+**the guest at idle**. The remaining samples are the exception vector table's own `eret`
+(`fffff800d1a0d40c`, sitting among `dsb sy; isb; sb; b …` and `brk #0xf000` — the vector stubs),
+a second loaded kernel module region at `fffff80253…`, and two user-mode addresses, so the system is
+scheduling, taking interrupts and running user code while it idles.
+
+**And it is not one core.** The instrument here is `/proc/PID/task/*/stat` over ten seconds, and it
+is what corrects 4.218's phrase "a core at 86%": `info cpus` and the command line both show the guest
+is `-smp 4 -m 4096 -cpu max`, so the process is four vCPUs and "86% of a core" was 86% of *one host
+core spread across four*. Measured per thread: vCPU0 **18.3%**, vCPU1 **27.8%**, vCPU2 **3.9%**,
+vCPU3 **18.8%**, main thread 2.3% — about 71% together, with no vCPU above 28%. 4.218's conclusion
+(not hung, not I/O-bound) survives and sharpens: this is a partly-idle four-core guest, not a
+saturated single core.
+
+**`info jit`, and the one number that says the guest keeps entering new code.** TCG translates guest
+code into host code a block at a time, and the counter only grows when the guest reaches code it has
+not run before, so the growth rate is a measure of *novelty* rather than of work — a guest looping
+over already-translated code adds nothing however hard it is running. Over 60 s: `TB count`
+1,019,678 → 1,020,088 (**+410, ≈7/s**), generated host code 557,542,611 → 557,772,339 B (+229,728),
+`TB flush count` **0**, and `TB invalidate count` +413. A measurement twenty seconds earlier had
+given +425 over roughly that window, about three times faster, so the rate has fallen. The low figure
+is not zero: the guest is still reaching new code and still writing pages, which is what rules out
+"wedged in one loop for twenty-five minutes".
+
+**what this does not establish, and the instrument's own bias.** The sampled PC is reported where
+QEMU stopped the vCPU, which under TCG is a translation-block boundary — so a sample is an
+observation of *which block was entered*, not a uniform sample of time, and the `wfi` address being
+first is partly because a halted vCPU simply stays there. The instrument is therefore trustworthy
+about "is the guest idle" and untrustworthy about "where does the guest spend its time". Nor does
+anything here say *why* the guest is idle: a Setup screen waiting for a keystroke, a thread waiting on
+a device that never answers, and an installer that has finished what it can do all look identical
+from the monitor, and the framebuffer has not changed beyond the one element either. What is settled
+is narrower and is worth the step: **the guest is alive, its clocks are exact, it takes interrupts and
+schedules user code, and after twenty-five minutes it has issued no I/O and is now largely idle.**
+
+**The frames, unchanged in kind.** Frames 4 through 10 each differ from frame 3 only inside
+`x 90..111, y 180..200` — 156, 179, 108, 137, 121, 81 and 113 pixels respectively — and two
+screendumps taken 1.2 s apart inside the same window differ by 80 pixels in the same box, so the
+element is redrawn sub-second. In ASCII it resolves to a curved stroke with a rounded end rotating
+about that box. It is not a cursor, because a cursor does not change shape and there is no input on
+this guest, and it is not the disk step, because the disk has still seen 15 reads and one 512-byte
+write. The rest of the 800×600 screen is byte-identical frame to frame.
+
+**decides**: that `KUSER_SHARED_DATA` read through the QEMU monitor is a working instrument for
+"is this guest alive and how long has it been up" — the guest's own `InterruptTime` and `SystemTime`
+both advance at 1.0002× host wall clock, its uptime is 1,385.3 s, and its RTC decodes to the host's
+local time — that the guest's most-sampled instruction is the one after the ARM64 idle path's `wfi`
+with the virtual-counter read beside it, so the phase 4.218 measured as CPU-bound is now an idle one;
+that the guest is `-smp 4` and no vCPU exceeds 28%, so 4.218's "a core at 86%" was a process statistic
+and not a core; that `info jit` shows a falling but non-zero translation rate (+410 TB and 229,728 B
+of generated code in 60 s, 0 flushes, +413 page invalidations) so the guest is not stuck in one
+translated loop; and that frames 4–10 change only inside one 22×21-pixel element that is redrawn
+sub-second. **does not decide**: why the guest is idle, what Setup is waiting for, or whether the run
+will progress — the three candidates (a dialog awaiting input, a device that never answers, an
+installer with nothing left to do) are indistinguishable from the monitor; whether the harness ever
+sends the keystroke a dialog would want, since the guest has a `usb-kbd` attached that nothing has
+typed into; and anything about gauguin, which this run does not touch. The run is still alive at 25
+minutes of its 10800-second budget and this entry records its state, not its result. **Not an
+action**: `info jit`, `info cpus`, `info registers`, `x/i` and `x/wx` read from the running guest's
+monitor socket, `/proc/PID/task/*/stat` read from the host, and frame diffs on files under `work/`,
+which is gitignored. No flash, no `fastboot` command, no partition written, no seed written, no
+console read from the device and no device file opened. **device state**: unchanged — `adb devices`,
+`fastboot devices`, `lsusb` and both tty globs are empty, so the three physical actions remain
+outstanding: a reset of the phone, the reboot to the bootloader the P3 `fastboot boot` workflow
+needs, and the screen photograph that `先读屏，再刷下一次` requires before any payload boots. There is
+still **no removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the partition
+table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
