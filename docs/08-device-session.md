@@ -37127,3 +37127,296 @@ zero was the instrument.
   happening — so a phone plugged into that port has a ~3-second window on the bus. The chipset
   controller `0000:00:14.0` has never dropped a device. This is `docs/06-host-usb.md`'s subject and it
   is why "the phone does not appear" has two independent causes on this desk.
+
+## Step 4.181 — the gate `XhciPciEmulation` opens `E722B03F` through is **shut**, and the reason is a number the publisher writes: the only interface in the system carries `0x00010000` at `+0x8C` where the emulation requires `1`, so the emulated controller can never be published and `pciio = 0` does not depend on whether this machine has a PCI layer; and the reading that said otherwise — this step's own first reading — was the *panel*, which is 90 columns wide and continues a full row on the row below
+
+### The question, and what 4.180 left as the one thing that would settle it
+
+4.180 built the handle census, read `pciio=0` at every digest pass, and then said exactly what it did
+not know:
+
+> *"this volume contains no PCI host bridge driver … so `pciio=0` is consistent with two different
+> facts and this run cannot separate them: (1) `XhciPciEmulation`'s driver binding never ran, or ran
+> and failed, so its emulated controller was never published — the finding the whole P3 clause turns
+> on; or (2) this machine presents no PCI layer for an emulation to attach to, so a zero is what the
+> instrument produces regardless of what the driver does. … **The measurement is the phone.**"*
+
+This step does not have the phone. What it has is the predicate the emulation itself applies, and it
+turns out that reading that predicate *out of a running guest* answers the question without the phone
+— because the two alternatives 4.180 named are only distinguishable if the gate could go either way,
+and it cannot: the value the gate tests is a word the publisher writes, and that word is measured here.
+
+### The instrument: one row per `E722B03F` handle, in the digest
+
+`P2UsbGate (EFI_GUID *)` was added to `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c`
+immediately before `P2UsbCensus ()`, and one call appended to the census's own digest block so it
+prints on the same schedule the census does:
+
+```c
+P2 GATE h=%p i=%p w00=%08x w04=%08x w80=%08x w88=%08x w8c=%08x
+```
+
+It walks `CoreLocateHandleBuffer (ByProtocol, &GuidUsbCfg, …)` — the `E722B03F` GUID the census
+already constructs — and for each handle prints `CoreHandleProtocol`'s interface pointer plus five
+words of it. Four words and not the two that matter, because a pair only means anything next to its
+neighbours: `+0x00` is the structure's `Version` (the template's `0x00010004` is 1.4), and `+0x80` is
+a *method pointer*, so a `+0x80` that is not a plausible image address says the interface is not the
+one the reading assumes. `tools/regen-mu-basecore-patch.sh` regenerated the patch (13 files changed,
+1642 insertions, 23 deletions) and `tools/build-apriori-variant.sh xhci-host` rebuilt the payload
+through all four gates — *"the array is exactly the INF order of APRIORI.inc: 70 entries, zero
+mismatches"*, *"all images structurally check out"*, *"matches FVMAIN.Fv.txt: 126 offsets and GUIDs,
+zero mismatches"*.
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (**new**, gate probe) | 1,173,504 | `32d359a9f3d4f475be999323e3e713215634307cd2793a13eebf76cce1863377` |
+| `/tmp/xhci-gate-payload.raw` (inflated outer blob) | 3,145,840 | `9e7ca1ddce17b1aed1b3222108f55b7c17cbf7397970c0e4592e42fef9bca191` |
+| `work/out/usb-host/prev-xhci-nocensus.img` (4.177 control, untouched) | 1,171,456 | `34360470b8a7aafad7340e02787f72366302ab673d11bd20570cb51f4219cb79` |
+
+Pass 1 is `run33-plain.sh`, no gdb, spent only to re-read the module base after the rebuild — and it
+did not move:
+
+```
+Synchronous Exception at 0x000000009C40E46C
+PC 0x00009C40E46C (0x00009C40B000+0x0000346C) [ 0] DALSys.dll
+ESR 0x96000004          FAR 0xAFAFAFAFAFAFAFAF
+```
+
+`0x9C40B000`, the same base 4.180 read and the same `+0x346C` offset (the stale `/pmic/target` DALSys
+record whose suppression is the instrument's standing repair), last `K` row `K 46 Ss 44/69`. So the
+page that moved `DALSys` in 4.180 did not move it again: the payload grew by the probe's own code and
+whatever the profile placed, and bytes added *below* DALSys's image do not shift it. That is the
+general rule this project has been learning one build at a time — **the base is a property of the
+placed image, not of the volume's size** — and 4.180's "one page moves it" was true of that page.
+
+Pass 2 is `run33.sh` with `BASE=0x9c40b000` and `gdbprobe33.py` (4.177's probe, socket name only).
+It reaches the ordinary pass and ends where 4.177 and 4.180 ended: `K 83 SO 76/69`,
+`P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0`. The run was given 280 s and took
+**23 digest passes**, `n=1..23`.
+
+### The reading, and the mistake made reading it
+
+The panel file, as `tools/qemu-panel-read.py` wrote it:
+
+```
+313 |P2 USB n=1 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77|
+314 |P2 GATE h=9C028D98 i=9BECC3B8 w00=00010004 w04=00000000 w80=9BEBC650 w88=00000001 w8c=0001|
+315 |0000|
+```
+
+**This step first read row 314 as a whole line and concluded the gate was open** — `+0x8C = 1`, both of
+`Supported`'s tests satisfied, `pciio=0` therefore needing some other cause. That reading is wrong, and
+the evidence was in row 315 the whole time. Both files the reader writes agree byte for byte (its
+stdout log and its `--out` file are two renderings of one decode), so this was not a capture artefact
+and not the reader's trimming: it is the **console**, which is 90 text cells wide, and a line that does
+not fit **continues on the row below**.
+
+Two independent proofs, both in this one panel:
+
+- **`P2 APRI first=… last=…`**, printed every pass:
+  `P2 APRI first=D6A2CB7F-6A18-4E2F-B43B-9920A733700A last=CCCB0C28-4B24-11D5-9A5A-0090273FC1` is
+  exactly 90 characters and row 319 is `4D`. The full string is
+  `CCCB0C28-4B24-11D5-9A5A-0090273FC14D`, which this project has documented for hundreds of steps as
+  the array's 70th entry, `GraphicsConsoleDxe`. Concatenating the two rows reproduces it exactly.
+- The gate row is 94 characters; its first 90 are row 314 and its last 4 are row 315. **`w8c=00010000`,
+  not `1`.**
+
+Neither case can be explained by anything else: the arithmetic is exact, and the tail begins at
+column 1 of the next row in both, which is what a wrap does.
+
+**Scope of the error, measured rather than assumed.** A row of exactly `columns` characters is
+ambiguous on its face — a console line that is precisely 90 wide also leaves the cursor on the next
+row without having wrapped — so every panel this project has written was scanned for the pattern. Of
+406 full-width rows across the 35 panels in `work/out/`, **two instrument lines are ever affected**:
+`P2 APRI first/last`, on every run, whose tail has always been read correctly (the docs carry
+`…3FC14D`), and the new `P2 GATE`. No `P2 STATS`, `P2 SEQ`, `P2 USB`, `P2 BIN`, `P2 RETRY`, `P2 WALK`
+or `K` row reaches 90 columns, so **no earlier conclusion of this project rests on a short read** —
+the hazard existed for a long time and was never exercised until this step walked into it.
+
+The instrument was repaired rather than warned about: `tools/qemu-panel-read.py` now counts and names
+every full-width row in its header and in its closing report, and gained `--join-wrap`, which appends
+a full row's successor to it. It is off by default because the two cases are genuinely
+indistinguishable on the screen, and it is pairwise and once-per-row because testing the accumulated
+row would cascade — the first glued pair is longer than the console is wide, so every row after it
+would be glued to it in turn (the first attempt did exactly that: 1208 rows became 69). Verified
+against both known strings: the joined output contains
+`…last=CCCB0C28-4B24-11D5-9A5A-0090273FC14D` and `…w88=00000001 w8c=00010000`, 58 rows glued of 58
+full ones, and nothing else changed.
+
+### What the corrected word means, read off the shipped `UsbConfigDxe`
+
+The census's own handle, read with its tail: `i=9BECC3B8`, `w00=00010004` (Version 1.4, the template's
+first word), `w04=00000000`, `w80=9BEBC650` (a method pointer, so this is the structure the reading
+assumes), `w88=00000001`, `w8c=00010000`. **One distinct full line across 26 rows and 23 passes** — the
+same handle, the same pointer, the same words from the first digest to the last. The `P2 USB` row it
+sits beside is unchanged from 4.180 in every field.
+
+`XhciPciEmulation`'s `Supported` (VA `0x1464`) is the consumer, and it was re-read here rather than
+recalled: it opens `E722B03F` with `GET_PROTOCOL`, then
+
+```
+ldr w9, [x8, #136]      ; iface+0x88
+cmp w9, #3
+b.hi 0x14d8             ; -> EFI_UNSUPPORTED
+ldr w8, [x8, #140]      ; iface+0x8c
+cmp w8, #1
+b.ne 0x14d8             ; -> EFI_UNSUPPORTED
+```
+
+`+0x88 = 1` passes the first test (1 ≤ 3). `+0x8C = 0x10000` fails the second. So `Supported` returns
+`EFI_UNSUPPORTED`, `Start` is never called, no emulated controller is published, and
+`pciio = 0` — **and this is now a statement about a predicate, not about a machine**: whatever this
+QEMU guest's PCI layer is or is not, `XhciPciEmulation`'s only route to publishing is its driver
+binding, whose first gate is unsatisfiable in this boot.
+
+**Both words are written at run time**, which is why no static reading of the file could have settled
+it. `UsbConfigDxe`'s record array is at `.data 0x112b8`, stride **`0xd8`**, two entries (`0x3b00:
+cmp x8, #0x1; b.cs` bounds the loop), each record's `Interface` at `rec + 0x28` — so `iface+0x88` is
+`rec+0xb0` and `iface+0x8c` is `rec+0xb4`. The interface is filled by
+`CopyMem (rec+0x28, 0x11168, 0xa8)` from a template whose `+0x88` is zero and whose `+0x8c` is `4`,
+and then, in the same loop:
+
+```
+3b54: add  x11, x1, x11      ; x11 = &records + i*0xd8
+3b58: mov  w9, w8            ; w9 = i
+3b5c: str  w9, [x11, #176]   ; rec[i].iface+0x88 = i
+3b68: add  x8, x1, x8
+3b6c: orr  w9, wzr, #0x10000
+3b70: str  w9, [x8, #180]    ; rec[i].iface+0x8c = 0x10000
+3b84: str  x11, [x8, #8]     ; rec[i]+0x08 = NULL
+3b94: str  x11, [x8, #16]    ; rec[i]+0x10 = NULL
+```
+
+So `+0x88` is the **record index** and `+0x8C` is a **mode word whose `0x10000` value means
+unassigned**, and `1` is only ever written there by one caller — `UsbStartController` (VA `0x4dc8`),
+whose guard this step also re-read, and which the previous window had backwards:
+
+```
+4df0: ldur w8, [x29, #-4]    ; arg0 = Index
+4df4: cmp  w8, #0x1
+4df8: b.cs 0x4e10            ; Index >= 1  -> EFI_INVALID_PARAMETER
+4e04: ldur w8, [x29, #-8]    ; arg1 = Mode
+4e08: cmp  w8, #0x10, lsl #12
+4e0c: b.cc 0x4e6c            ; Mode  < 0x10000 -> the body
+4e10: EFI_INVALID_PARAMETER
+```
+
+`b.cc` is *carry clear*, i.e. unsigned lower — so the API **requires `Index = 0` and `Mode < 0x10000`**,
+and `0x10000` is the value it exists to replace. (The earlier note in this project's working record
+said "`w1` must be `>= 0x10000`"; that is the sign of the branch read the wrong way and is withdrawn.)
+The body then writes `rec[Index].iface+0x88 = Index` (`0x50f0`) and `+0x8c = Mode` (`0x5108`), and only
+`Mode == 4` (`0x5110: cmp w8, #0x4; b.ne 0x5264`) continues into the install path. **So a successful
+`UsbStartController (0, 1)` would leave `+0x88 = 0` and `+0x8C = 1` on record 0 and satisfy
+`Supported` exactly — and record 1, the one that is actually published, can never be touched by this
+function at all.**
+
+### Why exactly one handle, which is 4.180's `cfg=1`
+
+The publisher's own structure explains the count. The function at VA **`0x3908`** is `UsbConfigInit`
+— the error path at `0x3ad0` prints `0xe5ad`'s string, `"%a: UsbConfigInit: Error - Failed to install
+USB_CONFIG protocol"` — and it does two things in this order:
+
+```
+3a88: ldr  x8, [x8, #1424]   ; gBS
+3a90: ldr  x8, [x8, #328]    ; InstallMultipleProtocolInterfaces
+3a94: add  x9, x9, #0x2b8    ; &records
+3a9c: add  x0, x9, #0xe8     ; &rec[1] + 0x10   (handle slot)
+3aa0: add  x2, x9, #0x100    ;  rec[1] + 0x28   (Interface)
+3aa4: add  x1, x1, #0x98     ; &E722B03F
+3ab4: blr  x8                ; install, x3 = NULL device path
+```
+
+then falls into the record initialiser loop above, **which nulls `rec[1]+0x10` — the very slot the
+install just wrote its new handle into**. The protocol stays on the handle; the only variable that
+still named it is cleared. That is why `cfg = 1`: `UsbConfigInit`'s early install is the only one of
+4.179's three sites that has run, the other two live in `UsbStartController` and need a record handle
+that this boot never fills, and `CoreLocateHandleBuffer` sees one carrier.
+
+And the record it installs is **record 1**: `x2 = 0x113b8 = 0x112b8 + 0xd8 + 0x28`. The measured
+`+0x88 = 1` is that record's own index, so the interface `XhciPciEmulation` is offered is the *Host
+Client* record, the one already established as unreachable by the only function that could start it.
+
+### The pairing, checked rather than assumed
+
+The payload's `XhciPciEmulation` and `XhciDxe` are the Bitra files
+(`68ee8cf1…` and `d579eaa0…`, byte-identical to `Binaries/bitra/…`), while its `UsbConfigDxe` is the
+gauguin-shipped one (`6943cc61…`, byte-identical to `uefi/Binaries/gauguin/…` and to the file
+extracted from the phone's own volume). So this *is* a cross-source pairing and it was worth asking
+whether the convention differs between them. It does not: the three Bitra `UsbConfigDxe` variants
+(stride `0xe8`, template `0xb8`, three genuinely different files) write `+0x88 = i` at `0x3df8` and
+`0x8C = 0x10000` at `0x3e08` in the same loop, and their `UsbStartController` analogue tests
+`+0x8C == 0x10000` as *unassigned* at `0x4d90` exactly as gauguin's does. The sentinel is the family's
+convention, not one vendor's spelling, so the mismatch is not a version skew to be fixed by swapping a
+binary: in a working boot something must call `UsbStartController (0, 1)` and this boot does not.
+
+### What this closes, and what it does not
+
+- **4.180's open question is closed, and in favour of its first alternative.** `pciio = 0` is not an
+  artefact of `-M virt` and `-nic none`. The emulation cannot bind, because the only interface it will
+  accept cannot exist: the interface that is published has the unassigned mode word, and the writer
+  that would change it is unreachable for that record. The "no PCI layer" reading is no longer needed
+  to explain the zero, and the PCI-host-bridge remark of 4.180 becomes a property of the *instrument*
+  rather than a live alternative.
+- **The whole chain from `XhciPciEmulation` to `XhciDxe` to a USB storage device is now attributable
+  to one word.** 4.177's `K 73/74/75` rows — the three XCHI drivers *started*, entry points returning
+  `EFI_SUCCESS` — were never in tension with `pciio = 0`: an entry point returning success says the
+  driver is loaded, and `Supported` is a different function called later, on a handle, by a
+  `ConnectController` this chain never reaches. 4.178's *schedulable* and 4.177's *started* and
+  4.180's *published* are three different verbs, and the one that fails is the fourth: **bound**.
+- **It does not say whether `Supported` is ever called.** It says it cannot succeed if it is. The
+  caller 4.175 identified — `MsBootPolicy`'s `EfiBootManagerConnectAll` — is the candidate, and the
+  probe that would settle it is a counter at `Supported`'s entry, which needs a build.
+- **It does not say the phone behaves the same way.** `UsbConfigDxe`'s own bring-up fails in QEMU on
+  PMIC and IOMMU grounds that the real board does not share (4.180's six lines), and it fails *before*
+  the record loop — which is why the loop's `0x10000` survives. On the phone, with a working PMIC, the
+  same code may reach `UsbStartController (0, 1)` and close this. The instrument cannot distinguish
+  "this pairing is broken" from "this pairing is fine and this guest is too incomplete to start it",
+  and the phone is still the only thing that can. It is, however, now a *specific* prediction: a
+  device run of this payload should print `P2 GATE … w88=00000000 w8c=00000001` if the PMIC path works
+  and `… w88=00000001 w8c=00010000` if it does not — and the two are one character apart on a line
+  that must be read with its wrapped tail.
+
+### Rows
+
+- **instrument**: `P2UsbGate ()` added to
+  `Mu_Basecore/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c:590-640`, called at the end of
+  `P2UsbCensus`'s digest block; `tools/regen-mu-basecore-patch.sh`;
+  `tools/build-apriori-variant.sh xhci-host`; `work/out/qemu-probe-4.181/run33-plain.sh` (plain, spent
+  only to re-read the base), `gdbprobe33.py` (4.177's probe, socket name only), `run33.sh`
+  (`BASE=0x9c40b000`, 280 s).
+- **repaired, and this is the second instrument of the step**: `tools/qemu-panel-read.py` gained
+  `--join-wrap` and now counts and names full-width rows in both its header and its closing report.
+  The first version of the join cascaded (1208 rows → 69); the shipped one is pairwise and verified
+  against `P2 APRI first/last`'s own tail and the gate row's.
+- **measures, for the first time**: the live value of the two words `XhciPciEmulation`'s `Supported`
+  tests — `+0x88 = 1`, `+0x8c = 0x00010000` — one distinct line across 26 rows and 23 digest passes.
+- **reads**: the writer of both words (`0x3b5c`, `0x3b70`), the template `0x11168`, the stride `0xd8`
+  and the record base `0x112b8` off 46 `adrp`/`add` pairs and a `mul …, #0xd8`; `UsbStartController`'s
+  guard (`0x4df0`–`0x4e0c`) and its store block (`0x50f0`, `0x5108`); `UsbConfigInit` (`0x3908`), its
+  early install (`0x3aa4`) and its own error string.
+- **corrects two readings of this project's own record**: that `[iface+0x88] > 3` caused a silent
+  `EFI_UNSUPPORTED` (the value is 1 and it passes), and that `UsbStartController` requires
+  `Mode >= 0x10000` (it requires `Mode < 0x10000`).
+- **corrects this step's own first reading**, in public: row 314 of
+  `work/out/qemu-panel-4.181-xhci-gate.txt` is not a line, it is the first 90 characters of one.
+- **closes**: 4.180's *"consistent with two different facts and this run cannot separate them"* — and
+  against the second of the two, on the predicate rather than on the machine.
+- **does not close**: whether `Supported` is reached at all (a counter at its entry, unbuilt), the
+  first P3 clause, and the phone's own behaviour, which is now a one-character prediction rather than
+  a direction.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression;
+  `0x12000c`, QEMU RAM here and the clock controller's register on the board; and this repository
+  tracks no INF of a shipped binary.
+- **also newly true, and not acted on**: the console this project reads its instrument through is 90
+  columns wide, so **no probe line may be 90 characters or longer** unless its tail is read. The gate
+  row is 94 and wrapped; the next build's version of it should be two lines.
+- **not an action**: nothing was flashed, no partition was written, no stub, firmware source or
+  Microsoft image was changed beyond the one probe described, and `tools/qemu-panel-read.py`'s change
+  is to a host-side reader. `userdata` (107 GB, unbacked), the partition table and the firmware LUN
+  remain untouched. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3
+  is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end
+  state remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing and
+  the only device on the host's bus 1 is a mouse. Nothing was written to it at any point.
+- **host**: unchanged from 4.180, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses
+  every ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.

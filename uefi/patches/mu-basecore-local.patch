@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..837ef37b 100644
+index d7c7147e..1a96482d 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,743 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,802 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -846,6 +846,63 @@ index d7c7147e..837ef37b 100644
 +  return Number;
 +}
 +
++//
++// P2GATE: the census above counts handles; this reads one of them. `XhciPciEmulation`'s
++// `Supported` succeeds only when the `E722B03F` interface it opens has a `+0x88` of three
++// or less and a `+0x8C` of exactly one, and both of those words are *written* by the
++// publisher rather than being static - `UsbConfigDxe` copies a 168-byte template over the
++// interface and then stores the record index at `+0x88` and the mode at `+0x8C`. So the
++// gate is a number in a running system and nothing but a running system can read it.
++//
++// Four words are printed, not two, because the pair only means anything next to its
++// neighbours: `+0x80` is a method pointer in the same template, so a `+0x80` that is not
++// a plausible image address says the interface is not the one this reading assumes.
++//
++STATIC
++VOID
++P2UsbGate (
++  IN EFI_GUID  *Protocol
++  )
++{
++  EFI_STATUS  Status;
++  EFI_HANDLE  *Buffer;
++  UINTN       Number;
++  UINTN       Index;
++  VOID        *Interface;
++  UINT32      *Words;
++
++  Number = 0;
++  Buffer = NULL;
++  Status = CoreLocateHandleBuffer (ByProtocol, Protocol, NULL, &Number, &Buffer);
++  if (EFI_ERROR (Status) || (Buffer == NULL)) {
++    DEBUG ((DEBUG_ERROR, "P2 GATE none\n"));
++    return;
++  }
++
++  for (Index = 0; Index < Number; Index++) {
++    Interface = NULL;
++    if (EFI_ERROR (CoreHandleProtocol (Buffer[Index], Protocol, &Interface)) || (Interface == NULL)) {
++      DEBUG ((DEBUG_ERROR, "P2 GATE h=%p unreadable\n", Buffer[Index]));
++      continue;
++    }
++
++    Words = (UINT32 *) Interface;
++    DEBUG ((
++      DEBUG_ERROR,
++      "P2 GATE h=%p i=%p w00=%08x w04=%08x w80=%08x w88=%08x w8c=%08x\n",
++      Buffer[Index],
++      Interface,
++      Words[0],
++      Words[1],
++      Words[0x80 / 4],
++      Words[0x88 / 4],
++      Words[0x8C / 4]
++      ));
++  }
++
++  CoreFreePool (Buffer);
++}
++
 +STATIC
 +VOID
 +P2UsbCensus (
@@ -888,6 +945,8 @@ index d7c7147e..837ef37b 100644
 +    P2HandleCount (&GuidUsbCfg),
 +    P2HandleCount (&gEfiLoadedImageProtocolGuid)
 +    ));
++
++  P2UsbGate (&GuidUsbCfg);
 +}
 +
 +//
@@ -1076,7 +1135,7 @@ index d7c7147e..837ef37b 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1220,19 @@ CoreDispatcher (
+@@ -483,11 +1279,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -1096,7 +1155,7 @@ index d7c7147e..837ef37b 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1264,20 @@ CoreDispatcher (
+@@ -519,6 +1323,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -1117,7 +1176,7 @@ index d7c7147e..837ef37b 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1655,8 @@ CoreAddToDriverList (
+@@ -896,6 +1714,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -1126,7 +1185,7 @@ index d7c7147e..837ef37b 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +2070,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +2129,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -1143,7 +1202,7 @@ index d7c7147e..837ef37b 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2183,29 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2242,29 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1173,7 +1232,7 @@ index d7c7147e..837ef37b 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2227,87 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2286,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1261,7 +1320,7 @@ index d7c7147e..837ef37b 100644
      }
  
      //
-@@ -1470,6 +2340,267 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2399,267 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1529,7 +1588,7 @@ index d7c7147e..837ef37b 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2617,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2676,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;

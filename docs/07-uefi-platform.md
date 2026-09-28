@@ -3546,6 +3546,30 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `Mu_Basecore/.../Dispatcher/Dispatcher.c`. No firmware source outside that one file was changed, no
 > device was touched. See `docs/08` step 4.180.
 
+> **Step 4.181 — the XCHI driver this platform ships cannot bind, and the reason is one word the
+> platform's own `UsbConfigDxe` writes into the interface it publishes.** Recorded in this file because
+> the two things that collide here are both properties of what the `.fdf` and `APRIORI.inc` assemble:
+> the payload pairs the **gauguin-shipped** `UsbConfigDxe` (`6943cc61…`, byte-identical to the file
+> extracted from the phone's own volume) with the **Bitra** `XhciPciEmulationDxe` and `XhciDxe`
+> (`68ee8cf1…`, `d579eaa0…`, byte-identical to `Binaries/bitra/…`). `XhciPciEmulation`'s `Supported`
+> accepts an `E722B03F` interface only if `[+0x88] <= 3` and `[+0x8c] == 1`; the interface this platform
+> produces carries `+0x88 = 1` and `+0x8c = 0x00010000`, because `UsbConfigDxe`'s record initialiser
+> writes that word as an *unassigned* sentinel and only `UsbStartController (Index = 0, Mode < 0x10000)`
+> ever replaces it — and the interface the platform ends up with is **record 1**, which that function
+> refuses by its own guard. So the emulated PCI controller is never published and `pciio = 0`; 4.180's
+> "this machine has no PCI layer" was the wrong half of its own fork, because the binding predicate is
+> unsatisfiable before any bus question is asked. The Bitra variants were checked and share the
+> sentinel, so **a swap of shipped binaries is not the repair**; what would be is making the platform's
+> `UsbConfigInit`/`UsbStartController` path actually run, which in this guest it does not (the PMIC and
+> IOMMU failures 4.180 read). One further platform-side fact, recorded because it changes how this
+> project reads its own instrument: the console `tools/qemu-panel-read.py` decodes is **90 columns
+> wide** and continues a full row on the row below, so a probe line of 90 characters or more is read
+> short unless its tail is joined — this step measured that the hard way and the tool now counts and
+> names such rows and can join them. Instrument: `P2UsbGate` (added),
+> `Mu_Basecore/.../Dispatcher/Dispatcher.c`, `tools/qemu-panel-read.py` (`--join-wrap`, added),
+> `tools/build-apriori-variant.sh`. No firmware source outside that one file was changed, no device was
+> touched. See `docs/08` step 4.181.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

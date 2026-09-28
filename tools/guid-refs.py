@@ -52,6 +52,17 @@ ROOT = os.path.dirname(HERE)
 # `EFI_BOOT_SERVICES` slots, as offsets from the table's first byte. Only the ones a protocol
 # reference can plausibly reach are named; the rest print as `BS+0x..` so an unnamed slot is
 # visible as unnamed rather than silently rounded to the nearest name.
+#
+# `OpenProtocol` and `CloseProtocol` were transposed here for the whole life of this tool: it
+# read `0x118` as the close and `0x120` as the open, and `UefiSpec.h` has them the other way
+# round. Every table this tool produced before that was fixed named the wrong one of the pair,
+# which two disassemblies of `XhciPciEmulationDxe.efi` settle rather than any re-reading of the
+# spec: `Supported` loads `[x9, #280]` and then calls it with six arguments
+# (`Handle, Protocol, Interface, AgentHandle, ControllerHandle, Attributes`), which is
+# `OpenProtocol`; it loads `[x10, #288]` and calls it with four (`Handle, Protocol, AgentHandle,
+# ControllerHandle`), which is `CloseProtocol`. 280 is `0x118` and 288 is `0x120`. The
+# transposition never moved a site between `publishes` and `consumes` - both names are in
+# `CONSUMES` - so it mislabelled hands without misclassifying them.
 BOOT_SERVICES = {
     0x80: "InstallProtocolInterface",
     0x88: "ReinstallProtocolInterface",
@@ -60,8 +71,8 @@ BOOT_SERVICES = {
     0xA8: "RegisterProtocolNotify",
     0xB0: "LocateHandle",
     0xB8: "LocateDevicePath",
-    0x118: "CloseProtocol",
-    0x120: "OpenProtocol",
+    0x118: "OpenProtocol",
+    0x120: "CloseProtocol",
     0x128: "OpenProtocolInformation",
     0x130: "ProtocolsPerHandle",
     0x138: "LocateHandleBuffer",
@@ -175,14 +186,44 @@ def guid_at(blob, off):
     return str(uuid.UUID(bytes_le=blob[off:off + 16])).upper()
 
 
-def register_values(ins, upto, back=8):
+# The mnemonics that name a register *first* without writing it: the compares and the
+# branch-on-register forms read, and every store takes its source first. Anything else whose
+# first operand is a register writes it, which is what ends that register's life as a carrier.
+READS_FIRST = {"cmp", "cmn", "tst", "cbz", "cbnz", "tbz", "tbnz",
+               "str", "strb", "strh", "strw", "stp", "stur", "sturb", "sturh", "st1",
+               "br", "blr", "b", "ret"}
+
+# The argument registers a `BL` destroys. A value materialised before a call and not remade
+# after it is not an argument to the next call, and the AAPCS says so.
+CALLER_SAVED = {"x%d" % n for n in range(19)}
+
+
+def writes(mnemonic, operands, reg):
+    """Does this instruction write `reg`? A `wN` and an `xN` are the same register here.
+
+    A value the `ADRP`+`ADD` pair put in a register is an argument only up to the first
+    instruction that overwrites it, and this is the test for that first instruction.
+    """
+    if mnemonic in READS_FIRST:
+        return False
+    m = re.match(r"([wx])(\d+)", operands)
+    n = re.match(r"([wx])(\d+)", reg)
+    return bool(m and n and m.group(2) == n.group(2))
+
+
+def register_values(ins, upto, back=64):
     """Every argument register whose value the preceding `ADRP`/`ADD` pair fixes, at `upto`.
 
     `ADRP` gives a 4 KiB-aligned page and the `ADD` beside it the offset within the page; the
     pair is how AArch64 materialises a static address, and it is the only way this tool needs to
-    understand. The window is deliberately short: a register whose value was set forty
-    instructions ago belongs to some other call, and reporting it would put a GUID in the
-    argument list that the call never sees.
+    understand.
+
+    A register's life ends at the first instruction that writes it and at the first `BL`, which
+    is what makes a long window safe rather than a source of false arguments. The window was
+    eight instructions and a fixed length, which is the wrong shape twice over: `Start` of
+    `XhciPciEmulationDxe.efi` sets `&E722B03F` into `x1` twenty-nine instructions before the
+    call that consumes it, five other argument registers in between, so a short window reports
+    no second GUID at the one site where there is one.
     """
     vals = {}
     for i in range(max(0, upto - back), upto):
@@ -198,6 +239,17 @@ def register_values(ins, upto, back=8):
         m = re.match(r"(x\d+), (x\d+)$", ops) if mn == "mov" else None
         if m and m.group(2) in vals:
             vals[m.group(1)] = vals[m.group(2)]
+            continue
+        if mn in ("bl", "blr"):
+            for r in list(vals):
+                if r in CALLER_SAVED:
+                    del vals[r]
+            continue
+        d = re.match(r"([wx])(\d+)", ops)
+        if d:
+            for r in list(vals):
+                if r[1:] == d.group(2):
+                    del vals[r]
     return vals
 
 
@@ -278,8 +330,15 @@ def analyse(section, blob, target, names):
                 break
         if j == i:
             continue
-        # the call this materialisation is an argument to
-        for k in range(j, min(j + 16, len(ins))):
+        # The call this materialisation is an argument to - not the next sixteen instructions.
+        # The pair and its call are separated by however many other arguments the call has, and
+        # `XhciPciEmulationDxe.efi`'s `Start` sets five more registers between `&E722B03F` and
+        # the `BLR` that takes it, which is twenty-seven instructions and one more than a
+        # sixteen-instruction window reaches. That site was reported by hand before it was
+        # reported here. So the walk is bounded by the register's life instead of by a count.
+        for k in range(j + 1, len(ins)):
+            if writes(ins[k][1], ins[k][2], m.group(1)):
+                break
             if ins[k][1] != "blr":
                 continue
             reg = ins[k][2]
@@ -292,10 +351,13 @@ def analyse(section, blob, target, names):
                 # so it is never a *second* GUID worth printing; and only GUIDs the tree can
                 # name are printed, because an unaligned or stale register resolves to sixteen
                 # arbitrary bytes and printing those is how a scan grows confident about noise.
-                if r == "x0" or int(r[1:]) > 6:
+                # Which register holds the target depends on the service - `x0` at an
+                # install, `x1` at an `OpenProtocol`, a `LocateProtocol` or a `HandleProtocol`
+                # - so the test is on the *value* rather than on the register number.
+                if int(r[1:]) > 6:
                     continue
                 g = guid_at(d, rva_range(d, v))
-                if g and g in names and set(g.replace("-", "")) != {"0"}:
+                if g and g != target and g in names and set(g.replace("-", "")) != {"0"}:
                     others.append("%s=&%s" % (r, names[g][0]))
             out.append((addr, api, others))
             break

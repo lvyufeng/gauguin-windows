@@ -1203,6 +1203,40 @@ Work:
 > `tools/fv-inventory.py --roster`; `tools/qemu-panel-read.py` unmodified. No device was touched. See
 > `docs/08` step 4.180.
 
+> **Step 4.181 — the gate is shut, and the word that shuts it is one the publisher writes.** A
+> `P2UsbGate (EFI_GUID *)` was added beside 4.180's census and `tools/build-apriori-variant.sh
+> xhci-host` rebuilt through all four gates to `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`,
+> 1,173,504 B, `sha256 32d359a9…`; the plain pass re-read the module base and it had **not** moved
+> (`0x9C40B000`, same `+0x346C`, `FAR 0xAFAFAFAF…`), so 4.180's "one page moves `DALSys`" is a
+> property of that page and not a rule. The gated run reaches the ordinary pass and takes **23 digest
+> passes**; the probe prints one row per `E722B03F` handle and every one is the same:
+> `P2 GATE h=9C028D98 i=9BECC3B8 w00=00010004 w04=00000000 w80=9BEBC650 w88=00000001 w8c=00010000`.
+> **This step's own first reading of that row was wrong** — the panel file shows it as
+> `… w88=00000001 w8c=0001` because the console is 90 columns wide and a full row continues on the row
+> below, with the tail `0000` sitting on the next row as its own line. The mechanism is proved twice in
+> that one panel: the same wrap splits `P2 APRI first=… last=CCCB0C28-…-0090273FC1` from its `4D`, and
+> the two joined halves are exactly the 70th APRIORI GUID this project has documented for hundreds of
+> steps. Across all 35 panels in `work/out/`, 406 rows are full width and exactly **two instrument
+> lines** are ever affected — that `P2 APRI` row, and this new one — so no earlier conclusion rests on
+> a short read. `tools/qemu-panel-read.py` was repaired rather than warned about: it now counts and
+> names full-width rows and gained `--join-wrap`, verified by recovering both strings. With the tail:
+> `Supported` requires `[iface+0x88] <= 3` **and** `[iface+0x8c] == 1`; the value is `0x00010000`, the
+> *unassigned* sentinel `UsbConfigDxe`'s own initialiser loop writes (`0x3b6c`, `orr w9, wzr,
+> #0x10000`), and `1` is written there by one caller only — `UsbStartController`, whose guard is
+> `Index = 0` **and `Mode < 0x10000`** (`0x4df4`/`0x4e0c`; the earlier note in this project's record
+> had that branch the wrong way round). The surviving interface is **record 1**, which that function
+> cannot reach at all — installed early by `UsbConfigInit` (`0x3aa4`, `x2 = rec[1]+0x28`) onto a handle
+> slot the very next loop nulls, which is also exactly why 4.180 measured `cfg=1` against three
+> install sites. So **`pciio = 0` is not an artefact of `-M virt`**: the emulation's only route to
+> publishing is its driver binding and that binding's first gate cannot be satisfied by any interface
+> this boot creates. 4.180's two-alternative caveat is closed in favour of its first. Bitra's three
+> `UsbConfigDxe` variants were checked and use the same sentinel and the same `+0x88 = i` loop, so this
+> is not a version skew to be fixed by swapping a binary. **What remains is the phone**, and it is now
+> a one-character prediction: a device run prints `w88=00000000 w8c=00000001` if the PMIC path reaches
+> `UsbStartController (0, 1)` and `w88=00000001 w8c=00010000` if it does not. Instrument:
+> `P2UsbGate` (added), `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`,
+> `tools/qemu-panel-read.py` (`--join-wrap`, added). No device was touched. See `docs/08` step 4.181.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

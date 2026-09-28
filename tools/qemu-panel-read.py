@@ -996,6 +996,15 @@ def main():
     ap.add_argument("--out", default=os.path.join(REPO, "work", "out", "qemu-panel.txt"))
     ap.add_argument("--quiet", action="store_true",
                     help="report only the stream, not each sample's progress")
+    ap.add_argument("--join-wrap", action="store_true",
+                    help="in --out, append to a row that fills the console's last"
+                         " column the row below it, on the theory that the console"
+                         " wrapped. Off by default because the two cases are not"
+                         " distinguishable on the screen: a console line of exactly"
+                         " `columns` characters also puts the cursor on the next row"
+                         " without having wrapped. The count of full-width rows is"
+                         " reported either way, because a wrapped row read as a whole"
+                         " line is a reading error this file cannot prevent")
     args = ap.parse_args()
 
     if args.kernel and not os.path.exists(args.kernel):
@@ -1567,11 +1576,56 @@ def main():
             for t, n, again in gaps:
                 fh.write(f"#   at {t:.2f}s, a screen of {n} rows, of which {again}"
                          f" are rows the stream already holds\n")
-        for i, line in enumerate(lines):
+        # A row the console could not fit is the one thing this file cannot show as
+        # one line: the console's own wrap puts the tail on the next row, and a line
+        # that is exactly `columns` wide puts the cursor there without having
+        # wrapped. Nothing on the screen separates the two - the tail starts at
+        # column 1 either way - so both are counted and named rather than guessed
+        # at. Measured on the 4.181 gate row: `...w8c=0001` read as a whole line
+        # says the mode word is 1, and the `0000` the row below it holds says the
+        # word is 0x10000, which is the difference between a gate that is open and
+        # a gate that is shut.
+        full = [i for i, line in enumerate(lines) if len(line) == geo["columns"]]
+        if full:
+            fh.write(f"# {len(full)} row(s) fill all {geo['columns']} columns and"
+                     f" therefore continue on the row below, at"
+                     f" {', '.join(str(i) for i in full[:12])}"
+                     f"{', ...' if len(full) > 12 else ''}"
+                     f" - each one's next row is that line's tail and not a line of"
+                     f" its own\n")
+        rows = lines
+        if args.join_wrap:
+            # Pairwise, and once per full row: a row is glued to the row below it
+            # and the pair becomes one entry, so a glued row is never itself the
+            # left half of another pair. Testing the accumulated row instead would
+            # cascade - the first pair is longer than the console is wide, so every
+            # row after it would be glued to it in turn.
+            rows, glued, i = [], 0, 0
+            while i < len(lines):
+                if len(lines[i]) == geo["columns"] and i + 1 < len(lines):
+                    rows.append(lines[i] + lines[i + 1])
+                    glued += 1
+                    i += 2
+                else:
+                    rows.append(lines[i])
+                    i += 1
+            fh.write(f"# --join-wrap: {glued} row(s) appended to the full row above"
+                     f" them, {len(lines)} -> {len(rows)}. Applied without checking,"
+                     f" so a line that is exactly {geo['columns']} wide has had the"
+                     f" line below it glued to it, and a line that wrapped twice is"
+                     f" still short by its last row\n")
+        for i, line in enumerate(rows):
             fh.write(f"{i:4d} |{line}|\n")
 
     print(f"\n{len(lines)} rows from {screens} screens;"
           f" weakest margin {worst:.2f}, {weak} characters under {args.min_margin}")
+    if full:
+        print(f"  {len(full)} of those rows fill all {geo['columns']} columns and"
+              f" continue on the row below (row"
+              f" {', '.join(str(i) for i in full[:6])}"
+              f"{', ...' if len(full) > 6 else ''})"
+              + (f"; --join-wrap glued {glued}" if args.join_wrap else
+                 "; read them joined or they will be read short"))
     for t, n, again in gaps:
         print(f"  at {t:.2f}s a screen of {n} rows, {again} of them rows the stream"
               f" already holds"
