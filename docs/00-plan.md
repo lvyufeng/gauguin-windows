@@ -1237,6 +1237,46 @@ Work:
 > `P2UsbGate` (added), `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`,
 > `tools/qemu-panel-read.py` (`--join-wrap`, added). No device was touched. See `docs/08` step 4.181.
 
+> **Step 4.182 — the gate 4.181 read is never *reached*, and the reason is the dispatch order.** 4.181
+> closed the predicate and left one item explicitly open — *"whether `Supported` is reached at all (a
+> counter at its entry, unbuilt)"*. The counter cannot go in `XhciPciEmulation` (source absent), and
+> does not need to: every `DriverBinding->Supported` call in the firmware is made in one place,
+> `MdeModulePkg/Core/Dxe/Hand/DriverSupport.c`'s `CoreConnectSingleController` inner loop (line 818),
+> so counting there counts all of them and the controller handle each was made against. Four counters
+> (`gP2SuppCalls`, `gP2SuppCfg`, `gP2ConnCfg`, `gP2ConnAll`), a `P2 SUPP n=` line printed once per
+> connect to the `E722B03F` handle before the first `Supported`, and a `P2 CONN` row folded into the
+> census's digest block. The caller is *named* without touching it: the dispatcher passes a
+> `MEDIA_FW_VOL_FILEPATH_DEVICE_PATH` to `CoreLoadImage` for every FV-dispatched driver
+> (`Dispatcher.c:1645`, `:2153`), so the driver's own firmware-file GUID comes back out of
+> `LoadedImage->FilePath`. Patch regenerated (14 files, 1864 insertions, 23 deletions);
+> `tools/build-apriori-variant.sh xhci-host` rebuilt through all four gates to
+> `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`, 1,173,504 B, `sha256 0400c133…`; the plain pass
+> re-read the module base and it had **not** moved a third time (`0x9C40B000`, same `+0x346C`). The
+> run takes **23 digest passes** and every one of them reads the same three lines:
+> `P2 CONN cc=1 sup=949 cfg=7 all=169`, `P2 SUPP n=7`, and seven `P2 SUPP <guid> s=Unsupported` rows
+> — `UsbfnDwc3Dxe`, `UsbMassStorageDxe`, `PartitionDxe`, `DiskIoDxe`, `UsbBusDxe`, `UsbKbDxe`, `Fat`.
+> **`BEB12BEE` (`XhciPciEmulation`) is not among them**, and the count and the rows agree one-for-one,
+> so nothing this connect considered failed to print. `sup=949` is the liveness check — the instrument
+> is not dead; `cfg=7` is a small complete set; `cc=1` says the handle is connected **once in the
+> whole boot**; `all=169` says that is one connect in a busy system. The same panel gives the order:
+> the seven rows sit immediately after `UsbConfigDxe`'s four bring-up errors and immediately before
+> `K 57 Ss 53/69 … 0983C7F2-…` — the connect is made inside `UsbConfigDxe`'s own entry point at
+> `K 57` — while `K 73 Ss 67/69 … BEB12BEE-…` shows `XhciPciEmulation` dispatched **sixteen slots
+> later**. So the emulation is never offered the handle: at `K 57` the system holds seven driver
+> bindings and the emulation is not yet loaded, and nothing connects the handle again. This is a
+> second, independent reason to 4.181's predicate that the binding cannot happen — either would
+> suffice, and fixing one leaves the other standing. The step was itself wrong once and the mistake is
+> kept: the first build wrapped `CoreHandleProtocol` in `CoreAcquireProtocolLock ()`, which *is*
+> `CoreOpenProtocol` and takes that lock itself, and asserted `Library.c(64): Lock->Lock ==
+> EfiLockReleased` at 3.5 s; the aborted artifacts are named in place rather than deleted. **Still
+> open**: which repair to make — reorder the Apriori, re-connect the handle after `K 73`, or change
+> the sentinel `UsbStartController` writes — the first P3 clause, and the phone, which now has a
+> second prediction that does not depend on the PMIC at all: a device run should print `P2 SUPP n=`
+> with **more** than seven and, if anything re-connects, `cc` greater than `1`. Instrument:
+> `P2CarriesUsbCfg`/`P2DriverFileGuid`/`P2SuppNote`/`P2Conn` (added),
+> `tools/regen-mu-basecore-patch.sh`, `tools/build-apriori-variant.sh`. No device was touched. See
+> `docs/08` step 4.182.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

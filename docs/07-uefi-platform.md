@@ -3570,6 +3570,27 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `tools/build-apriori-variant.sh`. No firmware source outside that one file was changed, no device was
 > touched. See `docs/08` step 4.181.
 
+> **Step 4.182 — that driver is never even offered the handle, and the reason is where `APRIORI.inc`
+> puts it.** 4.181's shut gate is a property of the pairing (gauguin `UsbConfigDxe` writing the
+> unassigned sentinel into the interface its own `XhciPciEmulation` would test); this step adds the
+> ordering, which is a property of the same two files. A counter at the one `Supported` call site in
+> DxeCore (`Hand/DriverSupport.c:818`) shows that `UsbConfigDxe` connects the `E722B03F` handle
+> **exactly once** in the whole boot, and that the connect happens inside its own entry point, printed
+> on the same panel as `K 57 Ss 53/69 … 0983C7F2-…`. `XhciPciEmulation` is `K 73 Ss 67/69 …
+> BEB12BEE-…`: the platform's Apriori places it **sixteen slots after** the consumer that would bind
+> it, and nothing re-connects the handle afterwards (`cc=1` against `all=169` connects). At the moment
+> of the connect the system holds seven driver bindings — `UsbfnDwc3Dxe`, `UsbMassStorageDxe`,
+> `PartitionDxe`, `DiskIoDxe`, `UsbBusDxe`, `UsbKbDxe`, `Fat` — and all seven are offered the handle
+> and decline; the count and the rows agree one-for-one. So on this platform the emulated XHCI
+> controller is unreachable twice over, and the two reasons are independent: the ordering (this step)
+> and the sentinel (4.181). Three candidate repairs now exist and none is taken — reorder the Apriori,
+> re-connect the handle after `K 73`, or change what `UsbStartController` writes — which is the next
+> platform-side question, not a further measurement. Instrument: `P2CarriesUsbCfg`,
+> `P2DriverFileGuid`, `P2SuppNote`, `P2Conn` (added),
+> `Mu_Basecore/.../Hand/DriverSupport.c`, `Mu_Basecore/.../Dispatcher/Dispatcher.c`,
+> `tools/build-apriori-variant.sh`. No firmware source outside those two files was changed, no device
+> was touched. See `docs/08` step 4.182.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

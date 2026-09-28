@@ -37420,3 +37420,234 @@ binary: in a working boot something must call `UsbStartController (0, 1)` and th
   the only device on the host's bus 1 is a mouse. Nothing was written to it at any point.
 - **host**: unchanged from 4.180, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses
   every ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.
+
+## Step 4.182 — the seven bindings that were offered the `E722B03F` handle are all seven of the bindings that existed, and `XhciPciEmulation` is not among them because it is dispatched **sixteen slots later**; the gate is not merely shut for a record the emulation never sees, the one connect that would have offered it the record happens once, at `K 57`, before the emulation is loaded
+
+### The question 4.181 named and did not answer
+
+4.181 closed against "this machine has no PCI layer", and then wrote down the one thing its own
+instrument could not see:
+
+> *"does not close: whether `Supported` is reached at all (a counter at its entry, unbuilt)."*
+
+That is a real gap and not a formality. Everything 4.181 measured was the *predicate* — the two words
+`XhciPciEmulation`'s `Supported` tests — read out of a live interface. Nothing in that reading says the
+predicate was ever evaluated on that interface. If the driver were never offered the handle, the shut
+gate 4.181 found would be a true statement about a comparison that never happens, and `pciio = 0`
+would have a third explanation: not "the emulation refused" and not "there is no PCI layer", but "the
+emulation was never asked".
+
+### Why the counter can be built at all, and where
+
+`XhciPciEmulation`'s source is not in this tree — `Binaries/<soc>/QcomPkg/Drivers/XhciPciEmulationDxe/`
+holds only `.efi`, `.inf` and `.depex` — so no counter can go *inside* it. It does not need to. Every
+`DriverBinding->Supported` call the firmware makes, by any driver, is made in exactly one place:
+`MdeModulePkg/Core/Dxe/Hand/DriverSupport.c`'s `CoreConnectSingleController`, in the inner loop at
+line 818. Counting there counts all of them, and the counters say which controller handle each call
+was made against. `Supported` is reached iff a row appears.
+
+The instrument, in `Hand/DriverSupport.c`:
+
+```c
+STATIC BOOLEAN P2CarriesUsbCfg (IN EFI_HANDLE Handle);   // CoreHandleProtocol for E722B03F
+STATIC BOOLEAN P2DriverFileGuid (IN EFI_DRIVER_BINDING_PROTOCOL *, OUT EFI_GUID *);
+STATIC VOID    P2SuppNote (IN EFI_DRIVER_BINDING_PROTOCOL *, IN EFI_HANDLE, IN EFI_STATUS);
+
+UINTN gP2SuppCalls = 0;   // every Supported call in the system, any controller
+UINTN gP2SuppCfg   = 0;   // ... of those, ones made against an E722B03F-carrying controller
+UINTN gP2ConnCfg   = 0;   // connects to an E722B03F-carrying controller
+UINTN gP2ConnAll   = 0;   // every CoreConnectController call
+```
+
+`P2SuppNote` is called immediately after `PERF_DRIVER_BINDING_SUPPORT_END` (line 833) inside the loop.
+Two more prints were added: `P2 SUPP n=%d`, once per connect to the `E722B03F` handle, immediately
+before `OneStarted = FALSE; do {` (line 803), printing `NumberOfSortedDriverBindingProtocols` — the
+number of bindings the loop is about to consider; and `P2 CONN cc= sup= cfg= all=`, folded into
+`Dispatcher.c`'s `P2Conn ()` and called from `P2UsbCensus`'s digest block so it prints on the census's
+own schedule.
+
+The `P2 SUPP n=` line exists for a specific ambiguity, stated in the source comment: seven rows with no
+`BEB12BEE` among them is either *"XhciPciEmulation was tried and its row is missing"* — a broken probe
+— or *"seven bindings existed and XhciPciEmulation was not one of them"* — the finding. **The count is
+what separates the two.** It is printed once, before the first `Supported`, so the number and the rows
+are read off the same moment.
+
+Two further things the instrument had to get right, both recorded in the source:
+
+- **The file GUID comes from the loaded image's device path, not from a lookup table.** The dispatcher
+  passes a `MEDIA_FW_VOL_FILEPATH_DEVICE_PATH` (`Media/PIWG-FW-File`, `0x06`) to `CoreLoadImage` for
+  every FV-dispatched driver (`Dispatcher.c:1645`, `:2153`), so `LoadedImage->FilePath`'s last node
+  before End carries the driver's own firmware-file GUID — the same GUID `P2Tick`'s `K` rows print.
+  `P2DriverFileGuid` walks to it and `%g` prints it. That is what lets a `Supported` call be *named*
+  without knowing anything about the caller.
+- **No explicit protocol lock.** The first build wrapped `CoreHandleProtocol` in
+  `CoreAcquireProtocolLock ()` and asserted at 3.5 s:
+  `Library.c(64): Lock->Lock == EfiLockReleased`. `CoreHandleProtocol` *is* `CoreOpenProtocol`, which
+  takes that lock itself, so the outer acquisition is a recursive take. Both lock pairs were deleted
+  and the failure is documented in the comment where the call is made. (The build with the assert is
+  kept, not deleted: `work/out/qemu-probe-4.182/plain-assert.log` and
+  `work/out/qemu-panel-4.182-assert-before-fix.txt`.)
+
+`tools/regen-mu-basecore-patch.sh` regenerated the patch — **14 files changed, 1864 insertions(+),
+23 deletions(-)** — and `tools/build-apriori-variant.sh xhci-host` rebuilt through all four gates:
+*"the array is exactly the INF order of APRIORI.inc: 70 entries, zero mismatches"*, *"all images
+structurally check out"*, *"matches FVMAIN.Fv.txt: 126 offsets and GUIDs, zero mismatches"*.
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (**new**, connect-count probe) | 1,173,504 | `0400c1330a50ddb29ac3fda103d5fd3fad6fc1d441992511228a1468b840ff77` |
+| `/tmp/xhci-supp3-payload.raw` (inflated outer blob) | 3,145,840 | `f06f1181146c7f3b6b7c5645bbbe15317bcdb6f9f82de891d2249ae9af82eaea` |
+| `work/out/qemu-probe-4.181/Mu-gauguin-xhci-gate-gzip.img` (4.181 control, copied out first) | 1,173,504 | `32d359a9f3d4f475be999323e3e713215634307cd2793a13eebf76cce1863377` |
+
+Pass 1 is `run34-plain.sh`, spent only to re-read the module base after the rebuild, and it did not
+move — `Synchronous Exception at 0x000000009C40E46C`, `PC 0x00009C40E46C (0x00009C40B000+0x0000346C)
+[ 0] DALSys.dll`, `ESR 0x96000004  FAR 0xAFAFAFAFAFAFAFAF`. `0x9C40B000`, the third step in a row at
+the same base, so the counters' own code did not shift DALSys. Pass 2 is `run34.sh` with
+`BASE=0x9c40b000`, `gdbprobe34.py` (4.177's probe, socket name only), 280 s, **23 digest passes**.
+
+### The reading
+
+One distinct line per counter, on all 23 passes:
+
+```
+P2 CONN cc=1 sup=949 cfg=7 all=169
+P2 SUPP n=7
+P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Unsupported
+P2 SUPP 9FB4B4A7-42C0-4BCD-8540-9BCC6711F83E s=Unsupported
+P2 SUPP 1FA1F39E-FEFF-4AAE-BD7B-38A070A3B609 s=Unsupported
+P2 SUPP 6B38F7B4-AD98-40E9-9093-ACA2B5A253C4 s=Unsupported
+P2 SUPP 240612B7-A063-11D4-9A3A-0090273FC14D s=Unsupported
+P2 SUPP 2D2E62CF-9ECF-43B7-8219-94E7FC713DFE s=Unsupported
+P2 SUPP 961578FE-B6B7-44C3-AF35-6BC705CD2B1F s=Unsupported
+```
+
+`P2 CONN` is 23 rows, one distinct value. `P2 SUPP n=` is 1 row. The eight `P2 SUPP` rows are 8 rows,
+8 distinct values. Row 147 of the panel is `P2 SUPP n=7` and rows 148–154 are exactly seven
+`P2 SUPP <guid>` rows — **the count and the rows agree one-for-one, so nothing this connect considered
+failed to print.** `BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1` is not among the seven.
+
+The four numbers, read:
+
+- **`sup=949`** — 949 `Supported` calls happened system-wide. This is the liveness check on the
+  instrument itself: it is not zero, so the loop it counts was entered, and a `cfg=7` beside it is a
+  measurement rather than a dead probe.
+- **`cfg=7`** — exactly seven of those 949 were made against the `E722B03F` handle. Seven is a small,
+  complete, enumerable set.
+- **`cc=1`** — `CoreConnectController` was called **once** in the whole boot with a controller handle
+  carrying `E722B03F`. There is no second connect that could reach the emulation later.
+- **`all=169`** — 169 `CoreConnectController` calls total, so `cc=1` is "the one E722B03F connect"
+  against a busy system, not against a system that never connects anything.
+
+### What makes it decisive: the dispatch order, which the same panel prints
+
+The seven rows sit at panel rows 148–154, immediately after the four `UsbConfigDxe` bring-up errors
+(rows 143–146) and immediately **before** row 155:
+
+```
+143 |UsbConfigLibOpenProtocols: gPmicNpaClientSS1 cannot be created|
+144 |UsbConfigLibOpenProtocols: failed to locate PMIC version protocol|
+145 |UsbConfigLibOpenProtocols: PMI version (0x0)|
+146 |UsbConfigInit: Failed to attach USB Arid 0x0 HAL IOMMU domain Result =  (0x4)|
+147 |P2 SUPP n=7|
+148..154 |P2 SUPP <seven GUIDs> s=Unsupported|
+155 |K 57 Ss 53/69 free=1024 0983C7F2-0EF3-5EC4-83AD-3B32DDEB1E60|
+```
+
+`0983C7F2-…` = `UsbConfigDxe`. So the connect is made inside `UsbConfigDxe`'s own entry point — the
+same place 4.181's reading pointed — and it is `K 57` of 69. And the same panel prints:
+
+```
+186 |K 73 Ss 67/69 free=1024 BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1|
+```
+
+`K 73`. **`XhciPciEmulation` is dispatched sixteen slots after the only connect that would have
+offered it the handle.** That is the whole answer, and it is stronger than the one 4.181 was reaching
+for. 4.181 said: the record carries `+0x8c = 0x00010000`, so even if the emulation saw it, its
+`Supported` would return `EFI_UNSUPPORTED`. 4.182 says: it does not see it, because at the moment
+`UsbConfigDxe` connects that handle there are seven driver bindings in the system and
+`XhciPciEmulation` is not yet one of them; and nothing connects that handle again (`cc=1`).
+
+So the chain is: **`E722B03F` is installed early by `UsbConfigInit` (4.180's finding), `UsbConfigDxe`
+connects it once during its own entry point at `K 57`, the seven bindings then in the database are all
+offered it and all decline, and the emulation that would have accepted it is loaded at `K 73` and is
+never given the chance.** `pciio = 0` follows from the ordering, not from the predicate — the predicate
+4.181 measured is a second, independent reason the same binding could not happen even if the order
+were reversed.
+
+### What the seven names say, and what they do not
+
+The seven GUIDs resolve, via the FV inventory, to `UsbfnDwc3Dxe` (`F056673C`), `UsbMassStorageDxe`
+(`9FB4B4A7`), `PartitionDxe` (`1FA1F39E`), `DiskIoDxe` (`6B38F7B4`), `UsbBusDxe` (`240612B7`),
+`UsbKbDxe` (`2D2E62CF`) and `Fat`/`EnhancedFatDxe` (`961578FE`). Five of the seven are the ordinary
+downstream consumers of a USB mass-storage stack — they are exactly the drivers that *would* have
+bound, one after another, if an emulated XHCI controller had ever been published on this handle. Six
+of the seven have a `K` row in this same panel (`K 51`, `K 52`, `K 53`, `K 54`, `K 24`, `K 29`);
+`PartitionDxe` does not, and its identity comes from the FV inventory (`docs/08` step 4.132's GUID
+table, `1FA1F39E-FEFF-4AAE-BD7B-38A070A3B609  type 0x07  PartitionDxe`) rather than from a dispatch row
+this run printed. That is the one place in this reading where a name is taken from the volume's roster
+instead of from the run.
+
+### Where this leaves the three readings, and where a repair would have to go
+
+4.180 found the census's `pciio = 0` and could not say why. 4.181 found the predicate that refuses,
+reading the two words off the live interface. 4.182 finds that the predicate is never consulted,
+because the connect happens at `K 57` and the emulation loads at `K 73`. The first two readings are
+about *what the code would decide*; the third is about *whether the code is asked*, and only the third
+says where a repair would have to go. These are three explanations of one zero, and they do not
+compete: the ordering alone is sufficient for `pciio = 0`, and 4.181's predicate is a second,
+independent reason the binding could not happen even if the order were reversed. Whichever is repaired
+first, the other still stands. Nothing in this step proposes that repair; deciding between "reorder
+the Apriori", "re-connect the handle after `K 73`", and "make `UsbStartController` write `1` where it
+writes `0x00010000`" is the next question, and the phone still gets a vote in it.
+
+### Rows
+
+- **instrument** (three files): `Hand/DriverSupport.c` — `P2CarriesUsbCfg`, `P2DriverFileGuid`,
+  `P2SuppNote`, the four counters, `gP2ConnAll++` in `CoreConnectController`, `P2 SUPP n=` before
+  `OneStarted = FALSE; do {` in `CoreConnectSingleController`, `P2SuppNote` after
+  `PERF_DRIVER_BINDING_SUPPORT_END` in the loop; `Dispatcher.c` — `extern` block, `P2Conn ()`, and its
+  call from `P2UsbCensus`'s digest block; `tools/regen-mu-basecore-patch.sh` (14 files, 1864
+  insertions, 23 deletions); `tools/build-apriori-variant.sh xhci-host`; `run34-plain.sh`,
+  `gdbprobe34.py`, `run34.sh` (`BASE=0x9c40b000`).
+- **measures, for the first time in this project**: whether any driver's `Supported` is *reached* —
+  and specifically whether `XhciPciEmulation`'s is reached with the `E722B03F` handle. Counted at the
+  one call site in the core, named by the firmware-file GUID recovered from `LoadedImage->FilePath`.
+- **answers 4.181's open item**, and answers it in the negative: `sup=949 cfg=7 cc=1 all=169`,
+  `n=7` and seven rows, `BEB12BEE` absent.
+- **reads the ordering off the same panel**: `UsbConfigDxe` = `K 57`; `XhciPciEmulation` = `K 73`;
+  the connect is at `K 57`. `cc=1` says it does not happen again.
+- **corrects nothing in 4.181** — the predicate reading (`w88=00000001`, `w8c=0x00010000`) reproduces
+  exactly, on 23 passes, at the same handle `h=9C028D98` and the same interface `i=9BECC3B8`; this
+  step adds a second, independent reason the same binding cannot occur.
+- **was itself wrong once, and the mistake is kept**: the first build wrapped `CoreHandleProtocol` in
+  `CoreAcquireProtocolLock ()` and asserted `Library.c(64): Lock->Lock == EfiLockReleased` at 3.5 s.
+  The two aborted artifacts are named in place, not deleted.
+- **closes**: 4.181's *"does not close: whether `Supported` is reached at all"*.
+- **does not close**: which repair to make (Apriori order, a re-connect after `K 73`, or the sentinel
+  `UsbStartController` writes); the first P3 clause; and the phone's own behaviour, which is still a
+  one-character prediction — `P2 GATE … w88=00000000 w8c=00000001` if a working PMIC path reaches
+  `UsbStartController (0, 1)`, `… w88=00000001 w8c=00010000` if it does not. This step adds a second
+  device-side prediction that does not depend on the PMIC at all: a device run should print
+  `P2 SUPP n=` with **more** than seven, because on the phone `UsbConfigDxe`'s bring-up gets further
+  and more drivers are loaded by the time it connects; and if the PMIC path works well enough that
+  something re-connects the handle, `cc` should exceed `1`.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression;
+  `0x12000c`, QEMU RAM here and the clock controller's register on the board; the seeded SMEM
+  target-info word (`SEEDED`, above) without which no run carries the digest rows; and this repository
+  tracks no INF of a shipped binary.
+- **the 90-column rule, honoured and still not fixed**: this step's four new lines are 30, 13, 62 and
+  62 columns at their widest. The `P2 GATE` row is still 94 and still wraps — row 238 of
+  `work/out/qemu-panel-4.182b-xhci-supp.txt` ends `w8c=0001` and row 239 is `0000` — so it is still
+  read as `w8c=00010000`, the same as 4.181. 53 rows of this panel are exactly 90 columns; the `P2
+  APRI first/last` row is still the other recurring one (rows 243/244, tail `4D`). **The next build's
+  `P2 GATE` should be two lines**, as 4.181 said, and this step did not do it.
+- **not an action**: nothing was flashed, no partition was written, no stub, firmware source or
+  Microsoft image was changed beyond the one probe described. `userdata` (107 GB, unbacked), the
+  partition table and the firmware LUN remain untouched. The porting goal is unchanged and unmet: no
+  Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and P5's
+  peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing;
+  `lsusb` shows only root hubs and the host's own mouse. Nothing was written to it at any point.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
+  ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.

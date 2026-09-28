@@ -329,10 +329,10 @@ index 39668123..8405bc31 100644
  #define  USB_INTERFACE_SIGNATURE  SIGNATURE_32 ('U', 'S', 'B', 'I')
  #define  USB_BUS_SIGNATURE        SIGNATURE_32 ('U', 'S', 'B', 'B')
 diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-index d7c7147e..1a96482d 100644
+index d7c7147e..ff51fd76 100644
 --- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
 +++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
-@@ -60,6 +60,802 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
+@@ -60,6 +60,839 @@ EFI_LOCK  mDispatcherLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_HIGH_LEVEL);
  //
  BOOLEAN  gDispatcherRunning = FALSE;
  
@@ -365,6 +365,20 @@ index d7c7147e..1a96482d 100644
 +STATIC UINTN           mP2Apriori      = 0;   // entries promoted by an Apriori file
 +STATIC UINTN           mP2AprioriCount = 0;   // GUIDs in the largest Apriori file seen
 +STATIC UINTN           mP2Started      = 0;   // EntryPoints that returned success
++
++//
++// P2SUPP: the three counters below are owned by Hand/DriverSupport.c, because that is
++// the file that makes every DriverBinding->Supported call and the only file that can
++// count them. They are printed here, in the census, so that they share a frame with the
++// handle counts and P2 GATE they have to be read against, and they are printed on every
++// pass of the digest rather than once, so that a number that stops advancing is visible
++// as a stall rather than as an absence. See the note above P2SuppNote for what each one
++// separates.
++//
++extern UINTN  gP2ConnAll;
++extern UINTN  gP2ConnCfg;
++extern UINTN  gP2SuppCalls;
++extern UINTN  gP2SuppCfg;
 +
 +//
 +// P2BRINGUP: one result character per Apriori entry, in promotion order - which
@@ -905,6 +919,28 @@ index d7c7147e..1a96482d 100644
 +
 +STATIC
 +VOID
++P2Conn (
++  VOID
++  )
++{
++  //
++  // Printed on its own row and not appended to P2 USB, because that row is 70 columns
++  // already and the console is 90 wide: a probe line that reaches the last column has
++  // its tail continued on the row below, which is how step 4.181's first reading of the
++  // gate went wrong. This one is 30 columns at its widest.
++  //
++  DEBUG ((
++    DEBUG_ERROR,
++    "P2 CONN cc=%d sup=%d cfg=%d all=%d\n",
++    gP2ConnCfg,
++    gP2SuppCalls,
++    gP2SuppCfg,
++    gP2ConnAll
++    ));
++}
++
++STATIC
++VOID
 +P2UsbCensus (
 +  VOID
 +  )
@@ -947,6 +983,7 @@ index d7c7147e..1a96482d 100644
 +    ));
 +
 +  P2UsbGate (&GuidUsbCfg);
++  P2Conn ();
 +}
 +
 +//
@@ -1135,7 +1172,7 @@ index d7c7147e..1a96482d 100644
  //
  // Module globals to manage the FwVol registration notification event
  //
-@@ -483,11 +1279,19 @@ CoreDispatcher (
+@@ -483,11 +1316,19 @@ CoreDispatcher (
              DriverEntry->Initialized = TRUE;
            }
  
@@ -1155,7 +1192,7 @@ index d7c7147e..1a96482d 100644
            //
            // If it's an error don't try the StartImage
            //
-@@ -519,6 +1323,20 @@ CoreDispatcher (
+@@ -519,6 +1360,20 @@ CoreDispatcher (
  
          Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
  
@@ -1176,7 +1213,7 @@ index d7c7147e..1a96482d 100644
          REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
            EFI_PROGRESS_CODE,
            (EFI_SOFTWARE_DXE_CORE | EFI_SW_PC_INIT_END),
-@@ -896,6 +1714,8 @@ CoreAddToDriverList (
+@@ -896,6 +1751,8 @@ CoreAddToDriverList (
  
    CoreReleaseDispatcherLock ();
  
@@ -1185,7 +1222,7 @@ index d7c7147e..1a96482d 100644
    return EFI_SUCCESS;
  }
  
-@@ -1309,6 +2129,16 @@ CoreFwVolEventProtocolNotify (
+@@ -1309,6 +2166,16 @@ CoreFwVolEventProtocolNotify (
                                    &Attributes,
                                    &Size
                                    );
@@ -1202,7 +1239,7 @@ index d7c7147e..1a96482d 100644
          if (!EFI_ERROR (GetNextFileStatus)) {
            if (Type == EFI_FV_FILETYPE_DXE_CORE) {
              //
-@@ -1412,6 +2242,29 @@ CoreFwVolEventProtocolNotify (
+@@ -1412,6 +2279,29 @@ CoreFwVolEventProtocolNotify (
                          );
      if (!EFI_ERROR (Status)) {
        AprioriEntryCount = SizeOfBuffer / sizeof (EFI_GUID);
@@ -1232,7 +1269,7 @@ index d7c7147e..1a96482d 100644
      } else {
        AprioriEntryCount = 0;
      }
-@@ -1433,11 +2286,87 @@ CoreFwVolEventProtocolNotify (
+@@ -1433,11 +2323,87 @@ CoreFwVolEventProtocolNotify (
            DriverEntry->Scheduled = TRUE;
            InsertTailList (&mScheduledQueue, &DriverEntry->ScheduledLink);
            CoreReleaseDispatcherLock ();
@@ -1320,7 +1357,7 @@ index d7c7147e..1a96482d 100644
      }
  
      //
-@@ -1470,6 +2399,267 @@ CoreInitializeDispatcher (
+@@ -1470,6 +2436,267 @@ CoreInitializeDispatcher (
    PERF_FUNCTION_END ();
  }
  
@@ -1588,7 +1625,7 @@ index d7c7147e..1a96482d 100644
  //
  // Function only used in debug builds
  //
-@@ -1486,11 +2676,73 @@ CoreDisplayDiscoveredNotDispatched (
+@@ -1486,11 +2713,73 @@ CoreDisplayDiscoveredNotDispatched (
  {
    LIST_ENTRY             *Link;
    EFI_CORE_DRIVER_ENTRY  *DriverEntry;
@@ -1698,6 +1735,223 @@ index 5a8e3804..2be2f2d3 100644
  /**
    Signals all events in the EventGroup.
  
+diff --git a/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c b/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c
+index 64d7474f..b5dc3b00 100644
+--- a/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c
++++ b/MdeModulePkg/Core/Dxe/Hand/DriverSupport.c
+@@ -9,6 +9,163 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include "DxeMain.h"
+ #include "Handle.h"
+ 
++//
++// P2SUPP: step 4.181 read the gate `XhciPciEmulation` opens `E722B03F` through and
++// found it shut - the interface carries 0x00010000 at +0x8C where the emulation's
++// `Supported` requires 1 - and it left one question standing, which is whether that
++// `Supported` is ever *called*. The driver is binary-only (the tree carries its .efi,
++// .inf and .depex and no source), so the counter cannot be compiled into it; but every
++// call to every driver's `Supported` in the system is made by CoreConnectSingleController
++// below, which is source this project already patches. Counting there answers the
++// question without touching the binary.
++//
++// Three numbers and not one, because they separate three different failures:
++//
++//   cc=   CoreConnectController calls made against a controller that carries E722B03F.
++//         Zero means nothing ever connects the handle the gate lives on. Then the gate
++//         is not closed, it is *unreached* - a different finding from `cfg=` below, and
++//         this counter exists to be able to tell the two apart, because the screen
++//         cannot show an absence.
++//   sup=  every Supported call made anywhere in the system. This is a liveness check on
++//         the instrument itself: if it stays at zero the counter is broken, not the boot.
++//   cfg=  Supported calls made against an E722B03F-carrying controller. Each of the
++//         first P2SUPP_SHOWN_MAX of those also prints its own `P2 SUPP` row naming the
++//         driver by its firmware-file GUID - the spelling P2Tick's `K` rows already use
++//         for the same purpose - so `BEB12BEE` appearing there is XhciPciEmulation and
++//         its `s=` is the verdict.
++//
++// The driver's GUID is read off its loaded image's device path and not from the
++// dispatcher's dispatch table, because by the time a driver binding is called the
++// dispatch that loaded it is long over.
++//
++// Caveat on where the three counters are *read*: the dispatcher's census prints them,
++// and the census runs at the end of CoreDispatcher - that is, after the dispatches and
++// before BDS. So a `cc=` of zero says nothing connected the handle *up to that point*,
++// and the connect a BDS does later is carried by the live `P2 SUPP` rows instead, which
++// print at the moment of the call. On this platform the connect that matters most is
++// UsbConfigDxe's own, made while its driver entry point is running, so it is inside the
++// census's window either way.
++//
++STATIC CONST EFI_GUID  mP2GuidUsbCfg = { 0xE722B03F, 0xB250, 0x42CE, { 0x8E, 0xBD, 0x5B, 0xD5, 0x18, 0x12, 0xD0, 0x37 }};
++
++UINTN         gP2SuppCalls = 0;
++UINTN         gP2SuppCfg   = 0;
++UINTN         gP2ConnCfg   = 0;
++UINTN         gP2ConnAll   = 0;
++STATIC UINTN  mP2SuppShown = 0;
++
++#define P2SUPP_SHOWN_MAX  24
++
++STATIC
++BOOLEAN
++P2CarriesUsbCfg (
++  IN EFI_HANDLE  Handle
++  )
++{
++  EFI_STATUS  Status;
++  VOID        *Interface;
++
++  if (Handle == NULL) {
++    return FALSE;
++  }
++
++  Interface = NULL;
++  //
++  // No explicit lock here: CoreHandleProtocol is CoreOpenProtocol, which takes the
++  // protocol database lock itself. Taking it again around the call asserts
++  // `Library.c(64): Lock->Lock == EfiLockReleased` at 3.5 s, which is how the first
++  // build of this probe died - and it died there rather than in a driver, so the
++  // assert named the instrument rather than anything it was measuring. Every other
++  // probe in this tree calls these unlocked for the same reason.
++  //
++  Status = CoreHandleProtocol (Handle, (EFI_GUID *)&mP2GuidUsbCfg, &Interface);
++
++  return (!EFI_ERROR (Status)) && (Interface != NULL);
++}
++
++//
++// The firmware-file GUID of the driver whose binding this is, or FALSE if the image was
++// not loaded out of a firmware volume (or its loaded-image protocol is not readable).
++// The node to take is the last one before the end, and it is taken only if it is a PIWG
++// firmware file node of the right length - EfiInitializeFwVolDevicepathNode is what
++// writes it and it is what the dispatcher passes to CoreLoadImage for every driver it
++// dispatches from an FV.
++//
++STATIC
++BOOLEAN
++P2DriverFileGuid (
++  IN  EFI_DRIVER_BINDING_PROTOCOL  *DriverBinding,
++  OUT EFI_GUID                     *Guid
++  )
++{
++  EFI_STATUS                 Status;
++  EFI_LOADED_IMAGE_PROTOCOL  *LoadedImage;
++  EFI_DEVICE_PATH_PROTOCOL   *Node;
++
++  if (DriverBinding->ImageHandle == NULL) {
++    return FALSE;
++  }
++
++  LoadedImage = NULL;
++  Status = CoreHandleProtocol (DriverBinding->ImageHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&LoadedImage);
++  if (EFI_ERROR (Status) || (LoadedImage == NULL) || (LoadedImage->FilePath == NULL)) {
++    return FALSE;
++  }
++
++  Node = LoadedImage->FilePath;
++  while (!IsDevicePathEnd (Node) && !IsDevicePathEnd (NextDevicePathNode (Node))) {
++    Node = NextDevicePathNode (Node);
++  }
++
++  if (IsDevicePathEnd (Node) ||
++      (DevicePathType (Node) != MEDIA_DEVICE_PATH) ||
++      (DevicePathSubType (Node) != MEDIA_PIWG_FW_FILE_DP) ||
++      (DevicePathNodeLength (Node) != sizeof (MEDIA_FW_VOL_FILEPATH_DEVICE_PATH)))
++  {
++    return FALSE;
++  }
++
++  CopyMem (Guid, &((MEDIA_FW_VOL_FILEPATH_DEVICE_PATH *)Node)->FvFileName, sizeof (EFI_GUID));
++
++  return TRUE;
++}
++
++STATIC
++VOID
++P2SuppNote (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *DriverBinding,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN EFI_STATUS                   Status
++  )
++{
++  EFI_GUID  FileGuid;
++
++  gP2SuppCalls++;
++
++  if (!P2CarriesUsbCfg (ControllerHandle)) {
++    return;
++  }
++
++  gP2SuppCfg++;
++
++  if (mP2SuppShown >= P2SUPP_SHOWN_MAX) {
++    if (mP2SuppShown == P2SUPP_SHOWN_MAX) {
++      mP2SuppShown++;
++      DEBUG ((DEBUG_ERROR, "P2 SUPP cap=%d more\n", P2SUPP_SHOWN_MAX));
++    }
++
++    return;
++  }
++
++  mP2SuppShown++;
++
++  if (P2DriverFileGuid (DriverBinding, &FileGuid)) {
++    DEBUG ((DEBUG_ERROR, "P2 SUPP %g s=%r\n", &FileGuid, Status));
++  } else {
++    DEBUG ((DEBUG_ERROR, "P2 SUPP img? db=%p c=%p s=%r\n", DriverBinding, ControllerHandle, Status));
++  }
++}
++
+ //
+ // Driver Support Functions
+ //
+@@ -78,6 +235,15 @@ CoreConnectController (
+     return Status;
+   }
+ 
++  //
++  // P2SUPP: counted before the security check below can return early, because a connect
++  // that the security policy refused is still a connect that reached this handle.
++  //
++  gP2ConnAll++;
++  if (P2CarriesUsbCfg (ControllerHandle)) {
++    gP2ConnCfg++;
++  }
++
+   if (gSecurity2 != NULL) {
+     //
+     // Check whether the user has permission to start UEFI device drivers.
+@@ -624,6 +790,19 @@ CoreConnectSingleController (
+     }
+   }
+ 
++  //
++  // P2SUPP: how many driver bindings this connect is about to consider, printed once
++  // per connect to the E722B03F handle and before the first Supported call. Without it
++  // the `cfg=` count is ambiguous in the one way that matters: seven `P2 SUPP` rows
++  // with no `BEB12BEE` among them is "XhciPciEmulation was tried and its row is
++  // missing", which would be a broken probe, or it is "seven bindings existed in the
++  // database when this connect ran and XhciPciEmulation was not one of them", which is
++  // the finding. This number is what separates the two.
++  //
++  if (P2CarriesUsbCfg (ControllerHandle)) {
++    DEBUG ((DEBUG_ERROR, "P2 SUPP n=%d\n", NumberOfSortedDriverBindingProtocols));
++  }
++
+   //
+   // Loop until no more drivers can be started on ControllerHandle
+   //
+@@ -646,6 +825,12 @@ CoreConnectSingleController (
+                                   RemainingDevicePath
+                                   );
+         PERF_DRIVER_BINDING_SUPPORT_END (DriverBinding->DriverBindingHandle, ControllerHandle);
++
++        //
++        // P2SUPP: the only place in the core that calls a driver's Supported, and so the
++        // only place that can count them. Reads state and prints; changes nothing.
++        //
++        P2SuppNote (DriverBinding, ControllerHandle, Status);
+         if (!EFI_ERROR (Status)) {
+           SortedDriverBindingProtocols[Index] = NULL;
+           DriverFound                         = TRUE;
 diff --git a/MdeModulePkg/Core/Dxe/Image/Image.c b/MdeModulePkg/Core/Dxe/Image/Image.c
 index 84b1ee80..474fbd60 100644
 --- a/MdeModulePkg/Core/Dxe/Image/Image.c
