@@ -43285,3 +43285,109 @@ the phone cannot be reconstructed if it is overwritten. `userdata` (107 GB, unba
 the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
+
+## Step 4.211 — the payload in `boot` is identified and not bounded: its first 1,142,784 bytes hash to `7c8fdb5a…`, the image step 4.33 wrote at 09-24 15:04, so 4.188's open question and 4.166's fork both close on a digest the record has carried since that day — and the record's standing sentence that `boot` holds `90b21643…` is false
+
+
+**What was open.** Step 4.210 placed the payload in `boot` in the ten-step window between 4.31 and 4.41 by its
+instrument set and deliberately stopped there: *"does not decide: that the payload **is** the 15:04 write of
+`p2-variants`, which is an inference from instrument set rather than from a digest … and the payload that went
+to the phone was never hashed anywhere, so there is no archived copy to recover it from and no digest to check
+one against."* The second half is wrong about a fact this record has carried since 2026-09-24: step 4.33 **did**
+hash the write, in the first row of a table it printed for exactly this purpose.
+
+**The digest is in the record and the readback's head matches it.** Step 4.33 gives the 15:04 flash as
+`work/out/p2-variants/Mu-gauguin-silicon-gzip.img`, 1,142,784 B, sha256
+`7c8fdb5a1a272ab65d806c2833eb849f441c3ef2092121aac0d5df40d0e1ef44`, written to `/dev/block/sde55`
+(`by-name/boot`) with `tools/flash-boot.sh --twrp` and *"read back identical"*. Hashing the **first 1,142,784
+bytes** of `work/out/boot-readback.bin` returns that digest. The readback is 4,194,304 B only because the read
+carried the tail of the Smartisan image along with the payload; its first 1,142,784 bytes *are* the 15:04 write.
+So the payload in `boot` is `7c8fdb5a…` — a digest, not a range, and not the `90b21643…` the record has named
+for it in every step since 09-25.
+
+**A second confirmation, digest-free, from the marker step 4.33 declared for exactly this check.** That step's
+content table records the flash losing `Loading driver at` and gaining `K %d %c%c %d/%d free=%d %g` and `KEY
+0/%d`, and adds: *"if `Loading Driver at …` is still on the panel, the flash did not take, because no build
+after this one can print it."* Decoding the two readbacks independently — inflate the gzip kernel, find the LZMA
+section inside it, decompress the volume, search bytes rather than a listing — answers by that marker alone:
+`boot-readback.bin` contains `K %d %c%c` and `KEY ` and does **not** contain `Loading driver at`, while
+`boot-readback-0924.bin`, the 15:02 control, contains `Loading driver at` and does not contain `K %d %c%c`. The
+phone is on the far side of the 4.33 boundary from its own control, with no hash involved.
+
+**Six archived payloads, measured twice by different code, agree at five rows and disagree at one — and the
+disagreement is the finding.** Left is the fingerprint tool's rung count; middle is the same tool's `--rows`
+census against the 36 format strings the tree has today; right is the decompressed firmware volume's size in
+bytes:
+
+| payload | sha256 | rungs | rows / 36 | volume B |
+| --- | --- | --- | --- | --- |
+| `boot-before-p2walk.img` | `fb697f47…` | 4/14 | 6 | 7,348,232 |
+| `boot-now-0923.img` | `3547fd04…` | 6/14 | 8 | 7,352,328 |
+| `p2-silicon-gzip-preread-0923d.img` | `8c565681…` | 7/14 | 14 = 13 + **1 older** | 7,352,328 |
+| `boot-readback-0924.bin` (the 15:02 control) | `77778cd6…` | 11/14 | 22 | 7,352,328 |
+| `boot-readback.bin` (**the phone**) | `e905b3a6…`, head `7c8fdb5a…` | 13/14 | 25 | 7,352,328 |
+| `p2-variants/Mu-gauguin-silicon-gzip.img` | `90b21643…` | 14/14 | 27 | 7,356,424 |
+
+A crude single-token search reproduces the rung count on five of these six and breaks on `preread-0923d.img`,
+which is worth stating because it shows what a rung actually is. The token `P2 APRI` **is** in that build's
+`DxeCore`, six times, byte-adjacent to `P2 SEQ [` and `P2 WHY [`; the rung is nevertheless absent, because the
+instrument is a *group* of six format strings taken from the owning function's body in the current source and
+counts as present only when all six are — and that build carries four of them, with a fifth present under an
+older spelling, which the tool reports on its own row as `OLDER`. So that payload sits between rungs: it prints
+the `P2 APRI` line it had, and the census the source now defines is not there. This is the same shape as the `P2
+FWHY … c=%d` → `… c=%d g=%d` edit the tool's own comment records, arriving through the ladder rather than
+through a marker.
+
+**The volume sizes are the same lesson 4.210 drew from `kernel_size`, one level down.** Four payloads spanning
+six rungs — 6/14, 7/14, 11/14 and the phone's 13/14 — have volumes of exactly 7,352,328 B; only the 4/14 build
+below them (7,348,232) and the 14/14 build above them (7,356,424) differ, by one 4 KiB page each. So a build
+that gained four instruments added no bytes to its volume, the phone's is the same size as a control four rungs
+behind it, and a size is not evidence at either level.
+
+**What this closes.** **Step 4.188's pair** — *"Which build this is, and why it carries thirteen instruments
+rather than fourteen, are **not** established"* — is answered: it is `7c8fdb5a…`, and thirteen is what that
+build reads, because step 4.41's `P2FreeWhy` had not been written when it was built. **Step 4.166's fork**
+between the `90b21643…` class and the `ecc10a22…` readback resolves to neither: `ecc10a22…` is
+`work/out/boot-readback-payload.bin` (1,140,736 B, 6/14, 8 rows), the file at the `90b21643…` path today is a
+rebuild (14/14, 27 rows, mtime 2026-09-25 09:20:34), and the phone holds a third build that is on neither side
+of that fork. **The record's standing sentence that `boot` holds `90b21643…`** — carried at `:22609`, `:23163`,
+`:23344`, `:24386`, `:25792`, `:26942` and `:39470` — is false, and 4.210's correction of the path is upgraded
+to a correction of the digest. **And step 4.144's chain** is half right: `p2-4.20` is `dbf131d2…` (1,142,784 B,
+11/14, 22 rows), its 15:02 readback is `77778cd6…` with the same profile, so 15:02 is genuinely `p2-4.20` and
+the 15:04 write genuinely replaced it; what fails is the other half of that chain, that `boot` has held
+`p2-4.20` *from 15:04 onward*, since the 15:04 build is not `p2-4.20` and is what the phone still holds.
+
+**The consequence is the same sentence in both documents, and it now points the other way.** `docs/00-plan.md`'s
+*"the one thing blocking progress"* section concludes, on step 4.166, that *"The rows this section has been
+calling owed are therefore absent from the device's image by construction and present in the tree's."* That is
+true of `boot-before-p2walk.img`, which carries 6 of the 36 rows, and **false of the payload in `boot` now**,
+which carries **25 of 36, none of them under a stale spelling**. Every row the plan has been calling owed is on
+the phone: `P2 WHY [`, `P2 ERR `, `P2 APRI`, `P2 WALK t=`, `P2 BIN init=`, `P2 RETRY`, `KEY ` and the `K %d
+%c%c` tick rows. What the phone's payload lacks is the whole `P2FreeWhy` group (4.41's `P2 FW` / `P2 FWTY` / `P2
+FWHY`) and the `Loading driver at` line, and nothing else. So the next photograph of the panel can supply
+readings this record has been calling unobtainable — the `P2 WHY` line step 4.144's gate was written around, the
+`KEY` row, and a `K %d %c%c` row per attempted dispatch — and the string it will **not** resemble is the
+46-character `P2 SEQ`: that one belongs to `work/out/boot-before-p2walk.img` (`fb697f47…`, 4/14, 6 rows), which
+is three flashes older than what `boot` holds, and step 4.166's `P2 WALK` half of the fork test does not
+separate the classes either, because `P2 WALK t=` is literally present in `boot-now-0923.img`, which is neither.
+
+**decides**: that the payload in `boot` is `work/out/p2-variants/Mu-gauguin-silicon-gzip.img` as it stood at
+09-24 15:04, sha256 `7c8fdb5a…`, proven by a digest over the readback's first 1,142,784 bytes and corroborated
+by the marker 4.33 declared for that write; that the phone therefore carries 13 of 14 instruments and 25 of 36
+rows, all in current spelling; that the file at the `90b21643…` path is a later rebuild and is not what `boot`
+holds; and that the rows the plan has been calling absent by construction are on the device and merely unread.
+
+**does not decide**: whether `boot` has changed since 2026-09-28 17:26, the last read of it; what the panel will
+print when it is photographed, since the payload carries the rows but the run is the phone's; nor anything about
+the model's failure, which this step does not touch. **Not an action**: read-only — one `hashlib.sha256` over a
+slice, `zlib` and `lzma` over six archived payloads, `tools/probe-fingerprint.py` and its `--rows` mode over the
+same six, one PE-image offset map over two volumes, `stat`, and `grep` over `docs/08`. No build, no instrument
+leg, no QEMU run, no flash, no `fastboot` command, no partition written, no seed written, no console read from
+the device and no device file opened. **device state**: unchanged and not re-measured. The three physical
+actions remain outstanding and none can be taken from this host — a reset of the phone, the reboot to the
+bootloader the P3 `fastboot boot` workflow needs, and the screen photograph, which is now worth strictly more
+than it was because its payload carries 25 live rows, and which must not be compared against the 46-character
+`P2 SEQ`. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and
+`device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+

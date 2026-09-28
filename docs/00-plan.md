@@ -13,8 +13,8 @@ Nothing below is "done" except P0, and the only gate observed on hardware is
 P0's plus the first half of P2's (see its row). This table is the honest state;
 the sections under it are the plan.
 
-**Added 2026-09-29, after steps 4.197–4.210.** The table below is dated
-2026-09-26 and predates four findings a reader of it should have in hand.
+**Added 2026-09-29, after steps 4.197–4.211.** The table below is dated
+2026-09-26 and predates five findings a reader of it should have in hand.
 **The tick arrives on the instrument** — replacing the two Qualcomm timer
 INTIDs with the two this machine actually raises takes the enable set to
 `0x6c00ffff` with nothing left pending, runs the root hub's periodic callback
@@ -23,12 +23,13 @@ INTIDs with the two this machine actually raises takes the enable set to
 is the instrument's and not the phone's**, measured from both sides (step
 4.208). **The P3 gate's artifact digest is the 4.112 build's**, and that path
 has held three more builds since, all four retained (step 4.209). And **the
-payload in `boot` is a 13/14 build whose file no longer exists anywhere on
-this host** (step 4.210) — the one item here that changes what a device
-session may safely do, because overwriting `boot` destroys the last copy of a
-build that was never archived. **No gate moves**: P0 is still the only done
-phase, P1's partition path is still untried, P2 is still half met, P3's items
-2–4 are still not started, and P4 and P5 have not begun.
+payload in `boot` is identified by a digest** — its first 1,142,784 bytes are
+`7c8fdb5a…`, step 4.33's own hash for the 09-24 15:04 write — so it prints 25
+of the 36 rows the tree has today, among them every row this document has been
+calling owed, none of them under a stale spelling (steps 4.210–4.211). **No
+gate moves**: P0 is still the only done phase, P1's partition path is still
+untried, P2 is still half met, P3's items 2–4 are still not started, and P4
+and P5 have not begun.
 
 | phase | gate | state |
 |---|---|---|
@@ -221,6 +222,47 @@ evidence. **The consequence is for the next device window and not the model**:
 the photograph owed under *先读屏，再刷下一次* is now the only way to read what is in
 `boot`, because overwriting it destroys the last copy. See `docs/08` step
 4.210.
+**Amended by step 4.211.** Both qualifications above are now measured and both
+fall. *The phone does not hold the only copy*: its first 1,142,784 bytes hash
+to `7c8fdb5a…`, which is exactly the digest step 4.33 recorded for the 15:04
+write, so the build is recoverable from the readback itself. And *`90b21643…`
+is not what is on the phone* — it is the digest the record has named for
+`boot` in every step since 09-25, and it is wrong.
+
+**4.211: the payload in `boot` is identified, and it is neither of the two
+builds the record was choosing between.** The first 1,142,784 bytes of
+`work/out/boot-readback.bin` hash to
+`7c8fdb5a1a272ab65d806c2833eb849f441c3ef2092121aac0d5df40d0e1ef44` — step
+4.33's own digest for the 09-24 15:04 write — so `boot` holds
+`p2-variants/Mu-gauguin-silicon-gzip.img` **as that file stood then**, and the
+file at that path today (14/14, mtime 2026-09-25 09:20:34) is a rebuild. Step
+4.33's declared marker agrees: the phone's payload carries `K %d %c%c` and
+`KEY ` and no `Loading driver at`, where its own 15:02 control (`77778cd6…`,
+`p2-4.20`'s readback) has `Loading driver at` and no tick row. **The rows this
+section has been calling owed are on the device.** Against the 36 format
+strings the tree has today, the phone's payload prints **25**, none of them
+under a stale spelling, and the only instrument it lacks is the whole
+`P2FreeWhy` group; `P2 WHY [`, `P2 ERR `, `P2 APRI`, `P2 WALK t=`, `P2 BIN
+init=`, `P2 RETRY` and `KEY ` are all present. The sentence above the 4.210
+note — *"the rows this section has been calling owed are absent from the
+device's image by construction"* — is true of `boot-before-p2walk.img` (4/14,
+6 rows) and false of what `boot` holds. **4.166's fork resolves to neither
+side**: `ecc10a22…` is `work/out/boot-readback-payload.bin` (1,140,736 B,
+6/14, 8 rows), the `90b21643…` path is the rebuild, and the phone holds a
+third build at 13/14. **And the 46-character `P2 SEQ` belongs to
+`boot-before-p2walk.img`** (`fb697f47…`), three flashes older than the payload
+in `boot`, so it is not the string this payload can print and must not be the
+basis of comparison, and the `P2 WALK` half of the fork test at the top of this
+section does not separate the classes either — `P2 WALK t=` is literally
+present in `boot-now-0923.img`, which is neither class. One measurement to keep
+beside that: four payloads
+spanning rungs 6 to 13 have firmware volumes of exactly 7,352,328 B, so volume
+size separates neither those builds nor a build from its own control. **No
+gate moves** — P0 is still the only done phase, P1's partition path is still
+untried, P2 is still half met, P3's items 2–4 are still not started, and P4
+and P5 have not begun. What changes is what a device window is worth: the
+photograph owed under *先读屏，再刷下一次* can now return 25 live rows. See `docs/08`
+step 4.211.
 
 The pieces a device session uses — the full sequence, with what each outcome
 means and which payload to try next, is
