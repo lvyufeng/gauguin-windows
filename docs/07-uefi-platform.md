@@ -3336,6 +3336,25 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `XhciPciEmulation` — gated on that protocol — installs the emulated host controller during
 > dispatch, ahead of BDS's connect-all. Do not promote it: `Dependent = FALSE` would run it
 > with its thirteen-term depex unread. See `docs/08` step 4.173.
+>
+> **Every depex term in the payload has a named publisher now — measured 2026-09-28 by step
+> 4.174.** `tools/guid-refs.py`'s install-vs-locate disassembly, over `device/dxe` (new
+> `--extracted` mode) and over `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (whose loader
+> could previously read **no** payload this project builds — it now delegates to
+> `tools/fv-inventory.py` for the BootShim → FD → `FVMAIN_COMPACT` shape): **`DALSys` installs
+> `AE37B942-457F-4C91-A196-D9669FD347A3`** at VA 0x014d4, with 19 drivers locating it including
+> `VcsDxe`; **`ChipInfo` installs `B0760469-970C-487A-A4B5-28DB7B45CEF1`** at VA 0x018bc;
+> **`UsbConfigDxe` installs `E722B03F-B250-42CE-8EBD-5BD51812D037`** at three sites, VA 0x03aa4 /
+> 0x0517c / 0x052c8, with `UsbfnDwc3Dxe`, `XhciPciEmulation`, `XhciDxe` and `UsbInitDxe` locating
+> it. All three publishers are promoted by the volume's own a-priori array (entries 11, 13 and 57
+> of 70, read from the artifact), so `VcsDxe`'s `AE37B942 AND gEfiChipInfoProtocolGuid` waits on
+> two producers that are promoted and 4.170's reading of that second term is confirmed from the
+> GUID's definition rather than from documentation. Instrument repair beside it:
+> `tools/depex-census.py`'s `load_guid_names()` walked two directories that do not exist
+> (`QcomPkg/Include`, `SiliciumPkg/Include`) and omitted `Silicon/Qualcomm/QcomPkg/QcomPkg.dec`, so
+> **no Qualcomm GUID had ever been named** — 745 → 817 with the corrected roots — which is what
+> made `gEfiChipInfoProtocolGuid` read as *"defined by no header"*. Also: `XhciDxe`, the file with
+> no depex at all, locates `E722B03F` rather than running blind. See `docs/08` step 4.174.
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

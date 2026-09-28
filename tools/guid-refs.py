@@ -21,10 +21,20 @@ Usage:
 
     tools/guid-refs.py E722B03F-B250-42CE-8EBD-5BD51812D037 /tmp/fv-usb.bin
     tools/guid-refs.py 4CF5B200-68B8-4CA5-9EEC-B23E3F50029A /tmp/fv-old.bin /tmp/fv-usb.bin
+    tools/guid-refs.py E722B03F-B250-42CE-8EBD-5BD51812D037 --extracted device/dxe
 
 The volume argument is anything `tools/fv-apriori.py`'s `walk_volume` accepts. `--keep DIR`
 writes the extracted `PE32` sections there instead of a temporary directory, which is what the
 step that first used this did; the sections are named `<module>-<volume>.efi`.
+
+`--extracted DIR` answers the same question over a directory of *bare* `PE32` images rather
+than over a volume, which is the shape this project's other input has: `device/dxe/` is the
+XBL extraction, one `.efi` and one `.ffs` per stock driver, and `tools/xbl-unmapped.py` already
+treats it as a first-class source. Without this mode the only way to ask "who publishes this
+GUID" of the extraction was to re-implement `analyse` in a scratch script, which is what the
+step that needed it did before adding the mode. A name here comes from the file name, since an
+extracted `.efi` carries no FFS header to resolve - so the column reads `AdcDxe`, not
+`AdcDxe  F0A5F597`.
 """
 import argparse
 import os
@@ -86,6 +96,44 @@ def load_helpers():
 
     return by_path("census", os.path.join(HERE, "pci-guid-census.py")), \
         by_path("fvap", os.path.join(HERE, "fv-apriori.py"))
+
+
+def read_volume(path):
+    """The volume bytes, whichever of the three shapes this project's artifacts take.
+
+    `tools/pci-guid-census.py`'s own `read_volume` reads two of them - the file itself, and an
+    Android boot image whose gunzipped payload *is* a volume - and that pair is why this mode
+    could not read a single payload this project builds. Every boot image it produces wraps the
+    volume one layer deeper: the kernel is a BootShim payload holding an FD, the FD holds
+    `FVMAIN_COMPACT`, and the volume is the decompressed image inside that. `ANDROID! header but
+    no volume in its first 128 KiB` is what the two-shape reader says about all of them.
+
+    So this delegates to `tools/fv-inventory.py`, which reads all three (and prints its own
+    walk banner while doing it, hence the redirect). The bare-volume and bare-FD cases are kept
+    because the extraction steps work on exactly those.
+    """
+    import contextlib
+    import importlib.util
+    import io
+
+    spec = importlib.util.spec_from_file_location("fvi", os.path.join(HERE, "fv-inventory.py"))
+    fvi = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fvi)
+
+    d = open(path, "rb").read()
+    if d[:8] == b"ANDROID!":
+        with contextlib.redirect_stdout(io.StringIO()):
+            _rows, _len, _offsets, inner = fvi.unpack(path)
+        if inner is None:
+            sys.exit("%s: boot image with no inner volume" % path)
+        return inner
+    if d[0x28:0x2C] == b"_FVH":
+        return d
+    if b"_FVH" in d:
+        # A bare FD: the volume is somewhere inside it rather than at 0x28.
+        sig = d.find(b"_FVH")
+        return d[sig - 0x28:]
+    sys.exit("%s: no _FVH anywhere in the file - not a firmware volume" % path)
 
 
 def objdump():
@@ -254,47 +302,75 @@ def analyse(section, blob, target, names):
     return out
 
 
+def report(module, ident, refs, names):
+    """One image's references, in the shape both modes print.
+
+    `ident` is the FFS file GUID for a volume walk and the occurrence count for a bare
+    directory of `PE32`s, where there is no FFS header to resolve to a GUID.
+    """
+    if not refs:
+        print("  %-22s %s  (no resolved call site - reference is not an argument)"
+              % (module, ident))
+    for addr, api, others in refs:
+        verdict = ("publishes" if api in PUBLISHES else
+                   "consumes" if api in CONSUMES else "?")
+        print("  %-22s %s  VA %#07x  %-34s %s%s"
+              % (module, ident, addr, api, verdict,
+                 "   " + ", ".join(others) if others else ""))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("guid", help="the GUID whose references are wanted")
-    ap.add_argument("volumes", nargs="+", help="firmware volume, or boot image holding one")
+    ap.add_argument("volumes", nargs="*", help="firmware volume, or boot image holding one")
+    ap.add_argument("--extracted", metavar="DIR",
+                    help="a directory of bare PE32 images (e.g. device/dxe) instead of a volume")
     ap.add_argument("--tree", default=os.path.join(ROOT, "work", "uefi", "Mu-Silicium"),
                     help="tree the module and protocol names come from")
     ap.add_argument("--keep", help="write the extracted PE32 sections here")
     args = ap.parse_args()
 
+    if not args.volumes and not args.extracted:
+        ap.error("give at least one volume, or --extracted DIR")
+
     target = str(uuid.UUID(args.guid)).upper()
     census, fvap = load_helpers()
     names = census.inf_and_pi_names(args.tree)
+    raw = uuid.UUID(target).bytes_le
     print("target %s  (%s)" % (target, names.get(target, ("unnamed in this tree", ""))[0]))
 
     for path in args.volumes:
-        d = census.read_volume(path)
+        d = read_volume(path)
         tag = os.path.basename(path)
-        print("\n=== %s: %d occurrences of the 16 bytes" % (path, d.count(uuid.UUID(target).bytes_le)))
+        print("\n=== %s: %d occurrences of the 16 bytes" % (path, d.count(raw)))
         tmp = args.keep or tempfile.mkdtemp(prefix="guid-refs.")
         os.makedirs(tmp, exist_ok=True)
         for off, fg, typ, size in fvap.walk_volume(d):
             body = d[off + 24:off + size]
-            if uuid.UUID(target).bytes_le not in body:
+            if raw not in body:
                 continue
             module = names.get(fg, (fg, ""))[0] or fg
             for styp, _ssz, spay in census.sections(body):
-                if styp == 0x10 and uuid.UUID(target).bytes_le in spay:
+                if styp == 0x10 and raw in spay:
                     out = os.path.join(tmp, "%s-%s.efi" % (module, tag))
                     open(out, "wb").write(spay)
-                    refs = analyse(out, d, target, names)
-                    if not refs:
-                        print("  %-22s %s  (no resolved call site - reference is not an argument)"
-                              % (module, fg))
-                    for addr, api, others in refs:
-                        verdict = ("publishes" if api in PUBLISHES else
-                                   "consumes" if api in CONSUMES else "?")
-                        print("  %-22s %s  VA %#07x  %-34s %s%s"
-                              % (module, fg[:8], addr, api, verdict,
-                                 "   " + ", ".join(others) if others else ""))
+                    report(module, fg[:8], analyse(out, d, target, names), names)
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    if args.extracted:
+        # A bare `.efi` is already a PE32, so nothing is extracted or written here; the
+        # name is the file name, which for this project's extraction is the driver's own.
+        files = sorted(f for f in os.listdir(args.extracted) if f.endswith(".efi"))
+        hits = [f for f in files
+                if raw in open(os.path.join(args.extracted, f), "rb").read()]
+        print("\n=== %s: %d PE32 files, %d carry the 16 bytes"
+              % (args.extracted, len(files), len(hits)))
+        for f in hits:
+            p = os.path.join(args.extracted, f)
+            module = f[:-4]
+            report(module, "x%d" % open(p, "rb").read().count(raw),
+                   analyse(p, None, target, names), names)
 
     print("\n  a call site is a fact about the binary; whether it executes is a run-time")
     print("  question this tool does not answer.")

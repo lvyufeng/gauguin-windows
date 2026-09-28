@@ -960,6 +960,29 @@ Work:
 > The corollary is a warning: promotion sets `Dependent = FALSE`, so the array must **not** be
 > used to "help" `XhciPciEmulation`, whose thirteen-term depex is load-bearing. No firmware
 > was built and nothing was flashed. See `docs/08` step 4.173.
+>
+> **Step 4.174 (2026-09-28) gave every depex term 4.173 could not judge a named publisher inside
+> the volume.** The census's band — *"gated, and the depex names a protocol no header defines"* —
+> was partly an artifact of the instrument: two of the five directories `load_guid_names()` walked,
+> `QcomPkg/Include` and `SiliciumPkg/Include`, **are not directories at the tree root** (the
+> packages are at `Silicon/Qualcomm/QcomPkg/` and `Silicon/Silicium/SiliciumPkg/`), and
+> `Silicon/Qualcomm/QcomPkg/QcomPkg.dec` was not in the `.dec` list either, so **no Qualcomm GUID
+> had ever had a name in that tool** — 745 → 817 GUIDs once corrected. The term that costs is
+> `B0760469-970C-487A-A4B5-28DB7B45CEF1` = `gEfiChipInfoProtocolGuid` (`QcomPkg.dec:70`); the band
+> heading and the run's summary line are unchanged either way, so the repair removed a false
+> unknown from a row and moved no count. `tools/guid-refs.py` gained the two things it needed: its
+> volume loader could not read **any** payload this project builds (its two-shape reader versus the
+> three-layer boot image — now delegates to `tools/fv-inventory.py`), and a new `--extracted DIR`
+> mode serves `device/dxe/` directly. With those, the install-vs-locate disassembly names a
+> publisher for all three GUIDs: **`DALSys` installs `AE37B942`** (one install site, 19 consumers
+> including `VcsDxe`), **`ChipInfo` installs `B0760469`**, **`UsbConfigDxe` installs `E722B03F`**
+> at three sites. All three publishers are promoted by the payload's own a-priori array — `DALSys`
+> entry 11, `ChipInfo` 13, `UsbConfigDxe` 57 of 70, read out of the artifact and not from
+> `APRIORI.inc` — so each runs before the consumer gated on it, and `VcsDxe`'s
+> `AE37B942 AND gEfiChipInfoProtocolGuid` has two producers that are promoted. 4.168's and 4.170's
+> earlier readings of those same two GUIDs are confirmed by a different axis. One sharpening:
+> `XhciDxe`, the no-depex file in the UEFI 2.0 band, **locates** `E722B03F` at VA 0x01960 rather
+> than running blind. No firmware was built. See `docs/08` step 4.174.
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

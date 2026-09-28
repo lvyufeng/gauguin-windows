@@ -35374,3 +35374,165 @@ correct answer is that its depex already does the ordering job.
   The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is
   unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the
   end state remains a Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.174 — every depex term the census reported as unjudgeable has a named publisher inside the volume, and the publishers are promoted: `DALSys` installs `AE37B942`, `ChipInfo` installs `B0760469` = `gEfiChipInfoProtocolGuid`, `UsbConfigDxe` installs `E722B03F` — with two instrument repairs, one of which was that `depex-census.py` had never named a single Qualcomm GUID because two of its six search roots do not exist
+
+### The question 4.173 left
+
+The census printed two rows it could not judge:
+
+```
+== gated, and the depex names a protocol no header defines (2) — cannot be ruled in or out from the image
+  UsbInitDxe
+      needs E722B03F-B250-42CE-8EBD-5BD51812D037   (defined by no header under …/Mu-Silicium)
+  VcsDxe
+      needs AE37B942-457F-4C91-A196-D9669FD347A3   (defined by no header under …/Mu-Silicium)
+      needs B0760469-970C-487A-A4B5-28DB7B45CEF1   (defined by no header under …/Mu-Silicium)
+```
+
+"Defined by no header" is a statement about the *name map*, and the map was wrong. Two of the five
+directories `load_guid_names()` walked — `QcomPkg/Include` and `SiliciumPkg/Include` — are not
+directories at the tree root. The packages live at `Silicon/Qualcomm/QcomPkg/` and
+`Silicon/Silicium/SiliciumPkg/`, so `os.walk` yielded nothing and said nothing, and
+`Silicon/Qualcomm/QcomPkg/QcomPkg.dec` was not in the `.dec` list either. **No Qualcomm GUID has
+ever had a name in this tool.** Named GUIDs: **745 → 817** with the corrected roots, and the
+second row above is what that costs:
+
+```
+  VcsDxe
+      needs AE37B942-457F-4C91-A196-D9669FD347A3   (defined by no header under …/Mu-Silicium)
+```
+
+`B0760469-970C-487A-A4B5-28DB7B45CEF1` is `gEfiChipInfoProtocolGuid`,
+`Silicon/Qualcomm/QcomPkg/QcomPkg.dec:70` — in plain text, in this tree, the whole time. The term
+did not disappear from `VcsDxe`'s depex; it disappeared from the list of terms the tool admits it
+cannot name, which is the improvement. The band's heading still reads `(2)`, because it counts
+*drivers* and `VcsDxe` is still in it on `AE37B942`; and the run's summary line — `1 wait on them,
+2 cannot be judged from the image, and 0 are gated on any protocol this volume has no producer
+for` — is unchanged. So this repair, like 4.171's, changed no count: it removed a false unknown
+from a row and left every number where it was. That is worth stating plainly rather than as a
+triumph, because a tool whose input silently shrinks is the failure mode 4.172 was about, and this
+is the same failure inside a second tool.
+
+### The other instrument repair, and why the volume mode could not be used at all
+
+`tools/guid-refs.py` reads a volume and reports, per image, which `EFI_BOOT_SERVICES` slot the
+GUID's address is handed to — `InstallMultipleProtocolInterfaces` for a publisher,
+`LocateProtocol`/`OpenProtocol` for a consumer. That is exactly the disassembly 4.168 did by hand
+and 4.173 needed again, and it had two gaps:
+
+- **it could not read any payload this project builds.** Its loader was
+  `tools/pci-guid-census.py`'s `read_volume`, which accepts two shapes: a bare volume, and an
+  Android image whose gunzipped payload *is* a volume. Every boot image this project produces
+  wraps the volume one layer deeper — BootShim payload → FD → `FVMAIN_COMPACT` → the volume — and
+  the tool said `ANDROID! header but no volume in its first 128 KiB` about all of them. It now
+  delegates to `tools/fv-inventory.py`, which reads all three, and keeps the bare-volume and
+  bare-FD cases because the extraction steps work on those.
+- **it had no way to scan the extraction.** `device/dxe/` is one bare `.efi` per stock driver and
+  is a first-class input in this project — `tools/xbl-unmapped.py` treats it as one — but the tool
+  only walked volumes, so asking "who publishes this" of the extraction meant re-implementing
+  `analyse` in a scratch script, which is what this step did first. That is now `--extracted DIR`,
+  and it prints the same table with the file name in place of an FFS file GUID.
+
+### The measurement
+
+`tools/guid-refs.py <guid> --extracted device/dxe` over the 86 extracted drivers, for the three
+GUIDs the census cannot name. AE37B942 is the clearest, because twenty images carry it and exactly
+one of them installs it:
+
+```
+=== device/dxe: 86 PE32 files, 20 carry the 16 bytes
+  AdcDxe                 x1  VA 0x023c4  LocateProtocol                     consumes
+  CPRDxe                 x1  VA 0x02054  LocateProtocol                     consumes
+  ChipInfo               x1  VA 0x02d80  LocateProtocol                     consumes
+  ClockDxe               x1  VA 0x09214  LocateProtocol                     consumes
+  DALSys                 x1  VA 0x014d4  InstallMultipleProtocolInterfaces  publishes
+  … 15 more, every one of them LocateProtocol …
+  VcsDxe                 x1  VA 0x03764  LocateProtocol                     consumes
+```
+
+The same run against the payload of record's successor names the publisher **in the volume**,
+which is the stronger statement — the extraction shows the code exists, the volume shows it ships:
+
+| GUID | publisher in the volume | install site | the other carriers |
+|---|---|---|---|
+| `AE37B942-457F-4C91-A196-D9669FD347A3` | **`DALSys`** | VA 0x014d4 | 19 locate it, `VcsDxe` among them |
+| `B0760469-970C-487A-A4B5-28DB7B45CEF1` (`gEfiChipInfoProtocolGuid`) | **`ChipInfo`** | VA 0x018bc | 11 locate it |
+| `E722B03F-B250-42CE-8EBD-5BD51812D037` | **`UsbConfigDxe`** | VA 0x03aa4, 0x0517c, 0x052c8 | `UsbfnDwc3Dxe`, `XhciPciEmulation`, `XhciDxe`, `UsbInitDxe` |
+
+And each publisher is promoted by the payload's own a-priori array — read out of the artifact, not
+from `APRIORI.inc` — `DALSys` at entry **11**, `ChipInfo` at **13**, `UsbConfigDxe` at **57**, out
+of the 70 the array names. Promotion is `Dependent = FALSE` (4.170), so each is inserted into the
+scheduled queue on the first pass and runs ahead of any non-promoted consumer:
+
+- `VcsDxe`'s depex is `AE37B942 AND B0760469` — DALSys's protocol and ChipInfo's — and **both terms
+  now have a named producer that is promoted**. 4.170 had read the second term as
+  `gEfiChipInfoProtocolGuid` from the driver's own documentation; this confirms it from the GUID's
+  definition and the install site.
+- `UsbInitDxe`'s single term is `UsbConfigDxe`'s, installed three times, and `UsbConfigDxe` is
+  a-priori 57. 4.168 identified this publisher by its call sites; this reaches the same answer by
+  the install-vs-locate axis instead of by a carrier count.
+
+So the census's band 2 is empty of anything the firmware cannot satisfy: all three GUIDs have a
+publisher, the publisher is in the volume, and the publisher is promoted.
+
+### What the volume run adds that the extraction run could not
+
+Running the volume rather than the extraction adds three lines that have no counterpart in
+`device/dxe`, because two of the four consumers are drivers this port staged from bitra:
+
+```
+  UsbfnDwc3Dxe           F056673C  VA 0x014c0  CloseProtocol                      consumes
+  UsbfnDwc3Dxe           F056673C  VA 0x01518  OpenProtocol                       consumes
+  XhciPciEmulation       BEB12BEE  VA 0x01488  CloseProtocol                      consumes
+  XhciPciEmulation       BEB12BEE  VA 0x014e0  OpenProtocol                       consumes
+  XhciDxe                B7F50E91  VA 0x01960  LocateProtocol                     consumes
+  UsbInitDxe            0A134F0E  VA 0x017c4  LocateProtocol                     consumes
+```
+
+`XhciDxe` is the one that matters. The census put it in the UEFI 2.0 band — no depex section
+anywhere, so `CoreIsSchedulable` falls through to `CoreAllEfiServicesAvailable` — and 4.173 read
+that as "bitra's own condition and harmless for a driver-binding driver". This run says something
+sharper: `XhciDxe` does **not** run blind. It locates `E722B03F` at VA 0x01960, so its ordering
+against `UsbConfigDxe` is a lookup it performs rather than an assumption it makes, and a lookup
+that fails is a status a driver can act on. Whether it retries is not something a static scan
+shows, and this step does not claim it does. `XhciPciEmulation` opens and closes the same protocol
+(twice and once), which is the shape of a driver binding onto `UsbConfigDxe`'s handle.
+
+### Rows:
+
+- **instruments**: `tools/depex-census.py` — two of the six roots `load_guid_names()` walked do not
+  exist, and `Silicon/Qualcomm/QcomPkg/QcomPkg.dec` was missing from the `.dec` list, so no
+  Qualcomm GUID had ever been named (745 → 817). `tools/guid-refs.py` — the volume loader could
+  not read any payload this project builds (now delegates to `tools/fv-inventory.py`), and a new
+  `--extracted DIR` mode serves `device/dxe/` directly instead of requiring a scratch script to
+  re-implement `analyse`.
+- **shows**: every depex term the census called unjudgeable has a publisher in the volume —
+  `DALSys` installs `AE37B942` (one install site, 19 consumers), `ChipInfo` installs
+  `B0760469` = `gEfiChipInfoProtocolGuid` (`QcomPkg.dec:70`), `UsbConfigDxe` installs `E722B03F`
+  at three sites — and all three publishers are promoted by the payload's own array (entries 11,
+  13, 57 of 70), so each runs before the consumer gated on it. Also that `XhciDxe`, the
+  no-depex file in the UEFI 2.0 band, locates `E722B03F` rather than running blind.
+- **adds**: two instrument repairs and one new mode. No firmware, no volume and no include was
+  changed, and nothing was built.
+- **corrects**: the census's own name map, and with it the phrase *"defined by no header under
+  <tree>"* — which was true of the map and false of the tree. `gEfiChipInfoProtocolGuid` is in
+  `Silicon/Qualcomm/QcomPkg/QcomPkg.dec:70`. The correction moves no count: named GUIDs 745 → 817
+  with none lost, `VcsDxe`'s row loses one term that was never unknown, and the band heading and
+  the summary line are unchanged. Also corrects, in the narrower sense of sharpening, 4.173's
+  reading of `XhciDxe`: "harmless for a driver-binding driver" is right, and the reason is a
+  `LocateProtocol` at VA 0x01960 rather than a claim about bitra's packaging.
+- **does not close**: the USB half of the P3 gate, and not the whole of it — a payload whose every
+  depex term is satisfiable is a payload that cannot deadlock, which is not a payload that
+  enumerates a stick. The census's earlier summary line, *"0 are gated on any protocol this volume
+  has no producer for"*, also needs its bound stated: `UNINSTALLED` is nine architectural GUIDs, so
+  that axis covers the architectural set and the Qualcomm protocol namespace only through the
+  `PRODUCERS` index. `VcsDxe`'s `AE37B942` now has a publisher, but nothing here says what the
+  protocol *does*; 4.164's `HAL_clk_FabiaPLLEnableVote` park remains unexplained; and which
+  payload `boot` currently holds is still the first question whenever a device is present.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and no firmware was built.
+  `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The
+  porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.

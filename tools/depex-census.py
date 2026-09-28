@@ -263,6 +263,20 @@ def load_guid_names():
 
     Both spellings are accepted, `#define NAME { ... }` and the .dec form
     `NAME = { ... }`.
+
+    Two of the five roots this used to walk do not exist. `QcomPkg/Include` and
+    `SiliciumPkg/Include` are not directories at the tree root - the packages live
+    at `Silicon/Qualcomm/QcomPkg/` and `Silicon/Silicium/SiliciumPkg/` - so
+    `os.walk` over a missing path yielded nothing, silently, and the effect was
+    total rather than partial: **no Qualcomm GUID has ever had a name in this
+    tool**. Every name in its output that reads like a Qualcomm one came from an
+    `INF`'s `FILE_GUID` by a different path, and every *protocol* it could not
+    name - which is exactly the band it prints as `defined by no header under
+    <tree>` - includes protocols this tree defines in plain text. `VcsDxe`'s
+    `B0760469-970C-487A-A4B5-28DB7B45CEF1` is `gEfiChipInfoProtocolGuid`,
+    `Silicon/Qualcomm/QcomPkg/QcomPkg.dec:70`. A missing directory is the
+    quietest way to fail: the set of names gets smaller and no comparison against
+    it can ever hit.
     """
     pat = re.compile(
         r"(?:#define\s+|^[ \t]{0,4})([A-Za-z0-9_]+)\s*=?\s*\\?\s*\{\s*"
@@ -275,14 +289,20 @@ def load_guid_names():
     # Directories to walk, plus the package .dec files, which sit beside the
     # Include directory rather than inside it. Walking all of MdePkg to reach
     # them would drag in the library trees for no gain.
+    #
+    # The Qualcomm entries are the corrected spellings - `Silicon/Qualcomm/QcomPkg`
+    # and `Silicon/Silicium/SiliciumPkg`, not `QcomPkg` and `SiliciumPkg`, which
+    # are not directories at the tree root. See the docstring; a root that does
+    # not exist removes names without saying so.
     roots = [os.path.join(MU, d) for d in (
         "Mu_Basecore/MdePkg/Include", "Mu_Basecore/MdeModulePkg/Include",
         "Mu_Basecore/EmbeddedPkg/Include", "Mu_Basecore/ArmPkg/Include",
-        "SiliciumPkg/Include", "QcomPkg/Include")]
+        "Silicon/Silicium/SiliciumPkg/Include", "Silicon/Qualcomm/QcomPkg/Include")]
     decs = [os.path.join(MU, d) for d in (
         "Mu_Basecore/MdePkg/MdePkg.dec",
         "Mu_Basecore/MdeModulePkg/MdeModulePkg.dec",
-        "Mu_Basecore/EmbeddedPkg/EmbeddedPkg.dec")]
+        "Mu_Basecore/EmbeddedPkg/EmbeddedPkg.dec",
+        "Silicon/Qualcomm/QcomPkg/QcomPkg.dec")]
     paths = []
     for root in roots:
         for dirpath, _dirs, files in os.walk(root):
