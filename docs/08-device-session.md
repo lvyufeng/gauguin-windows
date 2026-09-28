@@ -41789,3 +41789,188 @@ the way this step read its answers back — which also carries the run past `Usb
   photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
   firmware LUN are all as they were.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
+
+## Step 4.200 — the interrupt controller the payload programs is one 2 MB page of the pool: the instrument's own stage-2 plan redirects both GIC windows to a single zeroed block, so no interrupt can be delivered to this guest, and 4.199's frozen `PollCount` is the instrument's arithmetic rather than the driver's
+
+**The question 4.199 named and did not answer.** 4.199 ended with *"whether the periodic timer's notification
+is ever delivered (the reading is `PollCount` = 1 and one increment is what the immediate `SignalEvent`
+gives)"* and corrected one thing on the way: a `TPL_CALLBACK` notification is not blocked by the guest's spin,
+because DxeCore dispatches a timer event's notification from its own tick at `TPL_HIGH_LEVEL` regardless of the
+mainline TPL — so the open question is **whether the tick reaches DxeCore at all in this instrument**, not a TPL
+effect. This step answers that question from the instrument's own construction, without a run, and the answer is
+that it cannot: the interrupt controller the firmware programs is one 2 MB page of stage-2-redirected pool RAM,
+and it has been since `--el3-zero-mem` was written.
+
+**What the board declares, and what the payload is built with.** Four numbers, each read from a different file,
+and they agree with each other to the byte:
+
+    Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c:81-82
+      {"APSS_GIC600_GICD", 0x17A00000, 0x00170000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE},
+      {"APSS_GIC500_GICR", 0x17A60000, 0x00100000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE},
+    Silicon/Qualcomm/BitraPkg/BitraPkg.dsc.inc:45-46
+      gArmTokenSpaceGuid.PcdGicDistributorBase|0x17A00000
+      gArmTokenSpaceGuid.PcdGicRedistributorsBase|0x17A60000
+    Silicon/Qualcomm/BitraPkg/BitraPkg.dsc.inc:51-52
+      gArmTokenSpaceGuid.PcdArmArchTimerSecIntrNum|17
+      gArmTokenSpaceGuid.PcdArmArchTimerIntrNum|18
+
+The bases are the board's own declaration and the two timer interrupt numbers are this platform's override of
+`Mu_Basecore/ArmPkg/ArmPkg.dec`'s defaults — `PcdArmArchTimerSecIntrNum|29`, `PcdArmArchTimerIntrNum|30`,
+`PcdArmArchTimerHypIntrNum|26`, `PcdArmArchTimerVirtIntrNum|27` at `:264-267`, which are the *generic* ARM
+numbers QEMU's own machine uses. BitraPkg overrides exactly two of the four and leaves the other two at the
+package defaults, so the payload's four registrations are 17 (sec), 18 (non-secure physical), 27, 26.
+
+The build carries them literally. `Build/gauguinPkg/DEBUG_CLANGPDB/AARCH64/ArmGicDxe.efi`
+(`sha256 7220331a8fadc278f5536455f99ba479db05b7891d3c468d586b0fbc09a912fc`, 31,232 B; `.text` vma `0x1000`,
+`.rdata` at `0x6000`, `.data` at `0x8000`) contains **15** instructions materialising `0x17A00000` and **one**
+materialising `0x17A60000` — `mov w1, #0x17a00000` at `0x125c`, `0x1390`, `0x1540`, `0x16b4`, `0x1724` and
+`0x1750` among them, `mov w20, #0x17a60000` at `0x1290`, plus six `movk wN, #0x17a0, lsl #16` forms that build
+an address with a low offset. `ArmTimerDxe.efi` (`sha256 7a5b0588905bb3b8d2315fb71ce73f4a20028dbe53b3b7234cfd046eccb1fcad`,
+20,992 B) carries its four numbers in `TimerInitialize`'s own branch, read off the image rather than inferred:
+
+    11a4: ands wzr, w0, #0xff            <- ArmHasGicV5SystemRegisters ()
+    11a8: b.eq  0x11c4
+    11ac: mov   w21, #0x1a ; movk w21, #0x2000, lsl #16    <- GICv5 path: 0x2000001a …
+    11c4: mov   w19, #0x12              (18, PcdArmArchTimerIntrNum)
+    11c8: mov   w20, #0x11              (17, PcdArmArchTimerSecIntrNum)
+    11cc: mov   w1,  #0x1b              (27, PcdArmArchTimerVirtIntrNum)
+    11d0: mov   w21, #0x1a              (26, PcdArmArchTimerHypIntrNum)
+
+and the instructions that follow register those four, in the source's order (`TimerDxe.c:401-416`: virt, then
+hyp if non-zero, then sec, then non-secure) through `gInterrupt->RegisterInterruptSource`. The GICv5 branch is
+not taken here: `ArmHasGicV5SystemRegisters()` compiles to `mrs x0, ID_AA64PFR2_EL1` / `ret` at `0x31c0`, a test
+of bits 15:12 at `0x1bd8: ands xzr, x0, #0xf000`, and a `cset`-style `csinc w0, wzr, wzr, eq` at `0x1bdc` —
+and this CPU reports no `FEAT_GICv5`, so the four PCD numbers are the ones used. Which timer those four
+handlers are for is in the same image: `ArmGenericTimerGetTimerCtrlReg` at `0x3088` reads `CurrentEL` and
+`HCR_EL2` and returns `CNTP_CTL_EL02` or **`CNTP_CTL_EL0`** at `0x30a0`, its setter writes the same pair at
+`0x333c`/`0x3354`, and the compare-value writer at `0x335c` writes **`CNTP_CVAL_EL0`**. The payload programs the
+non-secure EL1 **physical** timer.
+
+**What the instrument does with that window.** `--el3-zero-mem` does not redirect one address; it redirects
+every region this board's map declares below `LOW_MMIO_LIMIT`, because the firmware's use of its SoC is not one
+read (`tools/qemu-panel-read.py:1030-1040` and the comment above it). Asked directly, host-side, with the tool's
+own `low_regions()` / `l2_plan()` / `block_for_ipa()` rather than by re-deriving them:
+
+    regions: 57   blocks: 55   pool: 0x40000000..0x46e00000
+    0x17a00000 block 189  in-plan=True  region=['APSS_GIC600_GICD']                pool=0x46800000
+    0x17a60000 block 189  in-plan=True  region=['APSS_GIC600_GICD','APSS_GIC500_GICR'] pool=0x46800000
+    0x08000000 block 64   in-plan=False region=-
+    0x088e2000 block 68   in-plan=True  region=['PERIPH_SS']                       pool=0x41200000
+    0x0a600000 block 83   in-plan=True  region=['USB30_PRIM']                      pool=0x41a00000
+
+Both GIC windows fall in **one** 2 MB block — 189 — and the plan hands that block the pool address
+**`0x46800000`**, the 53rd of the 55 blocks. The redistributor base is in the same block as the distributor, so
+the whole of `GICD` and `GICR` is a single page of zeroed pool RAM, and the V2 path's CPU interface at
+`PcdGicInterruptInterfaceBase` (`ArmPkg.dec:284`, default `0`, which is why `ArmGicV2Dxe.c:575` would program
+address 0) is in block 0, which the plan also redirects — `GCC CLK CTL` at `0x00100000 + 0x200000` covers blocks
+0 and 1. Whether the payload's `ArmGicDxe` took `GicV3DxeInitialize` or `GicV2DxeInitialize`
+(`ArmGicDxe.c:77-80`, selected by `GicV3Supported()` at `:23-35`, itself `ArmHasGicSystemRegisters()`) therefore
+does not change the reading: `ArmGicV3Dxe.c:779`/`:788` take `PcdGicDistributorBase` and
+`PcdGicRedistributorsBase`, `ArmGicV2Dxe.c:575-576` takes `PcdGicInterruptInterfaceBase` and
+`PcdGicDistributorBase`, and `ArmGicCommonDxe.c:98` takes the distributor base on the shared path — all four
+loads land inside redirected blocks.
+
+The machine's own controller is somewhere else entirely. `qemu-system-aarch64 -M virt,secure=on,
+virtualization=on,gic-version=2 -cpu max` maps `gic_dist` at `0x08000000-0x08000fff`, `gic_cpu` at `0x08010000`,
+`gicv2m` at `0x08020000`, `gic_viface` at `0x08030000`, `gic_vcpu` at `0x08040000` (`info mtree -f`), and
+**nothing at all at `0x17A00000`** (7,474-byte dump in `/tmp/mtree.txt`); `0x08000000` is in block 64, which the
+plan does not redirect because this board's map does not declare it, so the firmware's page tables are the only
+thing that ever pointed there — and they do not. QEMU's own dumped DTBs put the timer's four lines at
+`/timer interrupts = <1 13 260> <1 14 260> <1 11 260> <1 10 260>` under `gic-version=2` and `<1 13 4> …` under
+`gic-version=3`, while `/tmp`'s copy of this board's own device tree (`work/out/sm7225-xiaomi-gauguin.dtb`,
+87,594 B) has `/timer compatible = "arm,armv8-timer"` with `interrupts = <1 1 65288 1 2 65288 1 3 65288 1 0
+65288>`. Two machines, two sets of four numbers, and the firmware's pair are the board's.
+
+**What follows, and what does not.** An interrupt controller that is a page of ordinary RAM cannot hold pending
+state: the write-1-to-clear, read-to-clear and enable semantics that make a GIC a GIC do not exist there, so
+even if some device line were asserted, nothing could record it and nothing could deliver it. In this instrument
+**no interrupt of any kind reaches this guest**, and every facility in the payload that waits on one waits
+forever — which is what `UsbRootHubInit`'s `while (HubIf->PollCount < USB_ENUM_POLL_MINIMUM_ATTEMPTS)` is doing.
+The payload's bitra `XhciDxe` carries a second timer-driven facility of the same shape — the string
+`XhcDriverBindingStart: failed to start async interrupt monitor` at file offset `0x10d27`, immediately before
+`… failed to install USB2_HC Protocol` — and no row containing `async` appears in any of the four archived
+panels; the string's existence is what is used here, not its absence, since 4.199 established the protocol *was*
+published. What still works is the part of the timekeeping that is not an interrupt: `gBS->Stall` is
+`MetronomeDxe`'s `MicroSecondDelay`, which busy-waits on `ArmReadCntPct` (`CNTPCT_EL0`) — 4.196 and 4.198
+identified that module and those frames at `pc = 0x9c4b7c10` / `lr = 0x9c4b6754` — so the xHCI polls took
+13.4 s of real time per million iterations while the timer event that would have ended them never came. That is
+the whole of the reading: a counter that runs and an interrupt that cannot.
+
+What this does **not** decide is narrow and worth stating. It does not name the writer of the GIC window in the
+payload's own execution — that is the job of the watchpoint named below, not of the map arithmetic. It does not
+say the payload takes the V2 or the V3 path, only that both are inside the redirect. It does not change
+anything about the device: on the phone the GIC is real hardware at the addresses the firmware is built for,
+and the phone's own device tree names the same four timer lines the PCDs do. And it does not retract 4.199's
+wall: `UsbRootHubInit` is still where the run stops, and the reason it stops there is now mechanical.
+
+**The panel's row times are the sampler's, not the guest's — three legs, and this step was nearly misled by
+them.** Reading this run's panel log for the timer question turned up rows at `96.05s` and `108.31s`
+(`Rpmh Sleep callback registration failed …`, `UFS IOMMU domain attach ARID 0x0 failed`,
+`UFSSmmuConfig failed, status 0x7`, `Usb30EnableVbus: Failed to initialize VbusSS for core 1`), and a second
+`Project Silicium` banner at `90.80s` — which reads as a guest that escaped the wall at 41.8 s and booted on.
+It is not. The first leg is that the banner reappears at **the same `90.80s`** in three different runs whose
+guests stopped in three different places (4.196's `xHCI` poll, 4.198's poll at 55.1 s, 4.199's `UsbBusDxe`) —
+`panel4196.log` and `panel4199.log` both `0.00s`/`90.80s`/`94.80s`, `panel4198.log` `0.00s`/`90.81s` — while a
+real reset would fall at a guest-dependent time, and the same 40–90 s stretch is empty of rows in all three.
+The
+second is that this panel carries the *same row multiset* as 4.196's — `UFS` 2, `UsbEnableVbus` 4, `P2 SUPP` 27
+rows in both — so those rows are console content the payload prints before either wall, not progress either run
+made. The third is that a scrolled console cannot print its banner twice, so the banner's second and third
+appearances are the reconstruction's own. A panel log read for the *guest's time* is therefore unsound; it is
+sound read for rows and multisets, which is how 4.199 used it (the row-set equality with 4.198) and how this
+step uses it. And the machine has one vCPU — the stub's `T05thread:01` and a QEMU command line with no `-smp` —
+so no other CPU could have printed those rows while one sat in a spin.
+
+**The experiment this names is 4.199's, sharpened by a watchpoint, and it is named and not run.** Three parts.
+First, count the notification rather than assume it: a `Z0` at `UsbBusDxe + 0x658C` — `UsbRootHubEnumeration`,
+the callback `UsbRootHubInit` passes to `CreateEvent`, the only writer of `PollCount` — and a read of
+`[x19+201]` on every arrival at the wall. This step's construction predicts that the `Z0` never fires and the
+byte never moves past 1 until it is written. Second, name the GIC writer in the payload's own execution with
+`Z2` watchpoints on `0x17A00000` and `0x17A60000`: the first hit's `pc` and the instruction that follows it say
+which of `ArmGicDxe`'s initialisation paths ran and whether the address it wrote is the one this step computed;
+a `Z2` on `0x08000000` is the control and should never fire. Third — because the first two are measurements of a
+machine that cannot proceed — answer the wall the way 4.199 answered the xHCI polls, which carries the run into
+`UsbBus->Devices[0] = RootHub` (`UsbBus.c:1185`) and the start of real USB device enumeration, at the cost the
+runner's header must state in the driver's own terms: from there the instrument is supplying the notifications
+a working controller would have supplied, and the enumeration that follows runs on that lie.
+
+Nothing was flashed, no partition was written, `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, and the porting goal is unchanged and
+unmet.
+
+**decides**: that the payload's GIC windows — `APSS_GIC600_GICD 0x17A00000` and `APSS_GIC500_GICR 0x17A60000`,
+the board's own declared bases and the bases baked into the built `ArmGicDxe.efi` — fall in a *single* 2 MB
+block, 189, which `l2_plan()` hands the pool address `0x46800000`, so both are one page of zeroed RAM; that the
+same is true of the V2 path's CPU-interface base by way of block 0; that QEMU's own controller sits at
+`0x08000000` in block 64, which this board's map does not declare and the plan does not translate, while
+`0x17A00000` has nothing behind it in the machine at all; that the payload's four timer registrations are
+`TimerDxe.c`'s four PCD loads, 17/18/27/26, baked at `ArmTimerDxe.efi:0x11c4`-`0x11d0` with the GICv5 branch
+skipped because `ID_AA64PFR2_EL1`'s GIC field is tested and empty, and that the timer they serve is the
+non-secure EL1 **physical** one (`CNTP_CTL_EL0` / `CNTP_CVAL_EL0` at `0x30a0`/`0x3354`/`0x335c`); that the
+machine raises its four timer lines on PPIs 13/14/11/10 and this board's tree on 1/2/3/0, so no line of the
+model's is a line the firmware registered; and therefore that no interrupt can be delivered to this guest at
+all, that `Stall` still works because it is a `CNTPCT_EL0` busy-wait and not an interrupt, and that 4.199's
+frozen `PollCount` is the instrument's arithmetic.
+**corrects**: nothing in the run's own reading; it supplies the mechanism 4.199 recorded as unknown — *"whether
+the periodic timer's notification is ever delivered"* — and it corrects a reading this step nearly made, that
+the panel's late rows and second banner in `panel4199.log` were progress past the wall, which they are not: a
+panel's row times are the sampler's clock, and 4.196's panel carries the identical row multiset.
+**does not decide**: which of `ArmGicDxe`'s two initialisation paths ran (both are inside the redirect, and the
+harness pins `gic-version=2` precisely so that this does not vary between runs); whether the payload's
+`RegisterInterruptSource` calls succeeded, since a GIC made of RAM accepts anything; and the two things 4.199
+left open that this step does not touch — whether `XhcDriverBindingStart` returned success, and the
+seed/redirect byte-order question.
+**carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the fourteen-rung
+ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and the EL3 stub's
+three fabricated structures all stand, and the panel's own header says so. The GIC redirect is not new — it is
+what `--el3-zero-mem` has done since it was written — but this step is the first to name it as the reason a
+fifth family of stops cannot move.
+**not an action**: no `fastboot` command, no console read from the device, and no seed written anywhere but the
+QEMU command line.
+**device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+`lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken from
+this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow
+needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out screencap -p` still
+returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that photograph exists.
+Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
+they were.

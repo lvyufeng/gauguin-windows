@@ -1731,6 +1731,22 @@ Work:
 > The next experiment is named and not run: a `Z0` at `UsbBusDxe+0x658C` to count whether the periodic callback
 > is ever delivered, or answer `[x19+201]` with 6 the way this step answered the xHCI polls, which carries the
 > run into `UsbBus->Devices[0] = RootHub` and real device enumeration.)
+> **4.200: the interrupt controller the payload programs is one 2 MB page of the pool.** The question 4.199
+> left open — whether the periodic timer's notification ever arrives — needs no run: the board's map declares
+> `APSS_GIC600_GICD 0x17A00000+0x170000` and `APSS_GIC500_GICR 0x17A60000+0x100000`
+> (`MemoryMapLib.c:81-82`), both below `LOW_MMIO_LIMIT`, so `--el3-zero-mem`'s `l2_plan()` puts **both in one
+> 2 MB block**, 189, whose pool address is `0x46800000` — the tool's own `low_regions()`/`l2_plan()`/
+> `block_for_ipa()` say so in one line. QEMU's controller is at `0x08000000` (block 64, undeclared and
+> untranslated), and the machine's timer lines are PPIs 13/14/11/10 against this board's 1/2/3/0, which are
+> the ones the firmware is built with (`PcdArmArchTimerSecIntrNum|17`, `PcdArmArchTimerIntrNum|18`, baked at
+> `ArmTimerDxe.efi:0x11c4`/`0x11c8`) on the **non-secure EL1 physical** timer (`CNTP_CTL_EL0`/`CNTP_CVAL_EL0`).
+> So no interrupt can be delivered to this guest at all, `gBS->Stall` works only because it busy-waits on
+> `CNTPCT_EL0`, and 4.199's frozen `PollCount` is the instrument's arithmetic and not the driver's. Method
+> point recorded with it: a panel log's row times are the sampler's clock (the banner re-appears at the same
+> `90.80s` in three runs whose guests stopped in three places). Next, named and not run: `Z0` at
+> `UsbBusDxe+0x658C` + read `[x19+201]` (predicts the callback never fires), `Z2` watchpoints on
+> `0x17A00000`/`0x17A60000` to name the writer, and answering the wall as 4.199 answered the polls — the only
+> way a machine that cannot interrupt can proceed.)
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

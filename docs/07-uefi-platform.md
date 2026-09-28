@@ -4074,6 +4074,31 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > spent, which is exactly where 4.198's own ≈163 s expiry arithmetic put it, and it had not reached
 > `UsbBusDxe` at all. Nothing was flashed, no partition was
 > written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.199.
+> **Step 4.200 — the interrupt controller the payload programs is one 2 MB page of the pool.** The question
+> 4.199 left open — whether the periodic timer's notification is ever delivered — is answered from the
+> instrument's own construction, without a run. `MemoryMapLib.c:81-82` declares
+> `APSS_GIC600_GICD 0x17A00000 + 0x00170000` and `APSS_GIC500_GICR 0x17A60000 + 0x00100000`, both below
+> `LOW_MMIO_LIMIT`, so `--el3-zero-mem`'s `l2_plan()` puts both in **one** 2 MB block — 189 — and hands that
+> block the pool address `0x46800000`; asked directly with the tool's own
+> `low_regions()`/`l2_plan()`/`block_for_ipa()`, the plan says `0x17a00000 block 189 in-plan=True …
+> pool=0x46800000`. QEMU's own controller is at `0x08000000` (block 64, which this board's map does not
+> declare and the plan therefore does not translate), and QEMU's machine raises the four architectural timer
+> lines on PPIs 13/14/11/10 while this board's own device tree names 1/2/3/0 — and the firmware is built with
+> the board's, `PcdArmArchTimerSecIntrNum|17` and `PcdArmArchTimerIntrNum|18`
+> (`BitraPkg.dsc.inc:51-52`), baked at `ArmTimerDxe.efi:0x11c4`/`0x11c8` with the GICv5 branch at `0x11ac`
+> skipped because `ID_AA64PFR2_EL1`'s GIC field is tested at `0x1bd8`/`0x1bdc` and empty, and the timer the
+> payload programs is the **non-secure EL1 physical** one, `CNTP_CTL_EL0` / `CNTP_CVAL_EL0`
+> (`0x30a0`/`0x3354`/`0x335c`). So no interrupt of any kind can be delivered to this guest; `gBS->Stall` still
+> works because it is a `CNTPCT_EL0` busy-wait, which is why 4.198's polls took 13.4 s of real time; and
+> 4.199's frozen `PollCount` is the instrument's arithmetic rather than the driver's. One method point is
+> recorded with it: a panel log's row times are the sampler's clock, not the guest's — the `Project Silicium`
+> banner re-appears at the same `90.80s` in three runs whose guests stopped in three different places, and
+> 4.196's panel carries the identical row multiset to 4.199's. Named and not run: a `Z0` at
+> `UsbBusDxe+0x658C` with a read of `[x19+201]` on arrival (predicts the callback never fires and the byte
+> never moves), `Z2` watchpoints on `0x17A00000`/`0x17A60000` to name the writer in the payload's own
+> execution, and — because a machine that cannot interrupt cannot proceed — answering the wall the way 4.199
+> answered the polls. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08`
+> step 4.200.
 >
 
 ### What exists and what is missing, so the next session starts from the right
