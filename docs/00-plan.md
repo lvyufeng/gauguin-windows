@@ -1629,6 +1629,40 @@ Work:
 > **Offered and not taken**: a seventh blob at the XHCI IPA the machine read as zero, which is what
 > would let the `CapLength` assert be passed the way the wait was. See `docs/08` step 4.192.
 >
+> **Step 4.193 — the live phone read as an oracle: the real hardware's answers to the values this
+> instrument has been fabricating.** Every stop since 4.186 has turned on a register the instrument
+> fabricates, justified by the claim that the *addresses* are the board's own and only the *contents*
+> invented. With the phone sitting in TWRP — no flash needed — that half of the claim was tested.
+> `devmem` is dead on this ROM even as root with SELinux Permissive (`mknod /dev/mem c 1 1` creates the
+> node and the read still returns `No such device or address`), `/proc/kcore` is absent and
+> `kptr_restrict` is `2`; `mount -t debugfs none /sys/kernel/debug` succeeds and is the whole route.
+> **The only things changed on the phone were a `mknod` into a `tmpfs` `/dev` and that mount** — `/` is
+> `rootfs`, i.e. TWRP's ramdisk — so no partition was touched and nothing was flashed.
+> **What the machine says**: `gcc_usb30_prim_gdsc` **use = 1**, the exact descriptor 4.186 found ClockDxe
+> driving, is powered on the real phone, so that stop was the instrument's power model and not the
+> hardware's; `gcc_usb30_prim_master_clk_src` runs at **133333333 Hz** (3/3) while
+> `gcc_usb3_prim_phy_pipe_clk` sits at **0 Hz, 0/0/0**; the **whole UFS clock tree is at zero**; the real
+> `cmd_db` is indexed by **ID string** (`cx.lvl` `0x30000`, `qphy.lvl` `0x30090`, the eight `.mol`
+> entries, the PMIC family from `0x50000`, `vrm.soc` `0x43700`, `soc.pbs` `0x43900`). **Two addresses the
+> fabrication rests on are the board's own**: `reserved-memory` has `compatible = "qcom,cmd-db"` at
+> **`0x80860000 + 0x200`**, and `qcom,qmp-aop@c300000` is **`0x0C300000 + 0x100000`**, so the `0xC3F000C`
+> word the EL3 AOP seed writes sits inside the real mailbox window at offset `0xF000C`. The real DWC3
+> reports `GSNPSID = 0x5533330a`, `GHWPARAMS0 = 0x4020400a` (MODE = **DRD**),
+> `GHWPARAMS3 = 0x10420085` (**a GEN1 SuperSpeed PHY is present**), and `GHWPARAMS6 = 0x07ea0020` (BC,
+> OTG3, ADP, HNP and SRP all zero in *capabilities*) — but `mode` reads **`device`**, `link_state`
+> `On`, and `/sys/kernel/debug/usb/xhci/` is **empty**, so every value is the *device-mode* profile of a
+> DRD core with no host instance to read. **So this oracle cannot answer 4.192's open question** —
+> whether a real capability block at `0x0A60C100` holds a non-zero `CapLength` — and the honest statement
+> is that no reading exists, not that a reading disagrees. **One map gap named**: the platform's own
+> `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
+> `0x18280000`, and **nothing at `0x088E3000` or `0x088E8000`**, where the live tree puts
+> `/soc/qusb@88e3000` and `/soc/ssphy@88e8000` (`/proc/iomem` confirms `088e3000-088e33ff :
+> qusb_phy_base`); under `--el3-zero-mem` a block is redirected only if the platform declares a region
+> in it, so those two fall through to the identity map and read RAM this instrument does not control.
+> A candidate edit — add both to `MemoryMapLib.c` — is **offered and not made**. `ufshc@1d84000` carries
+> **no `iommus` property**, and there is **no framebuffer route** (`/dev/fb*`, `/proc/fb` and
+> `/sys/class/graphics/` all absent), so `先读屏` stays a photograph. See `docs/08` step 4.193.
+>
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

@@ -3881,6 +3881,29 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > Nothing was flashed, no partition was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See
 > `docs/08` step 4.192.
 >
+> **Step 4.193 — the live phone read as an oracle, and one map gap it names.** With the phone in TWRP
+> and root, `devmem` is dead on this ROM (`mknod /dev/mem c 1 1` plus SELinux Permissive is not enough;
+> the read still returns `No such device or address`), `/proc/kcore` is absent and `kptr_restrict` is
+> `2` — but `mount -t debugfs none /sys/kernel/debug` succeeds, and that is the whole route. **Nothing
+> was written**: the only changes were a `mknod` into a `tmpfs` `/dev` and the mount, on a `rootfs`
+> (ramdisk) `/`. The machine then answered the questions the instrument had been standing in for:
+> `gcc_usb30_prim_gdsc` — the descriptor 4.186 found ClockDxe driving — is **use = 1**;
+> `gcc_usb30_prim_master_clk_src` is **133333333 Hz** while `gcc_usb3_prim_phy_pipe_clk` is 0 Hz at
+> 0/0/0; the **whole UFS clock tree is at zero**; the real `cmd_db` is indexed by ID string; and
+> `qcom,cmd-db` really is at **`0x80860000`** and `qcom,qmp-aop` at **`0x0C300000`** (size `0x100000`),
+> so the `0xC3F000C` word the EL3 AOP seed writes sits inside the real mailbox window. The real DWC3 is
+> `GSNPSID = 0x5533330a`, a DRD core with a GEN1 SuperSpeed PHY and BC/OTG3/ADP/HNP/SRP all absent in
+> capabilities — but it is in **`device`** mode with an empty `/sys/kernel/debug/usb/xhci/`, so there is
+> no host-mode profile to read and **the `CapLength` question 4.192 left open stays open for want of a
+> reading, not against evidence**. The map gap: `Platforms/Xiaomi/gauguinPkg/…/MemoryMapLib.c` declares
+> `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at `0x18280000`, and **nothing at
+> `0x088E3000` or `0x088E8000`**, where the live tree puts `qusb@88e3000` and `ssphy@88e8000`
+> (`/proc/iomem`: `088e3000-088e33ff : qusb_phy_base`); those two blocks are therefore outside the
+> `--el3-zero-mem` redirection and read plain RAM. A candidate edit to add them is **offered and not
+> made**. Also `ufshc@1d84000` carries no `iommus` property, and there is no framebuffer route at all,
+> so `先读屏` remains a photograph. Nothing was flashed, no partition was written,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.193.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

@@ -40406,3 +40406,162 @@ hardware, and whether the `F056673C` `Unsupported` → `Access Denied` pair is a
   from this host: reboot to the bootloader, and a screen photograph.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
 
+## Step 4.193 — the live phone read as an oracle: the real hardware's answers to the values this instrument has been fabricating, and one map gap it names
+
+**The question.** Every stop from 4.186 to 4.192 has turned on a register the instrument fabricates: the
+GDSC bit, the `0x152010`/`0x100000` vote pair, the zeroed IMEM cookie page, the AOP `0xC3F000C` seed, the
+XHCI capability block. The instrument's standing justification has been that the *addresses* are the
+board's own and only the *contents* are invented. This step tests that half of the justification against
+the live phone — the one thing here that needs no flash, because the P3 workflow leaves the phone in TWRP
+anyway.
+
+**The route, and why it is not `devmem`.** `/dev/mem` is absent. `mknod /dev/mem c 1 1` succeeds and
+SELinux is `Permissive`, and `devmem` still fails: `devmem 0xa60c100 4` returns `devmem: /dev/mem: No such
+device or address`, as does a plain RAM read at `0x80000000`, so only the first page is reachable and there
+is **no physical-memory read route on this ROM**. `/proc/kcore` is absent and `kptr_restrict` is `2`.
+What works is debugfs: `/sys/kernel/debug` was not mounted, `mount -t debugfs none /sys/kernel/debug`
+returns success, and every reading below is a `cat`, `od` or `ls` through that mount.
+
+**Reads, and no writes.** The only state this step changed on the phone is a `mknod` into `/dev` and the
+debugfs mount, and `mount` says what those are: `/dev` is `tmpfs` and `/` is `rootfs` — TWRP's own
+ramdisk. No partition was written, no `fastboot` command was issued, and the phone was left as found. This
+is the first device-side ground truth the project has taken without flashing anything, and it is
+consistent with the standing decision that nothing is written to the device's storage before P4.
+
+**The machine's answers about the domains the run has been stopped in.**
+
+- **`gcc_usb30_prim_gdsc` use = 1.** The exact descriptor 4.186 found ClockDxe driving is **powered on the
+  real phone**. `gcc_ufs_phy_gdsc` use = 0, `mdss_core_gdsc` use = 1, `gpu_cx_gdsc` use = 0, `refgen`
+  use = 1. The GDSC stop was therefore a property of the instrument's power model and not of the phone.
+- **The USB3 clocks are running.** `gcc_usb30_prim_master_clk_src` **133333333 Hz**, enable/prepare 3/3;
+  `gcc_aggre_usb3_prim_axi_clk`, `gcc_cfg_noc_usb3_prim_axi_clk` and `gcc_usb30_prim_master_clk` each 1/1
+  at the same rate; `gcc_usb30_prim_mock_utmi_clk` 1/1 at 19200000; `gcc_usb3_prim_clkref_clk` 1/1;
+  `gcc_usb30_prim_sleep_clk` 1/1. **`gcc_usb3_prim_phy_pipe_clk` is 0/0/0 at 0 Hz** — the SuperSpeed pipe
+  clock has never been enabled on this phone in this state.
+- **The whole UFS clock tree is at zero**: `gcc_ufs_phy_axi_clk_src` 0/0/0 (parent 50 MHz),
+  `gcc_ufs_phy_unipro_core_clk_src` 0/0/0 (37.5 MHz), `gcc_ufs_phy_ice_core_clk_src` 0/0/0 (75 MHz),
+  `gcc_ufs_phy_ahb_clk`, `gcc_ufs_mem_clkref_clk` and the three `*_symbol_*` clocks all 0/0/0. On a phone
+  that booted from UFS this is a controller the kernel has parked; it is the real counterpart of the UFS
+  rows this instrument has been reading as zero.
+- **The real `cmd_db`** (`/sys/kernel/debug/cmd_db`, 136 lines) is exactly the database the fabricated AOP
+  seed stands in for, and it is indexed by **ID string, not by a fixed property word**: `cx.lvl` at
+  `0x30000` carrying a 32-byte aux table, `cx.tmr` at `0x30004`, then `mx`, `ebi`, `lcx`, `lmx`, `gfx`,
+  `mss`, `ddr`, `mmcx`, **`qphy.lvl` at `0x30090`** (aux `00 00 20 00 …`), `xo`, the eight `.mol` entries,
+  and the PMIC family from `0x50000` up, ending at `vrm.soc` (`0x43700`) and `soc.pbs` (`0x43900`).
+  `qphy` is the USB PHY rail's own entry.
+- **The regulator view is the only view of the GDSC family.** `/sys/kernel/debug/pm_genpd/pm_genpd_summary`
+  is three lines: the header and nothing else, so no power domain is tracked, and the rails with nonzero
+  use are `pm6350_l22` (4), `pm6350_l3` (3), `refgen` (1), `mdss_core_gdsc` (1) and `gcc_usb30_prim_gdsc`
+  (1).
+
+**The real DWC3, and the limit it puts on this whole oracle.** `/sys/kernel/debug/a600000.dwc3/regdump` is
+308 lines of real silicon: `GSNPSID = 0x5533330a` (DWC3 3.30a), `GUID = 0x00041371`,
+`GSBUSCFG0 = 0x2222000e`, `GCTL = 0x00102001`, `GSTS = 0x7e800000`, `GUCTL = 0x0d00c010`,
+`GUCTL1 = 0x010f9802`. `GHWPARAMS0 = 0x4020400a` → **MODE = DRD**, MDWIDTH = 64.
+`GHWPARAMS3 = 0x10420085` → **SSPHY_IFC = 1, a GEN1 SuperSpeed PHY is present**, HSPHY_IFC = 1 (UTMI+),
+NUM_EPS = 33. `GHWPARAMS6 = 0x07ea0020` → **BCSUPPORT, OTG3SUPPORT, ADPSUPPORT, HNPSUPPORT and
+SRPSUPPORT are all zero**, i.e. absent in *capabilities* and not merely disabled. `GHWPARAMS7 =
+0x03080a65` → RAM1 2661 words, RAM2 776. `GTXFIFOSIZ(0..3)` = `0x42`, `0x00420082`, `0x00c40082`,
+`0x01460082` (start/depth 0/66, 66/130, 196/130, 326/130) and `GRXFIFOSIZ(0) = 0x00000305`, one RX FIFO of
+773 words. `DCFG = 0x004c0810`, `DEVTEN = 0x00001257`.
+And the file that says what all of that is worth: `/sys/kernel/debug/a600000.dwc3/mode` reads **`device`**,
+`link_state` reads `On`, and `/sys/kernel/debug/usb/xhci/` is **empty**. The controller is running as a
+**peripheral** on the live phone, so every value above is the *device-mode* profile of a DRD core, and
+there is no xHCI host instance in the running kernel to read a host-mode profile from. **This oracle
+therefore cannot answer the question 4.192 left open** — whether a real capability block at `0x0A60C100`
+holds a non-zero `CapLength`. It is not that the reading disagrees; it is that no reading exists.
+
+**The two addresses the fabrication stood in for are the board's own.** The live device tree gives
+`reserved-memory` a node at **`0x80860000`** with `compatible = "qcom,cmd-db"`,
+`reg = 0x80860000 + 0x200` and `no-map` — the exact address the instrument's own panel header calls "AOP
+CMD DB 0x80860000". And `soc/qcom,qmp-aop@c300000` has `reg = 0x0C300000 + 0x100000`, so the `0xC3F000C`
+word the EL3 AOP seed writes sits **inside the real AOP mailbox window**, at offset `0xF000C` into it. Two
+siblings come with them: `xbl_aop_mem@80700000` (`0x08070000 + 0x26000`) and `smem@80900000`
+(`0x80900000 + 0x2000`), both `no-map`. **So the half of the justification that was testable survives
+this test**: the addresses are the board's, and the contents are the part an instrument running no AOP
+cannot supply.
+
+**The IMEM the payload models against the IMEM the phone has.** `/proc/device-tree/soc/qcom,msm-imem@146aa000`
+has `compatible = "qcom,msm-imem"` and `reg = 0x146AA000 + 0x1000`, with seven children —
+`boot_stats@6b0` (0x20), `diag_dload@c8` (0xc8), `dload_type@1c` (4), `kaslr_offset@6d0` (0xc),
+`mem_dump_table@10` (8), `pil@94c` (0xc8), `restart_reason@65c` (4) — and **no `boot_devices` child**. The
+payload's own model, in `Binaries/bitra/RawFiles/uefiplat.cfg`, is `0x14680000 + 0x40000` as "IMEM Base",
+**`0x146BF000 + 0x1000` as "IMEM Cookie Base"**, and `SharedIMEMBaseAddr = 0x146BF000`. The DT's page and
+the payload's cookie page sit inside that same 256 KB block on different pages, and **nothing live
+confirms or denies what the cookie page holds**: the DT names the block and does not name the cookie.
+There is no host-side route to read it, so the console row `Failed to Get Shared Imem Boot device Type`
+still has no machine-side answer — and 4.187's finding, that the run's UFS path goes through the door that
+never reads IMEM, is unaffected by either reading.
+
+**One map gap, named by the machine.** The instrument's zero-map is built from the platform's own
+`Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c`, and that file declares
+`USB30_PRIM 0x0A600000 + 0x200000`, `USB_RUMI 0x0A720000 + 0x10000`, `USB30_SEC 0x0A800000 + 0x11B000`
+and the four `*_CLK_CTL` at `0x18280000`, `0x18282000`, `0x18284000` and `0x18286000` (4 KB each). **It
+declares nothing at `0x088E3000` or `0x088E8000`, and neither does any other entry in the map.** The live
+device tree, meanwhile, puts two nodes there — `/soc/qusb@88e3000` and `/soc/ssphy@88e8000` — and
+`/proc/iomem` confirms the first is real and claimed: `088e3000-088e33ff : qusb_phy_base`. The same tree
+adds `ssusb@a600000` with `reg-names = core_base`, its `dwc3@a600000` child with `dr_mode = drd`, and
+`ufshc@1d84000`, which carries **no `iommus` property at all** — so the running DT attaches UFS to no
+apps-smmu stream, which bears on 4.187's `ARID 0x0` attach without by itself explaining it.
+**What this is worth**: under `--el3-zero-mem` a 2 MB block is redirected only if the platform declares a
+region in it, so an access to `0x088E3000` or `0x088E8000` is *not* given the zero model — it falls
+through to the identity map and reads plain RAM this instrument does not control. **What it is not**: a
+proven cause of any stop in this project's record. Nothing here shows the payload reads either address,
+and this is a map gap offered for a later step to test rather than a diagnosis.
+
+**The real SMMU, and the display route that is not there.**
+
+- `/sys/kernel/debug/iommu/capturebus/` holds seven TBUs — `15185000.anoc_1_tbu`, `15189000.anoc_2_tbu`,
+  `1518d000.mnoc_hf_0_tbu`, `15191000.mnoc_sf_0_tbu`, `15195000.adsp_tbu`, `15199000.compute_dsp_0_tbu`
+  and `1519d000.pcie_tbu` — and `testbus/` adds `15000000.apps-smmu`;
+  `/proc/device-tree/soc/apps-smmu@15000000/` carries `qcom,use-3-lvl-tables`. The two `mnoc` TBUs are
+  the pair whose GDSCs appear in the regulator summary as `hlos1_vote_mmnoc_mmu_tbu_hf0_gdsc` and
+  `hlos1_vote_mmnoc_mmu_tbu_sf_gdsc`.
+- **There is no framebuffer route.** `/dev/graphics/`, `/dev/fb*` and `/proc/fb` are absent,
+  `/sys/class/graphics/` is empty, and `/sys/kernel/debug/dri` holds only `0` and `128` →
+  `/dev/dri/card0` and `renderD128` (msm DRM), with `/sys/class/drm` listing `card0`, `card0-DSI-1`,
+  `card0-Virtual-1`, `renderD128`, `sde-crtc-0` and `sde-crtc-1`. **So this step does not remove the
+  `先读屏` dependency**: the P3 judgement lines still have to be photographed.
+
+**Rows.**
+
+- **artifacts**, all under `work/out/device-oracle/`: `dwc3-regdump.txt` (308 lines, sha256 `914392e6…`),
+  `dwc3-mode-linkstate.txt` (`263d8951…`), `regulator_regulator_summary.txt` (267 lines, `21c7e0cb…`),
+  `oracle_clk_clk_summary.txt` (350 lines, `58f469f6…`), `oracle_cmd_db.txt` (136 lines, `25422dab…`),
+  `pm_genpd_pm_genpd_summary.txt` (3 lines, `298afbad…`), `oracle_aop_regions.txt` (`ccfb3586…`),
+  `oracle_imem_children.txt` (`c544bcd1…`), `oracle_ufs_imem.txt` (`6040f50c…`). Two probes carry no data
+  and are kept for that reason: `oracle_aop_send_message.txt` (`b2e4c023…`) is one line,
+  `cat: /sys/kernel/debug/aop_send_message: Invalid argument`, and `oracle_usb_diag.txt` (`cd56aa67…`) is
+  one line, `Is a directory` — both are write-only or container knobs and neither was written to.
+- **shows**: the real GDSC is on, the real USB3 clocks are running at 133.333 MHz, the real UFS clock tree
+  is parked at zero, the real `cmd_db` is string-indexed and matches the fabricated seed's two addresses,
+  and the real DWC3 is a GEN1-capable DRD core sitting in **device** mode.
+- **reads, and does not write**: the only changes on the phone were `mknod` into a `tmpfs` `/dev` and the
+  debugfs mount, on a `rootfs` (ramdisk) `/`. No partition was touched and nothing was flashed. This is
+  the first device-side ground truth this project has taken without writing anything.
+- **decides**: the GDSC stop was the instrument's power model, not the phone's; the `0x80860000` and
+  `0x0C300000` addresses the AOP fabrication rests on are the board's own; and the drift between 4.186's
+  and 4.190's stops and the live hardware's power and clock state is now measured rather than assumed.
+- **does not decide**: whether a real XHCI capability block at `0x0A60C100` holds a non-zero `CapLength`
+  (no host instance exists to read, so the question has no answer here rather than a contrary one);
+  whether this DWC3 can be switched to host mode from the payload; what the Shared IMEM cookie page at
+  `0x146BF000` holds; whether `SSUsb1InitCommon: gNpaClientSS1Bus is NULL` is an absent peer or an
+  instrument debt; and whether the `F056673C` `Unsupported` → `Access Denied` pair is a second debt.
+- **a map gap offered, not applied**: `MemoryMapLib.c` declares no region covering the live tree's
+  `qusb@88e3000` or `ssphy@88e8000`, so those two blocks are outside the zero model. A candidate edit —
+  add both to `MemoryMapLib.c` so the zero-map covers them — is **not made** here, and is recorded as the
+  first thing a later step should test rather than as a fix.
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
+  fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed
+  and the EL3 stub's three fabricated structures all still stand.
+- **not an action**: this step read the phone and not QEMU, and it wrote nothing anywhere but its own
+  `work/out` artifacts. The porting goal is unchanged and unmet: no Windows 11 image runs on gauguin, P3
+  is unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state
+  remains a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: re-observed, and unchanged. The phone was left in TWRP recovery, `adb devices` =
+  `d25f844e recovery`, `ro.product.board = gauguin`, `adb shell id` = `uid=0(root)`; `fastboot devices`
+  is empty, so the P3 `fastboot boot` workflow still needs a physical reboot to the bootloader, and
+  `adb exec-out screencap -p` still returns 53 bytes, so **no photograph of the 4.187 P3 payload's
+  judgement lines has been supplied**. Two physical actions are outstanding and neither can be taken from
+  this host: reboot to the bootloader, and a screen photograph.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
