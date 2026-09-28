@@ -38993,3 +38993,487 @@ behaviour of the build.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.
   The phone enumerated as `2717:ff68` on bus 003, which is the port `0000:00:14.0`'s root hub serves and not
   the dock's.
+
+
+## Step 4.188 — the GDSC status bit is what holds the run, and what lies past it is the same kind of stop one register down
+
+### The question
+
+4.186 ended on a device question it could not close under this instrument. ClockDxe's GDSC routine at
+`+0x11E5C` — reached through the `gcc_usb30_prim_gdsc` descriptor's ops block — clears bit 0 of the register
+at `0x11A004` and then polls bit 31 of the same register, and `0x11A004` is inside this board's declared
+`{"GCC CLK CTL", 0x00100000, 0x00200000}` window, which `--el3-zero-mem` redirects to a block of the zero
+pool. Under the instrument the bit never sets, so the poll cannot terminate; on the phone the register is
+real and a running GDSC would set it. 4.186 therefore closed with *"whether the `gcc_usb30_prim_gdsc`
+operation completes on hardware"* left open, as *a one-bit device question and not a QEMU pass*. This step
+is that one bit: if bit 31 of that word is what holds the run, then setting it under the instrument should
+carry the run past the poll, and the rows after it are readable.
+
+The routine, verbatim, as the run executes it:
+
+```
+11e5c: ldr  x8, [x0, #8]        ; the control register
+11e60: cbz  x8, 0x11e70
+11e64: ldr  w10, [x0, #16]
+11e68: mvn  w9, w10
+11e6c: b    0x11e7c
+11e70: ldr  x8, [x0]            ; no control register: use the status register itself
+11e74: cbz  x8, 0x11e94
+11e78: orr  w9, wzr, #0xfffffffe     ; clear bit 0, and only bit 0
+11e7c: ldr  w11, [x8]
+11e80: and  w12, w11, w9
+11e84: str  w12, [x8]
+11e88: ldr  x9, [x0]            ; the register to poll
+11e8c: ldr  w8, [x9]            ; THE SPIN
+11e90: tbz  w8, #31, 0x11e8c    ; wait for bit 31
+11e94: ret
+```
+
+4.186 recorded that `x0 = 0x9C385410` is the descriptor's own `+0x10` field, so on this path `[x0+8]` is the
+zero the file holds and the `cbz` at `0x11E60` is taken: the write at `0x11E84` and the spin at `0x11E8C`
+both address `[x0] = 0x11A004`. The write and the poll are the same register, not two. That is what makes
+the seed below a statement about the poll.
+
+This is **a different kind of claim from the four seeds that came before it.** Those put back words an
+absent peer would have published. This one fakes a *hardware status bit*: a GDSC that is not actually up can
+still have bit 31 set in this model, so anything downstream that depends on the clock really running may
+fail for a reason the seed created. The run answers one question and only one — what the firmware does
+*after* the poll when the poll passes — and every row after the seed is said with that lie in place.
+
+### Where the descriptor is, and two things 4.186 read short
+
+Before the seed, the table it sits in. ClockDxe's `.data` holds a **22-entry table of stride `0x58`
+beginning at file offset `0x24DD0`**, whose records are `+0x00` a pointer to a name string, `+0x10` the
+register address, `+0x28` the ops block. Two corrections to 4.186 follow, both measured this step:
+
+- 4.186 wrote *"a GDSC descriptor table of stride `0x58` from file offset `0x25400`"*. `0x25400` is not the
+  table's start; it is **entry 18 of 22** (`0x24DD0 + 18 × 0x58 = 0x25400`). Its neighbours are the same
+  ones 4.186 named — `gcc_ufs_phy_gdsc` at `0x253A8` is entry 17, `cx_gdsc` at `0x25458` is entry 19 — so
+  the stride and the neighbours stand; only the origin was read one entry late.
+- 4.186 wrote *"the ops block at `.data 0x2BA20` holds exactly two pointers, `0x11E5C` and `0x11E98`"*. It
+  holds **eight**: `+0x00 = 0x11E5C`, `+0x08 = 0x11E98`, `+0x10 = 0x11EC4`, `+0x18 = 0x11EF8`,
+  `+0x20 = 0x11F14`, `+0x28 = 0x11F2C`, `+0x30 = 0x11F44`, `+0x38 = 0x11F70`, then zeros. The two 4.186
+  named are the first two and are the two this run uses, so nothing 4.186 concluded from them changes —
+  but *"exactly two"* is wrong and a later step should not read the block as a two-slot table.
+
+The entry itself, byte for byte, as 4.186 recorded it and as it reads now:
+
+```
+file offset 0x25400  (+0x00)  0x0000000000017604  -> "gcc_usb30_prim_gdsc"
+                     (+0x08)  0
+                     (+0x10)  0x000000000011a004   <- the register, x0 = this field
+                     (+0x18)  0
+                     (+0x20)  0
+                     (+0x28)  0x000000000002ba20   -> the ops block whose +0x00 is 0x11E5C
+                     (+0x30)  0
+                     (+0x38)  0
+                     (+0x40)  0
+                     (+0x48)  0x0000000000025638   -> "/vcs/vdd_cx"
+```
+
+And the entry's name is one of 22, which is worth recording once because it is the first time this project
+has the whole table: the first eight are `video_cc_mvs0_gdsc` (`0x24DD0`), `video_cc_mvsc_gdsc` (`0x24E28`),
+`cam_cc_titan_top_gdsc` (`0x24E80`), `cam_cc_bps_gdsc` (`0x24ED8`), `cam_cc_ife_0_gdsc` (`0x24F30`),
+`cam_cc_ife_1_gdsc` (`0x24F88`), `cam_cc_ife_2_gdsc` (`0x24FE0`), `cam_cc_ipe_0_gdsc` (`0x25038`) — every one
+of them carrying a register at the same `…004` offset in one of the board's camera or video windows, and
+`gcc_usb30_prim_gdsc` the only USB one. The table is what the GDSC power-up loop walks; it is not a USB
+structure that happens to contain a GDSC.
+
+### The seed
+
+One `loader` blob, `/tmp/gdsc-clk.bin`, four bytes of `0x80000000` at host `0x4011A004`. The address is
+`0x40000000 + (0x11A004 & 0x1FFFFF)`: stage 2 redirects the 2 MB *block* an address is in, and
+`block_for_ipa` puts `0x11A004` in block 0, whose pool block is `0x40000000`. The same arithmetic
+reproduces the three addresses this project has already written and read back — `0x1FD4000 → 0x40DD4000`
+(the panel header's own words), `0xC3F000C → 0x42BF000C`, `0x18321700 → 0x46D21700` — which is what makes it
+a convention rather than a guess. Bit 0 is already clear in `0x80000000`, so the clear at `0x11E84` leaves
+the word as written and the poll's first read sees bit 31.
+
+**And the seed's own success is the evidence that the address is the polled one.** A seed at any other
+register would have changed nothing: `0x11A004` was chosen from the descriptor's `+0x10`, and the reading
+below is what confirms it, not what assumes it.
+
+### The first run read nothing, and why
+
+The first 4.188 panel (`qemu-panel-4.188-gdsc-seeded.txt`, sha256 `7df59633…`, 201 rows) aborted:
+
+```
+Synchronous Exception at 0x000000009C40E46C
+PC 0x00009C40E46C (0x00009C40B000+0x0000346C) [ 0] DALSys.dll
+PC 0x00009C022BC0 (0x00009C020000+0x00002BC0) [ 1] AdcDxe.dll
+SP 0x000000009FFCEA80  ELR 0x000000009C40E46C  SPSR 0x80000205
+ESR 0x96000004          FAR 0xAFAFAFAFAFAFAFAF
+ASSERT [ArmCpuDxe] DefaultExceptionHandler.c(339): ((BOOLEAN)(0==1))
+```
+
+The driver that faults is **AdcDxe**, in its walk into DALSys's device-record registry. The registry fill is
+`DALSys+0x346C`'s `ldr x8, [x8, x9]` with `x8 = [x21+24] = 0` and `x9 = 0`, so the loaded address is the
+poison pattern `0xAFAFAFAFAFAFAFAF` and the `FAR` is that pattern — the record was found and a field in it
+was never filled. AdcDxe's probe at `0x2A2C` returns early from six places and the crash is past all six;
+`0x2BC0 cbnz w0, 0x2BE4` is the call in the loop at `0x2BA0`, bounded by the count at `0x2B80`.
+
+**This is not a new result.** It is 4.186 pass 1's documented one, and it is the reason every panel of this
+project that reaches `K 83` carries probe 38e's declared suppression: `P0=0000000000000000` at
+`DALSys+0x335C`, which zeroes the record's `x0` when the entry it names is `/pmic/target`, so AdcDxe's probe
+fails to match and returns `EFI_UNSUPPORTED` instead of walking into the fill. Without it the run never gets
+near `ClockDxe+0x11E8C`, so the first 4.188 panel is a run that could not have answered its own question.
+
+The two repeats of that exact command (`qemu-panel-4.188-control-1.txt`, `-control-2.txt`) abort at the same
+instruction with byte-identical registers — `ELR 0x9C40E46C`, `SP 0x9FFCEA80`, `FAR 0xAFAFAFAFAFAFAFAF`, last
+K row `K 46 Ss 44/69 D06A77F4-4874-5898-9421-303158ECEA1A`. That GUID is **I2C**, Apriori file index 46 by
+this project's own table (`docs/08-device-session.md:2550`), so the last thing the plain run dispatches is
+I2C and the fault is in the driver after it. The plain instrument is deterministic here: five plain runs of
+this payload (4.186 pass 1, 4.188, the two controls, and 4.187's) all die at `K 46`.
+
+The contrast the suppression makes is printed by the panels themselves. In both probed runs:
+
+```
+K 46 Ss 44/69 free=1024 D06A77F4-4874-5898-9421-303158ECEA1A     ; I2C, started
+K 47 SU 44/69 free=1024 9143B2B7-D5E7-5190-B22A-605E5C78E7CC     ; AdcDxe, Unsupported
+...
+P2 DIAG S 9143B2B7-D5E7-5190-B22A-605E5C78E7CC Unsupported
+```
+
+`K 47 SU` with AdcDxe's GUID, and AdcDxe's own diagnostic row saying `Unsupported`, is the suppression
+working: the same driver that faults in every plain run returns an error instead, and the walk continues.
+
+### A candidate that is refuted, recorded as method
+
+The only run of this payload that reached `K 83` before this step is 4.186 pass 4, and the difference
+between it and the plain runs is the probe's suppression — but the obvious first hypothesis was *timing*.
+This instrument is started with no `-icount` and no `-rtc clock=` (`tools/qemu-panel-read.py:446`), so
+`-M virt,max` drives the guest's generic timer off `QEMU_CLOCK_VIRTUAL`, which advances with **host
+wall-clock**; a gdbstub that stops the machine for tens of seconds hands the guest that much elapsed time
+while it retires almost no instructions, and a firmware wait with a deadline reads that as *the wait
+expired*.
+
+It is **refuted**, twice. A run of the same command under `-icount shift=4,align=off,sleep=off` — which
+derives the guest clock from instructions retired — aborts at the same instruction as the no-`icount`
+control, `ELR 0x9C40E46C`, identically (`qemu-panel-4.188-icount-A.txt`). And the probe's own log shows it
+*writing* guest state mid-run, not merely pausing it:
+
+```
+@7.1s REG   x0=0x9c16a278  entry0.name='/pmic/target'
+        -> x0 zeroed: this record is not published (1 so far)
+```
+
+`sendpkt("P0=0000000000000000", 10.0)` is a `P` write packet, and the suppression's own docstring says so.
+The difference between the runs is a *state* difference the instrument declares, not a timing one it does
+not. The elapsed-time hypothesis is written here so that it is not re-derived.
+
+Two further runs were spent on the same question and are recorded as spent, not as results: a run with
+probe 38e attached under `-icount` (`qemu-panel-4.188-icount-B.txt`, 191 rows) printed no `ASSERT` row at
+all and stopped its K rows at `K 32 Ss 31/69` — a different instrument state again, and nothing in this
+step depends on it — and a run with a client that only stops the machine and holds it 60 s
+(`nullprobe.py`, `run-nullprobe.sh`) never left firmware early-boot: its panel is the twelve
+`Memory Allocation` rows and nothing else. `-icount-B` is also the reason not to read the pass A/B pair as
+a clean two-arm test; only pass A's abort is used, and only as the refutation.
+
+### The reading
+
+With the suppression, four blobs and the fifth seed, the same probe 4.186 pass 4 used
+(`qemu-panel-4.188-seeded-suppressed.txt`, sha256 `2f2260ac…`, 249 rows from 599 screens over 150.2 s):
+
+| run | blobs | window | last row | panel |
+|---|---|---|---|---|
+| 4.186 pass 4 | 4 | 100 s | `DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v` | 310 rows |
+| 4.188 control | 4 | 150 s | same row | 276 rows |
+| 4.188 control | 4 | **300 s** | same row | 350 rows |
+| **4.188 seeded** | **5** | 150 s | **`ASSERT HALclkFabiaPLL.c +184: 0`** | 249 rows |
+
+The seeded run's tail, verbatim, from the row all four runs share:
+
+```
+ 244 |DALLOG Device [0x0]: DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v|      (74 chars)
+ 245 |SSUsb1InitCommon: gNpaClientSS1Bus is NULL)|                                    (43 chars)
+ 246 |HAL_clk_FabiaPLLEnableVote Activate FailureERROR: C90000002:V03000007 I0 4DB5DEA6-5302-4D1|  (90 chars)
+ 247 |A-8A82-677A683B0D29|
+ 248 |ASSERT HALclkFabiaPLL.c +184: 0|                                               (31 chars)
+```
+
+Rows 246 and 247 are one 90-column row continued; joined, it names `4DB5DEA6-5302-4D1A-8A82-677A683B0D29`
+after a `I0` prefix. That the prefix makes it an identifier is all that is established here; the string is
+not resolved against anything in the tree.
+
+**The window is not the difference.** The 300-second control reaches the shared row and is then **silent for
+the remaining 286 seconds**: it prints `SSUsb1InitCommon` zero times and `FabiaPLL` zero times, and so does
+the 150-second control. Both are counted, not eyeballed: `grep -c` over the three panels gives
+`SSUsb1InitCommon` 1/0/0 and `FabiaPLL` 2/0/0 and `HALclkFabiaPLL.c` 1/0/0. The two 150-second runs place
+`K 83 SO 76/69 free=4096 CB933912-DF8F-4305-B1F9-7B44FA11395C` in a panel whose `P2 USB n=1 all=139
+pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77`, `P2 SUPP n=17`, `P2 SUPP BEB12BEE-… s=Success`,
+`P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0`, `P2 SEQ` and `P2 WHY` rows are
+identical string for string. The single difference between them is the fifth blob, and the three rows are
+what it buys.
+
+**And the row they share is about the rails the seed's own driver will vote on.** Row 244's tail decodes as
+`[/c/d_x/c/d_xm.v`, which is not a rail path as printed; this panel's header reports 32316 characters under
+a 1.5 confidence margin and three GAPs, and the two rail names this step read statically out of ClockDxe's
+`.data` are `/vcs/vdd_cx` and `/vcs/vdd_mx`, which that decimated tail fits. So row 244 is quoted as
+captured and **not** read as text: it is a low-confidence decode of a `DALLOG` naming the two VCS rails, it
+is present in every run of this payload since 4.186 pass 4, and it is one row before the divergence.
+
+### What the three rows are
+
+**`SSUsb1InitCommon: gNpaClientSS1Bus is NULL)`** is `UsbConfigDxe`'s own. The format string is at file
+offset `0xF203` (`"SSUsb1InitCommon"`), the message at `0xF214` — including its stray closing paren — and
+the site is `0x7430`:
+
+```
+73d4: cmp  w8, #0x5
+73e0: b.ne 0x7454                 ; only the SS1 (SuperSpeed 1) instance gets here
+73e4: adrp x8, 0x11000
+73e8: add  x8, x8, #0x928
+73ec: adrp x9, 0x11000
+73f0: ldr  x9, [x9, #2344]        ; the SS1-bus NPA client handle
+73f4: stur x8, [x29, #-136]
+73f8: cbz  x9, 0x742c             ; NULL -> the warning
+73fc: orr  w1, wzr, #0x8          ; not NULL -> the real call, and no warning
+7400: adrp x8, 0xf000
+7404: add  x8, x8, #0x610
+7408: adrp x9, 0x11000
+740c: add  x9, x9, #0x928
+7410: adrp x10, 0x11000
+7414: ldr  x10, [x10, #2344]
+7418: mov  x0, x10
+741c: mov  x2, x8
+7420: stur x9, [x29, #-144]
+7424: bl   0xc538
+7428: b    0x7450
+742c: b    0x7430
+7430: adrp x1, 0xf000
+7434: add  x1, x1, #0x214         ; "%a: gNpaClientSS1Bus is NULL)"
+7438: adrp x2, 0xf000
+743c: add  x2, x2, #0x203         ; "SSUsb1InitCommon"
+7440: orr  w8, wzr, #0x80000000
+7444: mov  w0, w8
+7448: bl   0x1978                 ; DALLOG
+744c: b    0x7450
+7450: b    0x7454                 ; and then it carries on
+```
+
+so this row is **a warning on a branch, not a stop**: *not* a guard before a `return`, but the `NULL` arm of
+an `if` whose other arm (`0x73FC`–`0x7428`) makes the real call. The missing client is an absent AOP/RPMh
+peer — the class of seed the other four blobs restore — and the warning arm falls through to `0x7454` rather
+than returning. It is also the first row this project has from `UsbConfigDxe`'s own common initialisation,
+which is the thing this whole cluster of steps was opened to reach.
+
+**`HAL_clk_FabiaPLLEnableVote Activate Failure`** and **`ASSERT HALclkFabiaPLL.c +184: 0`** are ClockDxe's.
+Both strings are in that image at file offsets `0x1C6F8` and `0x1C724`, and the site is `0x11734`:
+
+```
+11734: stp  x29, x30, [sp, #-16]!
+11738: mov  x29, sp
+1173c: ldr  x8, [x0, #8]          ; the register to poll
+11740: mov  w2, #0x7d0            ; 2000 - a bounded retry count
+11744: orr  w1, wzr, #0x40000000  ; bit 30
+11748: ldr  w9, [x8]
+1174c: ldr  w10, [x0, #16]        ; the mask word
+11750: orr  w11, w10, w9
+11754: str  w11, [x8]             ; read-modify-write, setting the mask's bits
+11758: ldr  x0, [x0]              ; the register to poll
+1175c: bl   0x9b00                ; poll bit 30, bounded by w2 = 2000
+11760: and  w8, w0, #0xff
+11764: cbz  w8, 0x11770           ; the poll failed
+11768: ldp  x29, x30, [sp], #16
+1176c: ret
+11770: adrp x1, 0x1c000
+11774: add  x1, x1, #0x6f8        ; "HAL_clk_FabiaPLLEnableVote Activate Failure"
+11778: orr  w0, wzr, #0x80000000
+1177c: mov  w2, wzr
+11780: mov  w3, wzr
+11784: mov  w4, wzr
+11788: bl   0x8020                ; DALLOG, with the code the panel prints
+1178c: adrp x0, 0x1c000
+11790: adrp x2, 0x13000
+11794: add  x0, x0, #0x724        ; "HALclkFabiaPLL.c"
+11798: mov  w1, #0xb8             ; 184
+1179c: add  x2, x2, #0x1d4        ; the 0 that goes with it
+117a0: bl   0x8124                ; the assert
+117a4: b    0x117a4               ; and it halts here
+```
+
+`0x11734` is entry `+0x30` of the ops block at `.data 0x2B8D0`, whose entries are `+0x00 = 0x10F90`,
+`+0x08 = 0x112C0`, `+0x10 = 0x113DC`, `+0x18 = 0x113F4`, `+0x20 = 0x114F8`, `+0x28 = 0x116B4`,
+`+0x30 = 0x11734`, `+0x38 = 0x117A8`, `+0x40 = 0x117C0`, `+0x48 = 0x117D8`, `+0x50 = 0x1184C`,
+`+0x58 = 0x11854`, `+0x60 = 0x11868`. (An earlier note of this project counted the same routine as `+0x20`
+of a vtable at `0x2B900`; `0x2B8D0 + 0x30 = 0x2B900 + 0x20`, so it is one word reached from two bases.)
+**Nothing in the image calls it**: no `bl` target in ClockDxe's `.text` is `0x11734`, and none is `0x11E5C`
+either. Both are reachable only as function pointers out of an ops block, which is what a HAL of this shape
+looks like and why the call site cannot be named.
+
+Thirteen 4-byte words in `.data` hold `0x2B8D0` — at `0x288A8`, `0x28A08`, `0x28C40`, `0x295B0`, `0x297C8`,
+`0x29EB8`, `0x2A3B0`, `0x2A888`, `0x2A938`, `0x2ACF8`, `0x2ADA8`, `0x2B130`, `0x2B330` — each the ops field
+of a record whose base is `0x20` before it. Their name fields point at two shared slots, `0x25638` (eleven
+of them) and `0x257F8` (the pair at `0x2A868` / `0x2A918`), and those two slots hold the RVAs `0x15774` and
+`0x1578C`, which are the strings `/vcs/vdd_cx` and `/vcs/vdd_mx`. So the thirteen are **rail votes**, not
+clocks: their second qword holds a register offset — `0x0AD00000`, `0x0AD01000`, `0x0AD03000`, `0x00100000`,
+`0x0AF00000`, `0x00106000`, `0x00107000`, `0x03D90000`, `0x03D90100`, `0x09980000`, `0x09980400`,
+`0x09810000`, `0x0AAF0000` — and three of those (`0x00100000`, `0x00106000`, `0x00107000`) are inside the
+board's declared GCC window, which is where the run's own `0x11A004` redirects to zero.
+
+**Which of the thirteen is the Fabia PLL is not established**, and this step does not guess it. The offsets
+above are the second qword as the *file* holds it; the routine reads its two registers from `+0x08` and
+`+0x00` of a runtime object, and the fields the runtime object uses are not the fields the static record
+shows — the descriptor 4.186 walked has `+0x10` as the register and writes `+0x00`, while these thirteen
+show a small offset at `+0x08` and zero at `+0x10`. Deriving an address through that would be a guess in the
+shape of a measurement, so the claim stops at: the failing vote is one of thirteen rail records sharing an
+ops block whose `+0x30` is the routine above, and its register is modelled as zero RAM by this instrument.
+
+### What this decides, and what it does not
+
+**Decides.** 4.186's closing sentence is answered in the direction it was posed. The word at `0x11A004`'s
+bit 31 *is* what holds the run: with it set, four runs that stop at a shared row are joined by a fifth that
+prints three rows past it — from the same row, in a window that gives it 136 more seconds and does not use
+them, with every summary row identical. The GDSC poll is therefore a real stop under this instrument and not
+a print the sampler misplaced, and the register 4.186 identified is the register the poll reads.
+
+**Decides the second half of the question against its framing.** Passing that poll does **not** carry the
+run to USB enumeration. It carries it into `UsbConfigDxe`'s `SSUsb1InitCommon` — a warning on a NULL
+AOP/RPMh client that falls through — and then into `HAL_clk_FabiaPLLEnableVote`, whose bounded 2000-count
+poll of bit 30 fails and whose firmware assert self-branches. So *"one-bit device question"* is not one bit:
+it is the first link of a chain, and the next link is **the same kind of stop** — a write to one register
+and a poll of a status bit, in a driver whose registers this instrument models as zero RAM.
+
+**And that makes the assert weaker evidence than it looks.** `HALclkFabiaPLL.c +184` is the firmware's own
+assert, not an exception: the seeded panel carries one `ASSERT` row and it is this one, with no `ArmCpuDxe`
+row and no `Synchronous Exception` anywhere in it — so the run is not crashing on the seed, and it *did*
+get further than any run of this payload before it. But a bounded poll that returns 0 for 2000 iterations is
+exactly what 4.186's GDSC poll did before the seed removed it, one register down the same driver. Whether
+this one is the instrument's zero RAM again or a real stop on hardware **is not decided here**, because the
+FabiaPLL's register address is not established (above). The honest reading is: the seed moved the run into
+a region it could never reach, and the first thing there is a stop of the same class as the one just
+removed, at a register this step cannot name.
+
+**Does not close**: which of the thirteen rail records the vote used; whether the PLL would lock on
+hardware; whether the run past that point reaches USB enumeration; whether `gNpaClientSS1Bus` NULL is an
+absent peer or a second instrument debt; `P2 WHY`'s `O` at index 42; `Supported`'s entry counter; and
+4.186's device prediction, which this step does not test — no part of it was run on the phone.
+
+**Corrects** 4.186 in two measured places, both above: the GDSC table begins at `0x24DD0` and holds 22
+entries (4.186 named `0x25400`, its entry 18, as the start), and the ops block at `0x2BA20` holds eight
+pointers, not two. Neither touches 4.186's conclusions. And **this step's own first panel is a correction to
+itself**: `qemu-panel-4.188-gdsc-seeded.txt` is not evidence about the seed, because five blobs on a plain
+instrument die at `K 46` before any clock register is read — a fact now stated with a repeat count, so that
+a future step that means to read the clock cluster has to say which instrument it was read on.
+
+### Rows
+
+- **instrument**: `work/out/qemu-probe-4.188/` — `run.sh` (the first, plain run), `run-control.sh` (two
+  plain repeats), `run-icount.sh` (A/B with `-icount`), `run-nullprobe.sh` with `nullprobe.py`, and
+  `run-seeded-suppressed.sh` / `run-suppressed-4blob.sh` / `run-suppressed-4blob-long.sh`, the three runs
+  that carry the reading. All of them use `/tmp/xhci-sentinel-pair.raw`, sha256
+  `a64010f46a2e002176670347bd62601a522bddf9717728e891904d4a7b973159`, the same EL3 stub
+  (`a082b796fb13861fbe62bbcd59f8ca796d20c5b0070285e2387127f07d1d2ba2`), the same four `loader` blobs at
+  their 4.186 addresses, and probe 38e (`work/out/qemu-probe-4.186/gdbprobe38e.py`) where the table says so.
+  The fifth blob is `/tmp/gdsc-clk.bin`, 4 bytes, `00000080`, sha256
+  `6d58692645c9d1cfaf13541cbd258f86193ef63c2f1d38f6bbca9617372d7bd6`, loaded at host `0x4011A004`. Panels:
+  `qemu-panel-4.188-seeded-suppressed.txt` `2f2260ac295d73d2b303d0c6e3b26c0db0b93a1a5278d206d74f7327fee1dca0`
+  (249 rows / 150.2 s),
+  `qemu-panel-4.188-suppressed-4blob.txt` `8d5a6ff6f373ab8712c33d7b8b54e61c5c45f6dc3f1e4988daffc363f08fbe12`
+  (276 rows / 150.1 s),
+  `qemu-panel-4.188-suppressed-4blob-long.txt` `dfdbc42190e0ab2d0bed5d0a6871354478cd69af0ba1c9c2c50fef4b3e2cbd76`
+  (350 rows / 300.3 s), `qemu-panel-4.188-control-1.txt`
+  `6bb32dc95e5d5e435d03580d4dbf84d08e496faeeb5ba43e9593fd0156055ab4` and `-control-2.txt`
+  `2c03fb83d0b99769b46281afc9163fd7a652e2154433cb68ccdb59c6f902d86d` (plain),
+  `qemu-panel-4.188-icount-A.txt` `c1e4102896ae2144ed5946d03b417983edd57570b8e7b07682910a61372ec571`,
+  `qemu-panel-4.188-icount-B.txt`, `qemu-panel-4.188-nullprobe.txt`, and the first, unread
+  `qemu-panel-4.188-gdsc-seeded.txt` `7df5963333b8d7527ad66f83f4d4bac938b224a45dd157de7f9e4c7e2f0e7225`. Statics:
+  `aarch64-linux-gnu-objdump -d` on `device/dxe/ClockDxe.efi`
+  (`c200d38eb3224b31354912947f93eacf238c9d18897cc9fd03c821b677da329d`) at `0x11E5C`–`0x11E98`,
+  `0x11734`–`0x117A8` and `0xC1A0`–`0xC210`, and on `device/dxe/UsbConfigDxe.efi`
+  (`6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, **unchanged**) at `0x73C0`–`0x7470`;
+  a `.data` scan over `0x1D000`–`0x2D000` for words equal to `0x2B8D0` (13 hits) and `0x2BA20` (22 hits at
+  stride `0x58` from `0x24DD0`); a `.reloc` walk over `0x2D000`–`0x2F000` (no fixup on `0x25638` or
+  `0x257F8`, so those are plain RVAs); and `strings -t x` on both images.
+  `uefi/patches/mu-basecore-local.patch` is **not** regenerated: no instrument source changed.
+- **shows**: that bit 31 of the word at `0x11A004` is what holds the run — set it and four runs that stop at
+  `DALLOG Device VCS: Unable to set rail…` are joined by a fifth that prints `SSUsb1InitCommon:
+  gNpaClientSS1Bus is NULL)`, `HAL_clk_FabiaPLLEnableVote Activate Failure` and
+  `ASSERT HALclkFabiaPLL.c +184: 0` past that row, while the same command without the blob returns zero
+  occurrences of all three at 150 s *and* at 300 s; that `0x11A004`'s block is 0 → pool `0x40000000` and the
+  host address is `0x4011A004` by the same arithmetic that reproduces the three seeds already in use; that
+  the SS1-bus warning is `UsbConfigDxe+0x7430` on a branch that falls through, not a stop; that the FabiaPLL
+  failure is `ClockDxe+0x11734`, ops `+0x30` of the block at `0x2B8D0`, whose `bl 0x9B00` poll returns 0
+  within its `w2 = 0x7D0` bound and whose assert self-branches at `0x117A4`; and that the GDSC table is 22
+  entries from `0x24DD0` with `gcc_usb30_prim_gdsc` at entry 18, carrying register `0x0011A004` and the ops
+  block whose `+0x00` is the routine the poll lives in.
+- **adds**: the answer to 4.186's closing device question in the direction *"the bit is the stop"*; the three
+  rows past it, the first rows this project has from `UsbConfigDxe`'s own common initialisation; the full
+  22-entry GDSC descriptor table with all its names, and the thirteen rail records that share the ops block
+  the failing vote lives in, with the two rail names `/vcs/vdd_cx` and `/vcs/vdd_mx` read out of the image;
+  the distinction between the firmware's own assert (a self-branch, no exception, no `ArmCpuDxe` row) and
+  the exception asserts every other panel in this cluster ends on; the plain-instrument result with a repeat
+  count — five plain runs, `K 46` I2C, `DALSys.dll+0x346C`, `ELR 0x9C40E46C`, byte identical; the `-icount`
+  refutation; and the two spent runs, recorded as spent.
+- **corrects**: 4.186 in two measured places — the GDSC table begins at `0x24DD0` (22 entries; `0x25400` is
+  entry 18), and the ops block at `0x2BA20` holds eight pointers, not two — neither of which touches 4.186's
+  conclusions. It records one hypothesis as **refuted rather than carried** — that the probe's pauses, under
+  a host-driven guest clock, were what let 4.186 pass 4 through AdcDxe — since the probe's own log shows it
+  writing `x0` and `-icount` pass A changes nothing. And it records that this step's own first panel's abort
+  was **not a property of the seed**: it is 4.186 pass 1's result reached again because the first run was
+  launched on the plain instrument.
+- **closes**: 4.186's `gcc_usb30_prim_gdsc` bit-31 device question, as a question about *what holds the
+  run*. The answer is that the bit does, and that passing it does not deliver a working USB stack.
+- **does not close**: which of the thirteen rail records the FabiaPLL vote belongs to; whether the PLL poll
+  would pass on hardware; whether `gNpaClientSS1Bus` NULL is an absent peer or a second instrument debt; why
+  `P2 WHY`'s `O` sits at index 42; `Supported`'s entry counter; the first P3 clause; and the whole of P3's
+  device half, none of which this step ran on the phone.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression at
+  `DALSys+0x335C`, which every run that reaches this step's reading depends on and which the probe's own log
+  shows writing guest state; the seeded SMEM target-info word and the AOP gate word, both fabricated and both
+  flagged in every panel header here; the stage-2 redirection of the 55 blocks the platform's 57 declared low
+  regions touch; and that this repository has no source for the drivers it reads — the disassembly is the
+  whole of what is known about them. **This step adds a fifth fabricated word to that list, and it is the
+  most consequential of the five**: the other four restore what an absent peer would have published, whereas
+  `0x4011A004` asserts a hardware status bit that is false, and every row past the poll is said with that lie
+  in place.
+- **a note on the instrument's own data**: the seeded panel's header says *249 rows*, *3 GAP(s)*, and *9
+  row(s) fill all 90 columns*, at 68, 82, 176, 179, 182, 198, 200, 210, **246** — so the FabiaPLL failure row
+  is one of them and its tail is row 247, which is why the two are quoted joined. **The two rows whose
+  presence or absence carries the finding are not among them**: `SSUsb1InitCommon: gNpaClientSS1Bus is NULL)`
+  is 43 characters and `ASSERT HALclkFabiaPLL.c +184: 0` is 31, each complete as printed. Row 244 is 74
+  characters, which is the decimated rail path discussed above and not a truncation of a 90-column row.
+- **not an action**: nothing was flashed and no partition was written by this project; the readback above is
+  a `dd` out of the partition, not a write into it. No stub or Microsoft image was changed, and no volume
+  with a patched `UsbConfigDxe` has left this host. The stock `boot` restore path
+  (`~/backup/gauguin/images/part-boot.img`, 134,217,728 B, sha256
+  `50ef59beb17e75de1e749b7d261eb41a18d9cca025befb3357e43e239de78ef3`) was re-verified against the `EXPECT`
+  pinned at `tools/restore-stock-boot.sh:36` in this step and is intact. The console of the 4.187 run has
+  **not** been read: it is on the phone's display, `adb exec-out screencap -p` returns 53 bytes under TWRP now
+  as it did then so there is no screenshot route, and no photograph has been supplied. Nothing in this step's
+  findings came from the device. `userdata` (107 GB, unbacked), the partition table and the firmware LUN
+  remain untouched. `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The porting goal is unchanged
+  and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and
+  P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.
+- **device state, in the order it was observed, because the two readings differ**: during the run the phone
+  was booted into the payload of Step 4.187's P3 experiment, loaded with `fastboot boot` and running from
+  RAM — `fastboot devices` and `adb devices` both empty and no phone-class device on `lsusb`, so USB was not
+  merely quiet but absent, as every device counterpart of these panels has been. At the end of the step it
+  was **in TWRP recovery** instead: `adb devices` lists `d25f844e`, the props read `ro.product.board =
+  gauguin` and `ro.build.display.id = twrp_gauguin-eng 127 SP2A.220701.001 eng.dhollmen.date=Wed Jul 27
+  18:15:22 +1 2022 test-keys`, the kernel is `4.19.113-perf`, `adb shell id` returns `uid=0(root)`, and the
+  phone enumerates as `2717:ff68` on bus 003. `fastboot devices` is empty, so the P3 `fastboot boot`
+  workflow cannot run until the phone is rebooted to the bootloader — a physical action this host cannot
+  take — and `/dev/mem` and `/dev/kmem` do not exist on this kernel, so the phone's `0x146AA000` cannot be
+  read from here either. What moved it between the two observations is **not** established, and neither
+  reading says whether TWRP was flashed to `recovery` or only booted.
+- **the payload in `boot`, read for the first time since it was flashed**: `tools/probe-fingerprint.py
+  --read` takes a read-only `dd` of `/dev/block/by-name/boot` — 4,194,304 B, sha256
+  `e905b3a66819949bf6c94c4f807bea3c3f6cf8117c5700470655800bdf1b0431`, now at
+  `work/out/boot-readback.bin` — and decodes it: an Android boot header with `page_size` 2048, header
+  version 1 and a **gzip** kernel of `kernel_size` 1,136,864, so the payload occupies `0x0..0x116000` and is
+  laid over the tail of the Smartisan image that was in the partition. That is the flash-based state the
+  standing relaxation describes — written by this project's own tooling at an earlier step and left there —
+  and not a stock partition and not the running in-RAM payload. Its ladder reading is **13 of 14**, missing
+  only `P2FreeWhy`; the record names `90b21643…` at the full ladder as the payload in `boot`, and that file
+  has since been rebuilt under the same name, so the record's identity cannot be re-checked against it and
+  the two do not agree. The bytes are matched by **no other image**: the first 1,138,912 bytes were compared
+  against all 183 `ANDROID!` files of at least that size under this repository, `/tmp`, `~/backup` and
+  `~/Downloads`, and the only two matches are this readback and `/tmp/boot-now.img`, the 128-MiB read of the
+  same partition taken in the same session. So the readback is now the only copy of what is on the phone —
+  the situation Step 4.98 recorded for `boot-now-0923`, arrived at the same way — and it is kept for that
+  reason. Which build this is, and why it carries thirteen instruments rather than fourteen, are **not**
+  established.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.

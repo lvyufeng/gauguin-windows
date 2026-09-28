@@ -1443,7 +1443,71 @@ Work:
 > `0x146AA000` cannot be read from there. Nothing was flashed, no partition was written, `userdata` and the
 > partition table are untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08`
 > step 4.187.
-
+>
+> **Step 4.188 — the GDSC status bit *is* what holds the run, and what lies past it is the same kind of stop
+> one register down.** 4.186's closing device question is answered in the direction it was posed, by putting
+> the one bit back: one `loader` blob of `0x80000000` at host `0x4011A004` (`0x40000000 + (0x11A004 &
+> 0x1FFFFF)`, block 0 → pool `0x40000000` by the same arithmetic that reproduces `0x1FD4000 → 0x40DD4000`,
+> `0xC3F000C → 0x42BF000C`, `0x18321700 → 0x46D21700`). Four runs of this payload stop at the shared row
+> `DALLOG Device VCS: Unable to set rail…`; the fifth prints three rows past it —
+> `SSUsb1InitCommon: gNpaClientSS1Bus is NULL)`, `HAL_clk_FabiaPLLEnableVote Activate Failure…`,
+> `ASSERT HALclkFabiaPLL.c +184: 0` — and the control at the identical 150-second window **and** at 300
+> seconds returns `grep -c` **0** for all three, in a window whose `K 83 SO 76/69`, `P2 USB`, `P2 SUPP n=17`,
+> `P2 STATS discovered=83 apriori=69/70`, `P2 SEQ` and `P2 WHY` rows are identical string for string. So the
+> poll at `ClockDxe+0x11E8C` is a real stop under this instrument. **But passing it does not deliver USB
+> enumeration**: the run reaches `UsbConfigDxe`'s own common initialisation (a `NULL` AOP/RPMh client, a
+> warning on the `NULL` arm of an `if` at `0x7430` that falls through, not a stop) and then stops in
+> `ClockDxe+0x11734`, ops `+0x30` of the block at `0x2B8D0`, whose bounded `w2 = 0x7D0` poll of bit 30 fails
+> and whose **firmware assert** self-branches at `0x117A4` — a self-branch, so no `ArmCpuDxe` row and no
+> exception anywhere in the panel. That is the same shape as the stop the seed just removed, so *"one-bit
+> device question"* is not one bit: it is the first link of a chain. **Two corrections to 4.186**, both
+> measured: the GDSC descriptor table has stride `0x58` but begins at file offset **`0x24DD0`** and holds
+> **22** entries — `0x25400`, which 4.186 named as the start, is entry 18 (`gcc_usb30_prim_gdsc`,
+> `+0x10 = 0x0011A004`, `+0x28 = 0x2BA20`, `+0x48 = "/vcs/vdd_cx"`), with `gcc_ufs_phy_gdsc` at entry 17 and
+> `cx_gdsc` at 19 — and the ops block at `0x2BA20` holds **eight** pointers
+> (`0x11E5C`/`0x11E98`/`0x11EC4`/`0x11EF8`/`0x11F14`/`0x11F2C`/`0x11F44`/`0x11F70`), not the two 4.186
+> recorded. Neither touches 4.186's conclusions, and the whole 22-entry table is now named: 21 GDSC names
+> from `video_cc_mvs0_gdsc` to `cam_cc_ipe_0_gdsc` and `gcc_usb30_prim_gdsc` the only USB one. **New and
+> not established**: which of the **thirteen** `.data` words equal to `0x2B8D0` (at `0x288A8`…`0x2B330`,
+> records based `0x20` earlier, names resolving to the rail strings `/vcs/vdd_cx` and `/vcs/vdd_mx`) is the
+> Fabia PLL the failing vote used — deriving it would be a guess in the shape of a measurement, so this step
+> stops at *a rail vote whose register this instrument models as zero RAM*. **Method, and a dead hypothesis
+> recorded dead**: the plain instrument never reaches `ClockDxe+0x11E8C` at all — **five** runs with no probe
+> (`K 46` = `I2C`, `D06A77F4-…`, Apriori index 46) die in the driver after it, `AdcDxe` (`9143B2B7-…`), at
+> `DALSys.dll+0x346C` with `ELR 0x9C40E46C` and `FAR 0xAFAFAFAFAFAFAFAF`, byte identical each time — which is
+> why every K-83 panel of this project carries probe 38e's declared `/pmic/target` suppression, and the
+> suppression is visible in the panels themselves: `K 47 SU 44/69 9143B2B7-…` and
+> `P2 DIAG S 9143B2B7-… Unsupported`. That the suppression is a *state* difference and not a *timing* one is
+> measured, not asserted: under `-icount shift=4,align=off,sleep=off` the unperturbed run aborts at the same
+> instruction as its no-`icount` control, and the probe's own log prints `-> x0 zeroed: this record is not
+> published`. The elapsed-time hypothesis (this instrument has no `-icount` and no `-rtc clock=`, so a
+> gdbstub pause injects guest time) is **refuted** and is recorded so it is not re-derived; two further runs
+> spent on it are recorded as spent. **This step's own first panel is a correction to itself**:
+> `qemu-panel-4.188-gdsc-seeded.txt` is a plain-instrument run in which the fifth blob was never read, so it
+> must not be quoted as a test of the seed. Instrument: `work/out/qemu-probe-4.188/` (seven run scripts) and
+> panels `qemu-panel-4.188-seeded-suppressed.txt` (sha256
+> `2f2260ac295d73d2b303d0c6e3b26c0db0b93a1a5278d206d74f7327fee1dca0`, 249 rows / 150.2 s),
+> `…-suppressed-4blob.txt` (`8d5a6ff6…`, 276 rows / 150.1 s), `…-suppressed-4blob-long.txt` (`dfdbc421…`,
+> 350 rows / 300.3 s), `…-control-1.txt` / `-control-2.txt`, `…-icount-A.txt` / `-icount-B.txt`,
+> `…-nullprobe.txt`; the seed is `/tmp/gdsc-clk.bin`, 4 bytes `00000080`, sha256
+> `6d58692645c9d1cfaf13541cbd258f86193ef63c2f1d38f6bbca9617372d7bd6`. **This step adds the fifth fabricated
+> word to this project's list of instrument lies, and it is the most consequential of the five**: the other
+> four restore what an absent peer would have published, whereas `0x4011A004` asserts a hardware status bit
+> that is false, and every row past the poll is said with that lie in place. Nothing was flashed, no partition
+> was written, and `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc61…`. **The step's one device reading
+> is a read-only `dd` of `boot`, and it corrects a record that had stopped being checkable**: the phone is in
+> TWRP (`d25f844e`) with `fastboot devices` empty, and the partition holds an instrument payload — `page_size`
+> 2048, header version 1, gzip kernel of `kernel_size` 1,136,864, so `0x0..0x116000` written over the
+> Smartisan image's tail, which is the flash-based state the standing relaxation describes — reading **13 of
+> 14** on `tools/probe-fingerprint.py`'s ladder with only `P2FreeWhy` absent, which **does not agree** with the
+> record's `90b21643…` at the full ladder (that file has since been rebuilt under the same name, so the record
+> cannot be re-checked against it). No image retained anywhere matches it: the first 1,138,912 bytes were
+> compared against all 183 `ANDROID!` files of at least that size under the repository, `/tmp`, `~/backup` and
+> `~/Downloads`, and the only two hits are `work/out/boot-readback.bin` (4,194,304 B, sha256 `e905b3a6…`) and
+> the 128-MiB `/tmp/boot-now.img` — both reads of the phone itself, so the readback is now its only copy.
+> Which build it is, and why thirteen instruments and not fourteen, are **not established**. See `docs/08`
+> step 4.188.
+>
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

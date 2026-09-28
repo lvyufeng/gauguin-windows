@@ -3737,7 +3737,53 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > was found booted into TWRP recovery on `adb` (`d25f844e`, `ro.product.board = gauguin`) rather than in
 > fastboot, which is a device-state change this project did not make and does not act on. See `docs/08` step
 > 4.187.
-
+>
+> **Step 4.188 — the `gcc_usb30_prim_gdsc` bit-31 poll is a real stop, and the link past it is a rail vote
+> that stops the same way.** 4.186's device question — *does the `gcc_usb30_prim_gdsc` operation complete on
+> hardware?* — is answered on the instrument by putting the bit back: `0x80000000` at host `0x4011A004`
+> (`0x40000000 + (0x11A004 & 0x1FFFFF)`; block 0 → pool `0x40000000`, the same redirect 4.186 saw from the
+> other side). Four runs stop at `DALLOG Device VCS: Unable to set rail…`; the seeded fifth prints
+> `SSUsb1InitCommon: gNpaClientSS1Bus is NULL)`, `HAL_clk_FabiaPLLEnableVote Activate Failure…` and
+> `ASSERT HALclkFabiaPLL.c +184: 0` past it, and the 150-second *and* 300-second controls print **0** of all
+> three. The routine the seed defeats is the descriptor's own — entry 18 of the GDSC table at `0x24DD0`,
+> named `gcc_usb30_prim_gdsc`, `+0x10 = 0x0011A004`, dispatched through the ops block at `0x2BA20` whose
+> `+0x00 = 0x11E5C`; on that path `[x0+8]` is zero so the clear at `0x11E84` and the spin at `0x11E8C` are
+> the same register. **What lies past it is not USB enumeration.** It is `UsbConfigDxe`'s own
+> `SSUsb1InitCommon` — `0x73F0 ldr x9,[x9,#2344]` / `0x73F8 cbz x9,0x742C` / `0x7430`–`0x744C` DALLOG on the
+> `NULL` arm of an `if` that falls through to `0x7454`, so a warning on an absent AOP/RPMh client and not a
+> stop — and then `ClockDxe+0x11734`: ops `+0x30` of the block at `.data 0x2B8D0`, a read-modify-write of
+> bit 30 against the mask at `+0x10` followed by a bounded `bl 0x9B00` poll (`w2 = 0x7D0` = 2000) of bit 30,
+> failing through `0x11764 cbz` into `HAL_clk_FabiaPLLEnableVote Activate Failure` at `0x11788`, the assert
+> at `0x117A0` (`w1 = 0xB8` = `HALclkFabiaPLL.c +184`) and a self-branch at `0x117A4`. That is the
+> **firmware's own assert**, not an exception: the panel carries no `ArmCpuDxe` row and no `Synchronous
+> Exception` at all, which is the difference between this step's stop and every other stop in this cluster.
+> Thirteen `.data` words equal `0x2B8D0` (at `0x288A8`…`0x2B330`, records based `0x20` earlier) and their
+> name slots resolve to `/vcs/vdd_cx` (eleven) and `/vcs/vdd_mx` (the pair at `0x2A868` / `0x2A918`), so the
+> failing call is a **rail vote**, one of thirteen, with a register this instrument models as zero RAM —
+> **which one is not established**, and the step does not guess it. Two corrections to 4.186, both measured:
+> the GDSC table has stride `0x58` but begins at `0x24DD0` and holds **22** entries (`0x25400` is entry 18,
+> not the start; `gcc_ufs_phy_gdsc` is 17, `cx_gdsc` 19), and the ops block at `0x2BA20` holds **eight**
+> pointers, not the two 4.186 recorded. **Method**: the plain instrument cannot reach the poll at all — five
+> runs without probe 38e die in `AdcDxe` (`9143B2B7-…`, `K 47 SU` when it is suppressed) inside
+> `DALSys.dll+0x346C`, `ELR 0x9C40E46C`, `FAR 0xAFAFAFAFAFAFAFAF`, byte identical — so every panel that
+> reads this cluster carries the declared `/pmic/target` suppression, and the elapsed-time reading of why
+> (`-icount`/`-rtc` are both absent from this instrument's argv) is **refuted** by an `-icount` pass A that
+> aborts at the same instruction and by the probe's own `-> x0 zeroed: this record is not published`. The
+> fifth fabricated word in this project's instrument list is this one, and it is the most consequential: the
+> other four restore what an absent peer would have published, this one asserts a hardware status bit that is
+> false. **What `boot` is actually holding, read for the first time since it was flashed** (a read-only `dd`,
+> with the phone in TWRP `d25f844e` and `fastboot devices` empty): an Android boot header, `page_size` 2048,
+> header version 1, a **gzip** kernel of `kernel_size` 1,136,864 — so `0x0..0x116000` written over the tail of
+> the Smartisan image the partition held, which is the flash-based state the standing relaxation describes —
+> and its ladder reading is **13 of 14**, only `P2FreeWhy` absent, which **disagrees** with the record's
+> `90b21643…` at the full ladder. No image retained anywhere matches those bytes: the first 1,138,912 were
+> compared against all 183 `ANDROID!` files at least that size under the repository, `/tmp`, `~/backup` and
+> `~/Downloads`, and both hits are reads of the phone itself, so `work/out/boot-readback.bin` (4,194,304 B,
+> sha256 `e905b3a66819949bf6c94c4f807bea3c3f6cf8117c5700470655800bdf1b0431`) is now the only copy of what is
+> on it. Nothing was flashed, no partition was written, `device/dxe/UsbConfigDxe.efi` is still
+> `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`, and no volume with a patched
+> `UsbConfigDxe` has left this host. See `docs/08` step 4.188.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
