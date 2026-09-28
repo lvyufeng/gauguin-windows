@@ -43970,3 +43970,64 @@ that `先读屏，再刷下一次` requires before any payload boots. There is s
 attached to this host**; the gate's medium exists here only as an image. `userdata` (107 GB, unbacked),
 the partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+---
+
+## Step 4.218 — the monitor is asked whether the guest is stuck or merely slow, and it answers: the whole of `boot.wim` has been read off the stick, no I/O has been issued for seven minutes, and a core is at 86%
+
+**A question the screen cannot answer, and the source that can.** Step 4.217 read the frames and
+found a `Windows Setup` window that had not changed in four minutes; that is not enough to tell a
+guest that is working from a guest that has stopped, because a CPU-bound phase and a hang look
+identical on a framebuffer. The QEMU monitor does distinguish them, and the guest is still running,
+so it is asked. `info blockstats`, sampled three times over three minutes:
+
+```
+boot: rd_bytes=483487232 wr_bytes=0 rd_operations=7746 wr_operations=0 idle_time_ns=452675431182
+hd:   rd_bytes=10752     wr_bytes=512 rd_operations=15 wr_operations=1 idle_time_ns=880602360666
+```
+
+`boot` is the FAT32 stick and `hd` is the 64 GB blank disk standing in for the internal UFS.
+`sources/boot.wim` on the stick is **465,806,736 bytes**, and the stick has been read
+**483,487,232** — so the guest has taken the entire WinPE image the stick carries, plus 17,680,496
+bytes of other files, in 7,746 operations of about 62 KB each. That is a much stronger statement
+about the medium than a screenshot: **`Fat` over `PartitionDxe` over `DiskIoDxe`, the three drivers
+gauguin actually has, delivered Setup its boot image, in full, from the shape of media gauguin can
+mount.** The `hd` numbers are the firmware's partition probe — 15 reads of 10,752 bytes, and a single
+512-byte write — which is to say no partition has been created and nothing has been installed, as
+expected from a Setup that has not reached its disk step.
+
+**What the same numbers say about progress.** Across the three samples `rd_bytes` on both drives is
+**frozen** while `idle_time_ns` grows in step with wall clock: no block request has been pending
+since about 05:16, roughly seven minutes before the last sample. QEMU meanwhile holds **86% of a
+core**. A guest that has stopped issuing I/O and is still burning CPU is not hung and is not waiting
+on a device — it is computing. Expanding a 466 MB WIM to its uncompressed size under TCG is exactly
+that, and it is the single slowest thing in the boot. This is a reading of the run's *state*, not of
+its outcome.
+
+**And the screen, five frames later, still changes in one place.** Frames 3–8 span 05:12:48 to
+05:22:49. Every one of them differs from frame 3 only inside **x 90..111, y 180..200** — one element
+about 22×21 pixels whose shape changes from frame to frame — while the remaining 479,700 pixels of
+the 800×600 screen are byte-identical. Stated for the record as what it is and is not: that element
+is an animation still running inside the `Windows Setup` window of 4.217; it is not the disk step,
+not an error dialog, and not a spinner that has stopped.
+
+**decides**: that the guest read the whole of `sources/boot.wim` — 483,487,232 bytes off the stick,
+against the file's 465,806,736 — so the FAT path `DiskIoDxe` + `PartitionDxe` + `Fat` did deliver
+Setup its WinPE image, which is the strongest statement available on this host that the medium is
+sound in the shape the phone can read; that the 64 GB target disk has seen 15 reads and one 512-byte
+write, i.e. a partition probe and nothing else; that no block request has been pending on either
+drive for seven minutes while QEMU holds 86% of a core, which is a CPU-bound phase and not a hang or
+an I/O wait; and that frames 3 through 8 differ only within a 22×21-pixel element. **does not
+decide**: whether the CPU-bound phase completes, or what Setup draws next if it does; whether the
+installer reaches its disk step and lists the 64 GB disk; anything about booting on gauguin itself;
+and nothing about the P3 gate on the device, which is still unmet. The run has roughly two and a half
+hours of its 10800-second budget left and this entry records its state, not its result. **Not an
+action**: `info blockstats` read from the running guest's monitor socket, and frame diffs on files
+under `work/`, which is gitignored. No flash, no `fastboot` command, no partition written, no seed
+written, no console read from the device and no device file opened. **device state**: unchanged —
+`adb devices`, `fastboot devices`, `lsusb` and both tty globs are empty, so the three physical actions
+remain outstanding: a reset of the phone, the reboot to the bootloader the P3 `fastboot boot` workflow
+needs, and the screen photograph that `先读屏，再刷下一次` requires before any payload boots. There is
+still **no removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the partition
+table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
