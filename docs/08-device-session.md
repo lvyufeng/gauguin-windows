@@ -44031,3 +44031,79 @@ needs, and the screen photograph that `先读屏，再刷下一次` requires bef
 still **no removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the partition
 table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+---
+
+## Step 4.219 — P4 is planned from the partition table rather than from the assumption that it is expensive, and the table says `userdata` is the last entry in it
+
+**A phase that had a name and no content.** `docs/00` carried P4 as three lines — repartition,
+deploy, first boot — with a gate, a point of no return, and nothing about where the space comes
+from, what gets created in it, or in what order. That is the shape of a plan that has not been
+checked against the disk. It has now been checked, and the check is the whole of this step; no
+device was touched, no image was written, and no gate moves on the strength of it.
+
+**The geometry is what makes the phase affordable.** `sda` is 118 GB carrying **35 partitions**,
+and `userdata` is **#34 — 107.0 GB, and the last entry in the table** (`docs/02`). Every other
+candidate is disqualified twice over. `super` (#32, 8.5 GB) is Android's read-only dynamic
+partition set and is not free space in any sense; `cust` is 1.0 GB; `cache`, `exaid` and `rawdump`
+are smaller still. And none of them is large enough regardless: Windows 11 ARM64 wants 20–30 GB
+installed, which is more than all four together. So the space can only come from `userdata`, and
+its position is the reason that costs as little as it does — **shrinking the last partition in the
+table and appending new entries rewrites `userdata`'s end LBA and adds three entries; it moves no
+other partition, and no partition's data has to be relocated.** Had `userdata` sat in the middle of
+the table, the same phase would have been a different and much larger piece of work.
+
+**What gets created, with the type GUIDs recorded rather than remembered.** An **ESP** of 512 MB,
+type `EF00`, FAT32 — the firmware's boot entry points at `\EFI\Microsoft\Boot\bootmgfw.efi` and
+something has to be able to read it before Windows exists to be booted. An **MSR** of 16 MB, type
+`0C01`, which is optional on a single-OS install and is listed so that its absence, if it is
+omitted, is a decision rather than a gap. And a **Windows** partition taking the remainder as
+NTFS: 64 GB is comfortable and 30 GB is the floor that does not fight the updater.
+
+**Two routes onto it, and the second one collapses into the first.** Route A is Setup on the
+device: boot the stick, `Shift+F10` in WinPE, `diskpart`, `dism /Apply-Image
+/ImageFile:X:\sources\install.wim`, `bcdboot` to the ESP. Every tool that needs is inside the
+465 MB `boot.wim` the stick carries, and step 4.218 measured that the whole of that file *is* read
+off the stick through `Fat` over `PartitionDxe` over `DiskIoDxe` — the same three drivers gauguin
+has. It needs a USB keyboard, which is P3 item 3, and it is the route the P3 gate is already one
+step along. Route B is offline deployment from this host — `wimlib-imagex apply` onto the NTFS
+partition — but `bcdboot` is a Windows tool, and the conventional workaround is to boot WinPE once
+to run it, which is Route A again. **Route A is the plan.** B is recorded only because it removes
+the interactive install step and would be worth revisiting if Setup itself proves unreliable on
+gauguin.
+
+**The order, with the step that cannot be undone marked as such.** Re-verify every file in
+`~/backup/gauguin/images/` against its digest and `tools/restore-stock-boot.sh`'s `EXPECT` against
+`part-boot.img`, because the installed ROM is a `user/dev-keys` build with no public image and
+those files are the only copy. Move the user's data off `userdata` — 107 GB, unbacked, **and only
+the user can do this**; nothing in this project can and nothing should proceed before it is done.
+Read the pre-change GPT and keep the output (`python3 tools/gpt.py GPT-sda.bin`), because the
+*secondary* GPT at the end of the LUN is what a shrink rewrites and is what a failed edit leaves
+inconsistent. Reach the P3 gate on the phone. Then — ⚠ **irreversible** — shrink `userdata` and
+create the three partitions, with the particular hazard named: an interruption between the GPT
+write and the filesystem resize leaves `userdata` unreadable and there is no image to restore it
+from. Then install, then first boot.
+
+**And what the phase does not claim.** Its gate is a desktop, not a working phone. GPU
+acceleration, Wi-Fi, Bluetooth, audio, the touchscreen, sensors and the vibrator are P5's, and
+**the modem and the cameras are not attempted at all**, because no driver exists for them — a
+ceiling `docs/05` already records and this plan now repeats where the deployment is described, so
+that a desktop appearing is not mistaken for the goal being met.
+
+**decides**: that P4's space can only come from `userdata`, because every other partition is both
+occupied and too small; that `userdata` being #34 and last in a 35-entry table is what makes the
+shrink a rewrite of one end LBA plus three appended entries rather than a relocation; that the new
+layout is a 512 MB `EF00` FAT32 ESP, an optional 16 MB `0C01` MSR and an NTFS Windows partition of
+64 GB preferred and 30 GB minimum; that Route A (Setup on the device) is the plan and Route B
+(offline `wimlib-imagex apply`) collapses back into it because `bcdboot` is a Windows tool; and
+that the order is backups, the user's data, the pre-change GPT, the P3 gate, the irreversible
+repartition, then install. **does not decide**: anything measured on the device — this step read
+`docs/02` and reasoned, and every number in it is from the P0 survey; whether Setup on gauguin
+behaves as it does under AAVMF, which the in-flight run is still determining; and whether the P3
+gate will be met at all, which is unchanged and still the binding constraint. **Not an action**:
+one edit to `docs/00-plan.md`, replacing P4's three-line stub with the plan above. No flash, no
+`fastboot` command, no partition written, no seed written, no console read from the device and no
+device file opened. **device state**: unchanged, as recorded immediately above — and the in-flight
+run `br7srnvmx` was still alive and CPU-bound at 17 minutes of its 10800-second budget when this
+was written, with files 3 through 9 all in the 765–779-colour band that step 4.218 identified as
+Setup's own window.

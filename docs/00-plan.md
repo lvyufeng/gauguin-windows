@@ -2447,14 +2447,64 @@ control do.
 
 ## P4 — Windows deployment
 
-1. Repartition: shrink `userdata`, create an ESP, and add the Windows partition layout
-2. Fetch a Windows 11 ARM64 build (UUP dump) and deploy it to the device
-3. First boot
+**Gate:** Windows desktop appears. **Point of no return:** the repartition destroys
+`userdata`, and there is no image of it to restore from.
 
-**Gate:** Windows desktop appears.
+### What has to move, and where it can come from
 
-**Point of no return:** this phase destroys `userdata`. Everything the user wants to keep
-must be off the device before it starts.
+`sda` is 118 GB with 35 partitions and `userdata` is #34, **107.0 GB and the last entry in
+the table** (`docs/02`). That position is the whole reason this phase is as cheap as it is:
+shrinking the last partition and appending new ones rewrites `userdata`'s end LBA and three
+new entries, and **moves no other partition**. Every alternative costs far more — `super`
+(#32, 8.5 GB) is Android's read-only dynamic partition set, `cust` is 1.0 GB and `cache`,
+`exaid` and `rawdump` are smaller still, and none of them is large enough anyway: Windows 11
+ARM64 wants 20–30 GB installed.
+
+| New | Size | Type | Why |
+|---|---|---|---|
+| ESP | 512 MB | `EF00`, FAT32 | the firmware's boot entry points at `\EFI\Microsoft\Boot\bootmgfw.efi` |
+| MSR | 16 MB | `0C01` | optional on a single-OS install; omit it if one fewer unexplained partition is wanted |
+| Windows | remainder | NTFS | 64 GB is comfortable; 30 GB is the floor that does not fight the updater |
+
+### How Windows gets onto it
+
+Two routes, and the stick decides between them.
+
+**Route A — Setup on the device.** Boot the stick, `Shift+F10` in WinPE, `diskpart` for the
+three partitions, `dism /Apply-Image /ImageFile:X:\sources\install.wim` onto the new volume,
+`bcdboot` to write the ESP. Every tool needed is inside the 465 MB `boot.wim` the stick
+carries — and step 4.218 measured that the whole of that file *is* read off the stick through
+`Fat` over `PartitionDxe` over `DiskIoDxe`. This is the route the P3 gate is about, one step
+further, and it needs a keyboard over USB host (P3 item 3).
+
+**Route B — offline deploy from this host.** `wimlib-imagex apply` the image onto the NTFS
+partition and write the ESP's boot files without booting the device. But `bcdboot` is a
+Windows tool, and the conventional workaround — boot WinPE once to run it — collapses Route B
+back into Route A. **Route A is the plan**; B is noted because it removes the interactive
+install step and would be worth revisiting only if Setup itself proves unreliable on gauguin.
+
+### Order, with the irreversible step marked
+
+1. **Re-verify the backups.** Every file in `~/backup/gauguin/images/` against its recorded
+   digest, and `tools/restore-stock-boot.sh`'s `EXPECT` against `part-boot.img`. The installed
+   ROM is a `user/dev-keys` build with no public image, so these files are the only copy.
+2. **Move the user's data off `userdata`.** 107 GB, unbacked, and **only the user can do
+   this.** Nothing in this project can, and nothing should proceed before it is done.
+3. **Read the pre-change GPT and keep the output** — `python3 tools/gpt.py GPT-sda.bin`. The
+   *secondary* GPT at the end of the LUN is what a shrink rewrites, and it is the thing a
+   failed edit leaves inconsistent.
+4. **Reach the P3 gate on the phone** — a Windows 11 ARM64 installer booting off the stick and
+   seeing the internal UFS. P4 cannot begin before this; it is the same boot, one step on.
+5. **Shrink `userdata`; create ESP, MSR and NTFS.** ⚠ **Irreversible.** An interruption between
+   the GPT write and the filesystem resize leaves `userdata` unreadable and there is no image
+   to restore it from.
+6. **Install, then first boot.**
+
+### What P4 does not attempt
+
+The gate is a desktop, not a working phone. GPU acceleration, Wi-Fi, Bluetooth, audio, the
+touchscreen, sensors and the vibrator are P5's, and **the modem and cameras are not attempted
+at all — no driver exists for them** (`docs/05`, and the ceiling already recorded there).
 
 ---
 
