@@ -3452,6 +3452,35 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > driver, so its order cannot validate that half of P3; and both orders put BDS before
 > `UsbConfigDxe` (58 < 65, 44 < 57). Instrument: `tools/apriori-stock-diff.py --index`. See
 > `docs/08` step 4.176.
+>
+> **Step 4.177 — the ACPI tables are packaged, located, checksummed and installed by the image's own
+> driver, and the row that says so reads as a failure.** The XCHI-carrying payload
+> (`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`) differs from the phone's by exactly four FFS
+> files, one of which is `AcpiTables` — `FILE_GUID 7E374E25-8E01-4FEE-87F2-390C23C606CD`, FFS type
+> `0x02`, 13,702 B, header at inner-FV `0x577c78` — holding six tables: `SSDT` 61 B @`0x00577c94`,
+> `DSDT` 12,341 B @`0x00577cd8`, `APIC` 724 B @`0x0057ad14`, `FACP` 276 B @`0x0057afec`, `FACS` 64 B
+> @`0x0057b104`, `GTDT` 156 B @`0x0057b148`. `AcpiTableDxe` (44,626 B) and `AcpiPlatform` (20,066 B)
+> are byte-for-byte the same in both volumes; what differs is the storage file.
+> `AcpiPlatform` consumes `gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiTableStorageFile`, whose default in
+> `MdeModulePkg.dec:1511` is exactly that GUID and which this platform does not override. The
+> phone's volume carries no such file, so `LocateFvInstanceWithTables` returns `EFI_NOT_FOUND` and
+> its driver takes `return EFI_ABORTED` at `AcpiPlatform.c:191` — the panel's `Aborted`. The XCHI
+> volume's driver instead walks the storage file's `EFI_SECTION_RAW` instances, checksums each table
+> and installs it, then returns `EFI_REQUEST_UNLOAD_IMAGE` at `:251`, its normal success exit, which
+> `CoreExit` prints as `start failed: 00000001` and `P2 DIAG` counts into `diag=7` only because
+> `DXE_ERROR` sets `MAX_BIT` and `EFI_ERROR()` is therefore true of it. The installed `DSDT`
+> (`sha256 0f5df26b424ab609…`) is byte-identical to the `DSDT.aml` that
+> `tools/sync-uefi-platform.sh:126` compiles with `iasl -p "$ACPI_DST/DSDT" "$ACPI_DST/gauguin.asl"`,
+> and the tracked source of record is `tools/acpi/gauguin.asl` (`sha256 c0125e2c84866033…`), so the
+> chain from source of record to installed table is closed. The phone's payload predates this work
+> (image dated 2026-09-23 15:09 against the ACPI work of 2026-09-27), so its `Aborted` is not a
+> regression in the tables. `FACP` and `FACS` do not checksum before `AcpiTableDxe` has written the
+> DSDT and FACS addresses into FACP, and `FACS` has no checksum field at all; `fv-inventory.py`'s
+> own note says so and it is not a fault. Instruments: `tools/fv-inventory.py` (`--roster`, `--acpi`,
+> `--dump-fvmain`) and `tools/depex-census.py`, both reading the **volume** rather than the tree,
+> because this repository tracks no INF of a shipped binary. No firmware was built. See `docs/08`
+> step 4.177.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source

@@ -1050,6 +1050,51 @@ Work:
 > driver**, so the stock order cannot validate that half of P3 — and both orders put BDS before
 > `UsbConfigDxe` (58 < 65 stock, 44 < 57 ours), so the USB region was not rearranged. Instrument:
 > `tools/apriori-stock-diff.py --index`. No firmware was built. See `docs/08` step 4.176.
+>
+> **Step 4.177 — both XCHI drivers are not merely *released* into a complete protocol database but
+> *started*, and the dispatcher's own rows say so.** 4.176 closed on a limit in its own words:
+> *"Released and succeeded are different questions, and this step answers only the first."* The
+> treatment recipe of 4.163 (`gdbprobe26.py`, `/pmic/target`'s stale DALSys record suppressed at
+> `DALSys+0x335c`, here with `--base 0x9c40d000` read off *this* guest's own exception dump) applied
+> to `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` reaches the ordinary pass and prints
+> `K 73 Ss 67/69 free=1024 BEB12BEE-…`, `K 74 Ss 68/69 free=1024 B7F50E91-…`,
+> `K 75 Ss 69/69 free=1024 0A134F0E-…` — `XhciPciEmulation`, `XhciDxe` and `UsbInitDxe`, each
+> returning `EFI_SUCCESS`. `P2Tick`'s second letter is the attempt's own status class
+> (`P2WhyLetter`, `:555-592`) and `mP2Started` is incremented at `:1158-1159` *before* the row prints
+> at `:1167`, so the numerators 67/68/69 already count those three. Its digest
+> `P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0` closes against the census's own
+> `dispatcher-visible files (DRIVER=83): 83` — 76 + 7 = 83 — and `P2 NOLOAD total=0` says nothing was
+> dropped silently. No earlier instrument could have measured this: on the plain panel the same
+> payload dies at Apriori slot 18, the phone payload's own wall, and with the four loader seeds added
+> it dies on 4.161's wall — `Synchronous Exception at 0x000000009C41046C`, `FAR 0xAFAFAFAFAFAFAFAF`,
+> `[ 1] AdcDxe.dll`. `P2 SEQ` is 69 characters on the 80-file and the 83-file payload alike and
+> **byte-identical** between them (the older build prints no `P2 WHY`, so only `SEQ` crosses), because
+> 69 is what was *promoted* while the array holds 70; its six non-`s` characters are the six promoted
+> start failures at positions 28/35/47/48/58/61, and the run's **seventh** failure (`AcpiPlatform`,
+> `K 83`) has no character in the string at all — so the string is not merely harder to read than the
+> `K` rows, it is incomplete in a direction that would have been invisible. The array's 70th and
+> unmatchable entry now has a name: slot 0, `D6A2CB7F-6A18-4E2F-B43B-9920A733700A`, is `DxeCore` —
+> the only one of the 70 whose FFS file is not an `FV_FILETYPE_DRIVER` — which is what
+> `P2 APRI matched=1..69 unhit=1` refers to and why SEQ position *p* and `K` row *p* name the same
+> driver. And **the seventh row is not a failure**: `Aborted` is `EFI_ABORTED` = `ENCODE_ERROR (21)`,
+> while `00000001` is `EFI_REQUEST_UNLOAD_IMAGE` = `DXE_ERROR (1)` rendered by `BasePrintLib`'s
+> `int`-width `%08X` fallback (`PrintLibInternal.c:1035-1063`) — the exit `AcpiPlatform.c:251`
+> returns **on success**, after finding, checksumming and installing all six tables. The cause is the
+> fourth added file: the XCHI volume alone carries `AcpiTables`
+> (`7E374E25-8E01-4FEE-87F2-390C23C606CD`, 13,702 B), which `PcdAcpiTableStorageFile` names
+> (`MdeModulePkg.dec:1511`); the phone's volume has none and its driver takes the `:191`
+> `EFI_ABORTED` exit. So **the ACPI half of P3 is further along than any step had measured**, and the
+> USB half has its first positive reading — but *started* is not *bound*: an entry point returning
+> `EFI_SUCCESS` is not a controller handle and not an enumerated USB device, no row carries a
+> `ConnectController` outcome, and whether `XhciDxe` binds to `XhciPciEmulation`'s published root
+> bridge under `EfiBootManagerConnectAll` is the next question. Three of the seven failures are
+> artifacts of this project's own seeds — `AdcDxe` the `/pmic/target` suppression itself, `LimitsDxe`
+> the `CmdDbDxe` AOP gate against a window that is RAM holding zero here, `AcpiPlatform` the added
+> tables — and must not be read as regressions. Instrument: `work/out/qemu-probe-4.177/run31.sh`;
+> `tools/depex-census.py`, `tools/fv-inventory.py` (`--roster`, `--acpi`, `--dump-fvmain`) and
+> `tools/apriori-stock-diff.py --index` were read, not modified. No tool was changed, nothing was
+> flashed and no firmware was built. See `docs/08` step 4.177.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

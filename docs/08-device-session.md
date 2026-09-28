@@ -36043,3 +36043,392 @@ package them.
   is unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.177 — both XCHI drivers are not merely *released* into a complete protocol database but *started*, and the dispatcher's own rows say so: with `/pmic/target`'s stale DALSys record suppressed the XCHI-carrying payload reaches the ordinary pass and prints `K 73 Ss 67/69` / `K 74 Ss 68/69` / `K 75 Ss 69/69` for `XhciPciEmulation`, `XhciDxe` and `UsbInitDxe`, its digest `P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0` closes against the census's own `DRIVER=83`, `P2 SEQ` is 69 characters on an 80-file and on an 83-file payload alike because 69 is what was *promoted*, the one a-priori entry no run can match is the array's own first — `DxeCore`, the only one of the 70 that is not an `FV_FILETYPE_DRIVER` — and the seventh `P2 DIAG` row is not a failure at all: `Aborted` on the phone's volume is `EFI_ABORTED`, returned for want of the `AcpiTables` file, while `00000001` on this one is `EFI_REQUEST_UNLOAD_IMAGE`, the entry point's own success exit after it has found and installed all six tables, rendered by the `int`-width `%08X` fallback only because `DXE_ERROR` sets `MAX_BIT` and `EFI_ERROR` is therefore true of it
+
+### The question this answers, and the instrument that cannot answer it
+
+4.176 closed on a limit in its own words: *"*Released* and *succeeded* are different questions, and
+this step answers only the first."* It had proved, from `Dispatcher.c:1062-1216`, that the ordering
+hazard 4.174 left open cannot occur — every promoted driver's entry point has returned before any
+non-promoted driver is evaluated for the first time, so `UsbConfigDxe` (array slot 57) has already
+installed `E722B03F` when `XhciDxe`'s `LocateProtocol` at VA `0x01960` runs. Reaching `:1204` with
+all thirteen terms true is not the same as the driver's own entry point returning `EFI_SUCCESS`, and
+no step had measured the second.
+
+The plain panel instrument cannot. On the XCHI payload it dies at Apriori slot 18, exactly where
+the phone's payload dies on it (`work/out/qemu-panel-4.177-xhci-host.txt`, 798 rows, ending
+`|K 18 Ss 18/69 free=1024 40256211-624E-580B-97ED-3011FB3CB9A3|`,
+`|ERROR: C90000002:V03000007 I0 CB29F4D1-7F37-4692-A416-93E82E219766|`,
+`|ASSERT DebugLib.c +78: Format != ((void *) 0)|` — the `DebugLib.c +78` null-format assert whose
+hidden caller step 4.128 traced through `RpmhDxe`'s helper at `0x6114`). Adding the four `-device loader` seeds does not help: that run
+(`work/out/qemu-panel-4.177-xhci-seeded.txt`, 1040 rows) walks further and then kills itself on
+4.161's wall, from inside `AdcDxe`:
+
+```
+|Synchronous Exception at 0x000000009C41046C|
+|PC 0x00009C41046C (0x00009C40D000+0x0000346C) [ 0] DALSys.dll|
+|PC 0x00009C024BC0 (0x00009C022000+0x00002BC0) [ 1] AdcDxe.dll|
+|ESR 0x96000004          FAR 0xAFAFAFAFAFAFAFAF|
+```
+
+So the run that can answer the question is the *treatment* recipe of step 4.163 — `gdbprobe26.py`
+suppressing `/pmic/target`'s stale DALSys record at `DALSys+0x335c` — applied to the XCHI payload.
+`work/out/qemu-probe-4.177/run31.sh` is that run and carries its own rationale; its only
+differences from the 4.163 pair are `--base` (`0x9c40d000`, read off *this* guest's own exception
+dump, so `SITE_REG = 0x9C41035C`, not the phone run's `0x9C499000`) and the output path. The probe
+script is `gdbprobe26.py` copied rather than edited.
+
+### The payload that answers it differs from the phone's by four files
+
+`work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+(`sha256 34360470b8a7aafad7340e02787f72366302ab673d11bd20570cb51f4219cb79`, 34,360,470 B) against
+the payload of record, `work/out/boot-before-p2walk.img`, whose kernel gunzips to
+`/tmp/phone-payload.raw` (`sha256 d0919c0004d126982c8630a9ef8f23a03ab8e4f80c1898854b81f44b6fcfffad`):
+
+| | phone | XCHI host |
+|---|---|---|
+| FFS files in the inner FV | 122 | 126 |
+| dispatcher-visible (`DRIVER=`) | 80 | 83 |
+| the four | — | `AcpiTables`, `UsbInitDxe`, `XhciDxe`, `XhciPciEmulation` |
+
+Three of the four are the point of the run and the fourth turns out to be a finding of its own,
+below. Everything else in the two volumes is the same instrumentation, which is what makes the two
+panels comparable at all — with one caveat this step has to record: **the two payloads are builds
+of this tree from different steps, so they do not print the same lines.** The phone's build prints
+`Loading driver at` (310 of them in `work/out/qemu-panel-4.163-setup.txt`) and no `K` rows at all;
+the XCHI build prints `K` rows and not one `Loading driver at`. The phone's panel carries exactly four
+`P2` row classes — `P2 DIAG` (7), `P2 SEQ`, `P2 STATS`, `P2 NOLOAD` — and none of `P2 APRI`,
+`P2 WHY`, `P2 BIN`, `P2 ERR`, `P2 FREE`, `P2 FWTY`, `P2 RETRY` or `P2 WALK`, which the newer build
+adds. What both carry, and what every comparison below rests on, is `P2 DIAG`, `P2 SEQ`, `P2 STATS`,
+`P2 NOLOAD` and the `Error: Image at … start failed:` rows; the `P2 WHY` string is read off the XCHI
+panel alone.
+
+### The depexes the three files carry, read off this volume
+
+`tools/depex-census.py` on the XCHI image, on the volume rather than on the tree — which matters,
+because this repository does not track the INFs of the shipped binaries (see the provenance limit
+in *Rows*):
+
+```
+inner FV 0x730000, 126 FFS files, a-priori file names 70 GUIDs
+  dispatcher-visible files (DRIVER=83): 83  <-- `P2 WALK seen=` is this same number
+66 of them carry a depex, 17 do not
+  of the 66 with a depex: 56 are promoted by the a-priori file (depex inert), 10 are gated
+  of the 17 without one: 13 are a-priori, 4 are not
+```
+
+- **`XhciPciEmulation`** is non-a-priori and gated on **eight** architectural protocols — Bds,
+  Monotonic Counter, Real Time Clock, Reset, Security, Variable Write, Variable and Watchdog Timer —
+  and the census resolves a producer inside this volume for every one of them. It is *waiting*, not
+  dead, and it is waiting on the same drain `UsbConfigDxe` is in.
+- **`UsbInitDxe`** is gated on `E722B03F-B250-42CE-8EBD-5BD51812D037`, which no header under
+  `work/uefi/Mu-Silicium` defines — as is `VcsDxe` on `AE37B942-457F-4C91-A196-D9669FD347A3`. These
+  two cannot be ruled in *or* out from the image.
+- **`XhciDxe`** has no depex section and is not a-priori: the UEFI 2.0 rule, i.e. all thirteen
+  architectural protocols, reached by the other route. It shares that with `BootGraphicsResourceTableDxe`,
+  `FeatureEnablerDxe` and `MacDxe`.
+
+One convention note, because two tools in this repository print adjacent numbers: `depex-census.py`
+prints a-priori indices **1-based** while `apriori-stock-diff.py --index` prints them **0-based**.
+That is the whole of the difference; the same seven producers are named by both, e.g. `BdsDxe` at
+45 in the census is `BdsDxe` at 44 in the index dump and in 4.176's table.
+
+### The result: `K 73`, `K 74`, `K 75`
+
+`work/out/qemu-panel-4.177-xhci-nopmicrec.txt` (1077 screens over 280.2 s) is the treatment run.
+It reaches the ordinary pass and the three files are dispatched *inside* it:
+
+```
+ 180 |K 73 Ss 67/69 free=1024 BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1|
+ 181 |K 74 Ss 68/69 free=1024 B7F50E91-A759-412C-ADE4-DCD03E7F7C28|
+ 182 |K 75 Ss 69/69 free=1024 0A134F0E-075E-40B3-9C63-3B3906804663|
+```
+
+Those three GUIDs are `XhciPciEmulation`, `XhciDxe` and `UsbInitDxe` in the volume's roster. The
+row shape is `P2Tick` (`Dispatcher.c:659-682`): `K <mP2Tick> <phase><why-letter> <mP2Started>/<mP2Apriori>
+free=<largest alloc> <guid>`. The second letter is the **status class of the attempt**
+(`P2WhyLetter`, `:555-592`) — `s` is `EFI_SUCCESS` — and it is `s` on all three rows. `mP2Started` is
+incremented at `:1158-1159`, immediately *before* the row is printed at `:1167`, so the numerator on
+a success row already counts that driver: 67, 68 and 69 are these three, added one at a time.
+
+The denominator is the number *promoted* (`mP2Apriori` = 69), not a cap, and the run's last row
+proves it is not:
+
+```
+ 201 |Error: Image at 0009BDAA000 start failed: 00000001|
+ 202 |K 83 SO 76/69 free=4096 CB933912-DF8F-4305-B1F9-7B44FA11395C|
+ 203 |P2 NOLOAD total=0 shown=0|
+ 209 |P2 SEQ [sssssssssssssssssssssssssssSssssssSsssssssssssSSsssssssssSssSssssssss]|
+ 210 |P2 WHY [sssssssssssssssssssssssssssDssssssDsssssssssssUOsssssssssNssUssssssss]|
+ 215 |P2 DIAG S D3C16B1F-3F48-54CA-84CD-B58F228DE601 Device Error|
+ 216 |P2 DIAG S 04357C9D-9C01-5805-B18E-913EB32BE798 Device Error|
+ 217 |P2 DIAG S 9143B2B7-D5E7-5190-B22A-605E5C78E7CC Unsupported|
+ 218 |P2 DIAG S 1C9DA1EF-6C33-5EEE-B11C-B0B7F60A5AE2 Access Denied|
+ 219 |P2 DIAG S CB70DC37-C100-5B12-9FFF-48F843EEA22E Not Found|
+ 220 |P2 DIAG S F0A5F597-125F-5734-9DEB-A0C88DE30DD1 Unsupported|
+ 221 |P2 DIAG S CB933912-DF8F-4305-B1F9-7B44FA11395C 00000001|
+ 222 |P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0|
+```
+
+`started=76 diag=7 noload=0` closes against the census's own `dispatcher-visible files (DRIVER=83): 83`
+— 76 + 7 = 83 — and `P2 NOLOAD total=0 shown=0` says nothing went unloaded and unreported. The
+`76/69` on the last row is the arithmetic: 76 drivers started against a 69-entry promoted batch,
+which is only possible because the ordinary pass counts non-promoted drivers into the same
+numerator. The `P2 SEQ` string is **byte-identical** to the phone payload's, character for character,
+across an 80-file and an 83-file volume, and so is the whole seven-GUID `P2 DIAG` set — which is the
+next section.
+
+Two of the seven failures are the USB family, and one of them is *not* new: `UsbPwrCtrlDxe`
+(`1C9DA1EF`) at `K 48` with `Access Denied` — a driver that is promoted, that ran, and whose entry
+point returned `EFI_ACCESS_DENIED`. Every other driver in the USB stack that this volume carries
+dispatches to success in this run: `UsbfnDwc3Dxe` (51), `UsbBusDxe` (52), `UsbKbDxe` (53),
+`UsbMassStorageDxe` (54), `UsbMsdDxe` (55), `UsbDeviceDxe` (56), `UsbConfigDxe` (57).
+
+### Why `P2 SEQ` is 69 characters, and why one failure has no character in it
+
+4.176 said, from the code, that `P2 SEQ` has one character per *promoted* entry and so cannot name
+either XCHI driver. The two panels now say the same thing from the data, and harder.
+
+Both strings are 69 characters. 69 is `mP2Apriori` — the number of entries the promotion loop
+matched — and the array itself is **70** entries, which this step read out of the image directly:
+the a-priori file at inner-FV offset `0x78` is a 1120-byte RAW section, "70 entries of 16" in
+`tools/fv-apriori.py`'s own words, matching the run's `|P2 APRI bytes=1120 entries=70 sum=A998B263|`.
+
+Six characters of the SEQ are not `s`, at positions 28, 35, 47, 48, 58 and 61. Those are exactly the
+six `K` rows of the promoted batch that are not `Ss`:
+
+| SEQ position | `K` row | driver | `WHY` letter |
+|---|---|---|---|
+| 28 | `K 28 SD 27/69` | `UFSDxe` | `D` Device Error |
+| 35 | `K 35 SD 33/69` | `PmicDxe` | `D` Device Error |
+| 47 | `K 47 SU 44/69` | `AdcDxe` | `U` Unsupported |
+| 48 | `K 48 SO 44/69` | `UsbPwrCtrlDxe` | `O` Access Denied |
+| 58 | `K 58 SN 53/69` | `ButtonsDxe` | `N` Not Found |
+| 61 | `K 61 SU 55/69` | `LimitsDxe` | `U` Unsupported |
+
+The run's **seventh** failure, `AcpiPlatform` at `K 83`, has no character in the string at all —
+because it is not a promoted entry, and the string has no slot for one. So the string is not merely
+"harder to read than the `K` rows" (4.176); it is *incomplete in a direction that would have been
+invisible*, and on this run it would have hidden its own last row.
+
+And the array's 70th slot has a name, which no step had: reading the 1120 bytes out of
+`/tmp/fv-usb-177.bin` and cross-checking each GUID against the volume's own FFS types gives exactly
+**one** entry whose file is not an `FV_FILETYPE_DRIVER` (`0x07`) — slot **0**, `D6A2CB7F-6A18-4E2F-B43B-9920A733700A`,
+which is `DxeCore`, type `0x05`. So `|P2 APRI matched=1..69 unhit=1|` has a referent: the one entry
+the promotion loop cannot ever match against `mDiscoveredList` is the array's own first, the DXE core
+image, which the dispatcher does not load because it is already running. That is also why there is
+no `K` row numbered 0 and why the SEQ's character at position *p* and the `K` row numbered *p* name
+the same driver — the two offsets cancel.
+
+### The seventh failure is not a failure
+
+The one row that differs between the two payloads is the last one, and it differs in a way that
+reverses the reading a step would otherwise take. Same GUID, same position at the end of the
+ordinary pass, two different `%r` renderings:
+
+```
+  phone  |P2 DIAG S CB933912-DF8F-4305-B1F9-7B44FA11395C Aborted|
+         |Error: Image at 0009BE61000 start failed: Aborted|
+  xhci   |P2 DIAG S CB933912-DF8F-4305-B1F9-7B44FA11395C 00000001|
+         |Error: Image at 0009BDAA000 start failed: 00000001|
+```
+
+`Mu_Basecore/MdePkg/Library/BasePrintLib/PrintLibInternal.c:1035-1063` is the `%r` both rows go
+through (`Image.c:1925` and `P2 DIAG` use the same `DEBUG` and the same library). It is:
+
+```c
+Index = Status & ~MAX_BIT;
+if ((Index > 0) && (Index <= ERROR_STATUS_NUMBER)) {      // ERROR_STATUS_NUMBER 35 at :12
+  ArgumentString = mErrorString[Index - 1];
+}
+…
+if (ArgumentString == ValueBuffer) {
+  BasePrintLibSPrint ((CHAR8 *)ValueBuffer, MAXIMUM_VALUE_CHARACTERS, 0, "%08X", Status);
+}
+```
+
+- **`Aborted`** is `mErrorString[20]` (`:68`), i.e. `Index = 21` — the low bits of
+  `0x8000000000000015`, which is `RETURN_ABORTED` = `ENCODE_ERROR (21)` (`Base.h:1190`),
+  `EFI_ABORTED`. **The phone's `AcpiPlatform` therefore genuinely failed.**
+- **`00000001`** is the fallback, reached because `Index = 0xA000000000000001 & ~MAX_BIT = 0x2000000000000001`
+  is greater than 35 and no string matches. The value is `EFI_REQUEST_UNLOAD_IMAGE` =
+  `DXE_ERROR (1)` = `MAX_BIT | (MAX_BIT >> 2) | 1` (`Pi/PiMultiPhase.h:43,48`) — and `%08X` here
+  carries no `l`, so `:826-839` reads it as `int` and only `00000001` is printed.
+
+`EFI_REQUEST_UNLOAD_IMAGE` is the entry point's **normal exit**. The driver this project ships,
+`Mu_Basecore/MdeModulePkg/Universal/Acpi/AcpiPlatformDxe/AcpiPlatform.c` (`FILE_GUID = cb933912-…`,
+matching the failing GUID), ends at `:251` with `return EFI_REQUEST_UNLOAD_IMAGE;` after it has
+located `gEfiAcpiTableProtocolGuid`, walked the storage file's `EFI_SECTION_RAW` instances,
+checksummed each table and installed it. Its three other exits are all `return EFI_ABORTED` — `:183`
+(no `AcpiTable` protocol), `:191` (`LocateFvInstanceWithTables` failed), `:237` (`InstallAcpiTable`
+failed). So:
+
+- the **phone's** volume fails at one of those three, and by the volume diff below it is `:191`;
+- the **XCHI** volume succeeds, and its success is printed as one of the seven "failures" only
+  because `DXE_ERROR` sets `MAX_BIT`, which makes `EFI_ERROR (EFI_REQUEST_UNLOAD_IMAGE)` true. The
+  same artifact puts it in `P2 DIAG` and makes `CoreExit` print `start failed:`.
+
+**The cause is the fourth added file.** `AcpiPlatform` consumes
+`gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiTableStorageFile`, whose default in
+`MdeModulePkg.dec:1511` is `{ 0x25, 0x4e, 0x37, 0x7e, 0x01, 0x8e, 0xee, 0x4f, 0x87, 0xf2, 0x39, 0xc,
+0x23, 0xc6, 0x6, 0xcd }` — the `AcpiTables` file's own `FILE_GUID`, `7E374E25-8E01-4FEE-87F2-390C23C606CD`,
+and this platform does not override it. `LocateFvInstanceWithTables` walks every
+`gEfiFirmwareVolume2ProtocolGuid` handle calling `FvInstance->ReadFile` for that GUID and returns
+the last status, so with no such file anywhere it returns `EFI_NOT_FOUND` and the driver takes the
+`:191` exit.
+
+| | phone | XCHI host |
+|---|---|---|
+| `AcpiTableDxe` | 44,626 B | 44,626 B |
+| `AcpiPlatform` | 20,066 B | 20,066 B |
+| `AcpiTables` (`7E374E25-…`, type `0x02`) | **absent** | **13,702 B** |
+| `--acpi` on the volume | no ACPI tables in this volume | 6 tables |
+
+The six, with the offsets the tool reports inside the inner FV:
+`SSDT 61 B @0x00577c94`, `DSDT 12,341 B @0x00577cd8`, `APIC 724 B @0x0057ad14`, `FACP 276 B @0x0057afec`,
+`FACS 64 B @0x0057b104`, `GTDT 156 B @0x0057b148`, in one `type 0x02` FFS file whose header sits at
+`0x577c78`. Two of the six do not checksum, `FACP` and `FACS`, and the tool's own note is the reason
+they are not a fault: before `AcpiTableDxe` runs, `AcpiTableDxe` has not yet written the DSDT and
+FACS addresses into FACP, and FACS has no checksum field at all.
+
+The DSDT in that image is the tree's, byte for byte. Dumping the inner FV (`fv-inventory.py
+--dump-fvmain /tmp/fv-usb-177.bin` → 7,536,640 B, `sha256 dbeb98abb69a3c3a3b5c20914b84b6512d985f2174a1b74860656eef4a738a95`)
+and slicing at `0x577cd8` gives `b'DSDT'`, 12,341 bytes,
+`sha256 0f5df26b424ab609027aa388ef02cbc82907f0b83ee72411433ec6c30c3ffa47` — **identical** to the
+`DSDT.aml` in the build tree, `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/DSDT.aml`.
+That file is generated rather than tracked: `tools/sync-uefi-platform.sh:126` compiles it with
+`iasl -p "$ACPI_DST/DSDT" "$ACPI_DST/gauguin.asl"`, and the tracked source is
+`tools/acpi/gauguin.asl` (`sha256 c0125e2c848660332cf1ac48e8695c0038203382175ee47a9483646818d0349b`,
+byte-identical to the copy the script installs). So the chain from the source of record to the table
+the firmware installs is: tracked ASL → `iasl` → `DSDT.aml` → packaged into `AcpiTables` by
+`AcpiTables.inf`'s `[Binaries]` block → found and installed at runtime by `AcpiPlatform`. And the
+phone's payload predates it — that image is dated 2026-09-23 15:09 and this ACPI work 2026-09-27.
+`AcpiTables.inf`'s `[Binaries]` block lists exactly those six, and its header comment already says
+which are ours and which are Moorea's unmodified and why MCFG is deliberately absent.
+
+So the reading this step puts on the record is this: **the ACPI half of P3 is further along than any
+step had measured, and the evidence is a row that looks like a failure.** The six tables are built,
+packaged into the volume, found by the platform's own driver out of the volume, checksum-verified by
+it, and installed — and the DSDT among them is the tree's DSDT. What remains on that half is what
+Windows makes of them, not whether they are there.
+
+### What this says about the first P3 clause, and what it does not
+
+**Said:** both XCHI drivers' entry points returned `EFI_SUCCESS` in this run. That is a strictly
+stronger statement than 4.176 could make, and it is the first positive reading the USB half of P3
+has had.
+
+**Not said, and the distinction is the whole of the next question:** an entry point returning
+`EFI_SUCCESS` is not a bound controller and not an enumerated USB device. `XhciDxe` is a
+driver-model driver; its `BindingStart` runs at `ConnectController` time, driven by
+`EfiBootManagerConnectAll` under `BdsDxe` — and this run reaches BDS (a-priori 44) but no row of the
+panel says whether a controller handle exists for either driver to bind to, or whether the bind
+succeeded. Nothing here measures a `ConnectController` outcome, a `UsbBusDxe` hub enumeration, or a
+USB mass-storage handle. The next question is therefore concrete and cheap to pose: **does this run
+produce a controller object** — `XhciPciEmulationDxe`'s published root bridge, and `XhciDxe` bound
+to it? A `ConnectController`-side probe or a `P2`-side counter would answer it; this panel cannot.
+
+**Three of the seven failures are artifacts of seeds this project writes, not device findings**, and
+a later reader must not read them as regressions:
+
+- `AdcDxe` — `Unsupported` — is the `/pmic/target` suppression itself, the very thing that let the
+  run get this far.
+- `LimitsDxe` — `Unsupported` — is the `CmdDbDxe` AOP gate, which returns `EFI_UNSUPPORTED` because
+  this instrument's AOP window is RAM holding zero; the seed that addresses it (`--el3-seed-aop`) is
+  in the seeded run and not in this one.
+- `AcpiPlatform` — now `00000001` — is the added `AcpiTables`, and is the success exit.
+
+That leaves `PmicDxe` (`Device Error`) and `UsbPwrCtrlDxe` (`Access Denied`) traceable to the guest
+lacking the real thing, `UFSDxe` (`Device Error`) likewise, and `ButtonsDxe` (`Not Found`) still
+where 4.163 left it.
+
+**And the instrument that produced all of this is artificial in three named places**, unchanged from
+4.161-4.163 and now carrying one more payload: the four `-device loader` blobs standing in for the
+RSC, PDC and APCS register windows; the `/pmic/target` suppression itself, which is a gdb `write` to
+a running guest's memory; and `0x12000c`, which on this board is the clock controller's own register
+and under this instrument is QEMU RAM. A success measured here is a success on *this* machine. The
+only instrument that settles it against hardware is the device, and the only route to the device is
+`fastboot boot`, which is non-destructive.
+
+**The payload for that device session is now this one.** `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+is the depex-carrying successor to whatever `boot` holds today, and its XCHI half is the one the
+handset's own firmware never had (4.176: the stock array promotes no XCHI driver, and `xbl.img`
+contains no occurrence of the string `xhci`). Before it is flashed, the standing rules hold
+unchanged: **先读屏，再刷下一次**, and **对照的那张必须在覆盖之前读** — read `boot`, fingerprint it
+against the control, and only then overwrite. The first question whenever a device is present is
+still which payload `boot` holds, and the panel distinguishes them by class: the XCHI build prints
+`P2 SEQ` and `K` rows and no `Loading driver at`; the phone's build prints `Loading driver at` and
+no `K` rows.
+
+### Rows:
+
+- **instrument**: `work/out/qemu-probe-4.177/run31.sh` — step 4.163's treatment recipe (`gdbprobe26.py`
+  verbatim, `/pmic/target` suppressed at `DALSys+0x335c`) applied to the XCHI payload with
+  `--base 0x9c40d000`, which is this guest's own `DALSys` base read off its exception dump rather
+  than the phone run's `0x9c499000`. No tool was changed for this run and no firmware was built.
+  `tools/depex-census.py`, `tools/fv-inventory.py` (`--roster`, `--acpi`, `--dump-fvmain`) and
+  `tools/apriori-stock-diff.py --index` were read, not modified.
+- **shows**: that `XhciPciEmulation` (`K 73 Ss 67/69`), `XhciDxe` (`K 74 Ss 68/69`) and
+  `UsbInitDxe` (`K 75 Ss 69/69`) are not merely released but **started**, returning `EFI_SUCCESS`
+  from their entry points, inside the ordinary dispatch pass of the XCHI-carrying payload.
+- **closes**: 4.176's own limit — *"*Released* and *succeeded* are different questions and only the
+  first is answered here."* The second is now answered for all three files.
+- **closes, from the data**: 4.176's reading of `P2 SEQ`. The string is 69 characters on an 80-file
+  and an 83-file payload alike and byte-identical between them (the older build prints no `P2 WHY`,
+  so only `SEQ` is compared across the two); its six non-`s` characters are the six
+  promoted start failures at positions 28/35/47/48/58/61; and the run's seventh failure has no
+  character in it, because it is not promoted. A step that read only the `SEQ` would have concluded
+  that six of seven failures ran and would have been unable to say anything at all about `K 73`,
+  `K 74` or `K 75`.
+- **names**: the one entry `|P2 APRI matched=1..69 unhit=1|` leaves unmatched — the array's slot 0,
+  `D6A2CB7F-6A18-4E2F-B43B-9920A733700A`, is `DxeCore`: the only GUID of the 70 whose FFS file is not
+  an `FV_FILETYPE_DRIVER` (`0x05`, not `0x07`), and the only one the dispatcher can never match
+  because it is already running. This is also why the `SEQ` position *p* and the `K` row numbered *p*
+  name the same driver.
+- **corrects**: the seventh `P2 DIAG` row, which is not a failure on this payload.
+  `|Error: Image at 0009BDAA000 start failed: 00000001|` is `EFI_REQUEST_UNLOAD_IMAGE` =
+  `DXE_ERROR (1)` = `0xA000000000000001`, the exit `AcpiPlatform.c:251` returns on success, printed
+  by `BasePrintLib`'s `int`-width `%08X` fallback (`PrintLibInternal.c:1035-1063`, `:826-839`);
+  the phone's `Aborted` is `EFI_ABORTED` = `ENCODE_ERROR (21)` = `0x8000000000000015`, one of the
+  three `return EFI_ABORTED` sites. `EFI_ERROR()` is true of both because `DXE_ERROR` sets `MAX_BIT`,
+  which is why a success is counted in `diag=7` and printed as `start failed`.
+- **also shows**: the cause, and that it is our own P3 work showing up in the instrument. The XCHI
+  volume alone carries `AcpiTables` (`7E374E25-8E01-4FEE-87F2-390C23C606CD`, type `0x02`, 13,702 B,
+  FFS header at `0x577c78`) with six tables — `SSDT` 61 B @`0x00577c94`, `DSDT` 12,341 B
+  @`0x00577cd8`, `APIC` 724 B @`0x0057ad14`, `FACP` 276 B @`0x0057afec`, `FACS` 64 B @`0x0057b104`,
+  `GTDT` 156 B @`0x0057b148` — and the phone's carries none; both carry the same `AcpiTableDxe`
+  (44,626 B) and the same `AcpiPlatform` (20,066 B); `PcdAcpiTableStorageFile`'s default
+  (`MdeModulePkg.dec:1511`) is that file's GUID and this platform does not override it. The installed
+  DSDT is byte-identical to `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/gauguin/DSDT.aml`
+  (`sha256 0f5df26b424ab609…`), which `tools/sync-uefi-platform.sh:126` generates with `iasl` from
+  the tracked `tools/acpi/gauguin.asl` (`sha256 c0125e2c84866033…`), so the chain from the source of
+  record to the installed table is closed. So the six tables are built, packaged, located, checksummed and
+  installed by the image's own driver, and the ACPI half of P3 is further along than the record said.
+- **provenance limit, and it is new**: this repository does not track the INFs of the shipped
+  binaries — `find . -name 'XhciDxe.inf'` and `ls -d Binaries` both come back empty and
+  `grep -ril <GUID> --include='*.inf'` matches nothing for any of the 17 GUIDs this step read. Every
+  claim above about a shipped driver's depex comes from `tools/depex-census.py` reading the **volume**,
+  and every claim about an entry point comes from the tracked source of the driver this project
+  builds (`AcpiPlatform.c`) or from the volume's GUID-to-name roster. A step that infers a shipped
+  driver's depex or entry point from the tree is reading a source that is not the artifact.
+- **also corrects**: a convention, so that two tools are not read as disagreeing.
+  `tools/depex-census.py` prints a-priori indices 1-based and `tools/apriori-stock-diff.py --index`
+  prints them 0-based; `BdsDxe` is 45 in the first and 44 in the second and in 4.176's table. The
+  ordering both name is the same one.
+- **does not close**: the first P3 clause, or either of its two halves. An entry point returning
+  `EFI_SUCCESS` is not a bound controller and not an enumerated USB device; no row of this panel
+  carries a `ConnectController` outcome, so whether `XhciDxe` binds to `XhciPciEmulation`'s published
+  root bridge under `EfiBootManagerConnectAll` is unmeasured and is the next question. The UFS half
+  still has no missing driver (4.172) and no measurement. The ACPI half now has its tables in the
+  image; what remains there is what Windows makes of them. And the whole result is conditional on an
+  instrument that is artificial in the three places named above.
+- **does not say**: that the USB controller is up. It says its host-controller driver's entry point
+  returned `EFI_SUCCESS` on a synthetic machine, which is one link of a chain, and the chain has an
+  unmeasured link before it reaches a device.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and no firmware was built. `userdata`
+  (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The porting goal is
+  unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.
