@@ -36669,3 +36669,256 @@ term a reader would otherwise assume the core supplies, which it does not.
   unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.179 — the whole graph of `E722B03F` is read off the shipped volume: one publisher, and it is the **gauguin-extracted** `UsbConfigDxe` (`0983C7F2`) rather than the Bitra file 4.174 cited, whose three `InstallMultipleProtocolInterfaces` sites are the *Controller*, *Peripheral Client* and *Host Client* handles of `UsbStartController` — and the fourth term of that publisher's own dependency, spelled correctly, is a GUID whose 16 bytes occur **zero times in either payload**, while the run says the driver was dispatched anyway
+
+### The question, and why it is the publisher rather than the driver
+
+4.178 closed with three verbs — *released*, *started*, *schedulable* — and one open one, *bound*. It also
+left a load-bearing assumption explicit and unmeasured: both remaining XCHI drivers' schedulability is
+one term of `E722B03F-B250-42CE-8EBD-5BD51812D037`, and three steps now rest on that term being
+*published*. Step 4.174 asserted the publisher: *"`UsbConfigDxe` installs `E722B03F` at three sites
+(VA `0x03aa4`, …)"*. No step had read those three sites off the file the volume actually carries, and
+no step had enumerated who consumes the protocol. Both are properties of the volume and need no guest.
+
+Reading them turned up a correction, a complete graph, and a contradiction, in that order.
+
+### Which file is the publisher, and why 4.174's citation is the wrong artifact
+
+The inner FV of `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` — the same FV 4.178 and 4.177 used,
+`/tmp/fv-usb-177.bin`, 7,536,640 B, `sha256 dbeb98abb69a3c3a3b5c20914b84b6512d985f2174a1b74860656eef4a738a95`
+— carries one FFS file whose name GUID is the one the panel prints for this driver:
+
+| file | FFS offset | FFS type | FFS size | sections (type, size → payload, sha256) |
+|---|---|---|---|---|
+| `UsbConfigDxe` | `0x3a58f0` | `0x07` `DRIVER` | 77,958 | `DXE_DEPEX` 76→72 `9f1382dd0255d53f`; `PE32` 77,828→77,824 `6943cc615f7d4ba5`; `USER_INTERFACE` 30→26 `1d553834d5b9c6d8` |
+
+Both payload hashes equal the tracked files under
+`uefi/Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/` — `UsbConfigDxe.efi` `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5` (77,824 B) and `UsbConfigDxe.depex`
+`sha256 9f1382dd0255d53fb2c06889a985978f3626f9eca00e538dbc51553f65e664af` (72 B) — so the volume
+reproduces the source exactly, the same chain 4.178 closed for the three XCHI files.
+
+**The Bitra file 4.174 named is a different file.** `work/uefi/Mu-Silicium/Binaries/bitra/QcomPkg/Drivers/UsbConfigDxe/`
+holds three 94,208 B variants and an INF whose `FILE_GUID` is `CD823A4D-7DEC-4531-AE5D-4134FA4127B8`
+with `PE32|UsbConfigDxe.hostmode.efi|*`. Nothing in this payload has that GUID. 4.174's *count* — three
+install sites at `0x03aa4`, `0x0517c`, `0x052c8` — is exactly right, and every one of them is in the
+gauguin-extracted file. Where the two artifacts differ is where the record has to be careful: the
+publisher is `0983C7F2-0EF3-5EC4-83AD-3B32DDEB1E60`, and the name `UsbConfigDxe` denotes that file here
+and a Bitra file there.
+
+### The whole graph of `E722B03F`, from `tools/guid-refs.py`
+
+```
+=== work/out/usb-host/Mu-gauguin-xhci-host-gzip.img: 6 occurrences of the 16 bytes
+  UsbfnDwc3Dxe           F056673C  VA 0x014c0  CloseProtocol                      consumes
+  UsbfnDwc3Dxe           F056673C  VA 0x01518  OpenProtocol                       consumes
+  UsbfnDwc3Dxe           F056673C  VA 0x01928  CloseProtocol                      consumes
+  UsbfnDwc3Dxe           F056673C  VA 0x01ba4  OpenProtocol                       consumes
+  XhciPciEmulation       BEB12BEE  VA 0x01488  CloseProtocol                      consumes
+  XhciPciEmulation       BEB12BEE  VA 0x014e0  OpenProtocol                       consumes
+  XhciPciEmulation       BEB12BEE  VA 0x019e0  OpenProtocol                       consumes
+  XhciDxe                B7F50E91  VA 0x01960  LocateProtocol                     consumes
+  UsbConfigDxe           0983C7F2  VA 0x03aa4  InstallMultipleProtocolInterfaces  publishes
+  UsbConfigDxe           0983C7F2  VA 0x0517c  InstallMultipleProtocolInterfaces  publishes
+  UsbConfigDxe           0983C7F2  VA 0x052c8  InstallMultipleProtocolInterfaces  publishes
+  UsbInitDxe             0A134F0E  VA 0x017c4  LocateProtocol                     consumes
+```
+
+with the tool's own trailer, *"a call site is a fact about the binary; whether it executes is a
+run-time question this tool does not answer."* **One publisher, four consumer drivers, twelve sites**,
+and this is the first step in which the consumer half exists at all. Three things it settles that no
+earlier step had:
+
+- **`XhciPciEmulation` opens the protocol four times as often as `XhciDxe` does** — three sites
+  (`0x01488` close, `0x014e0` and `0x019e0` open) against one `LocateProtocol`. The `OpenProtocol` at
+  `0x019e0` is the one 4.178 read by hand inside `Start`; the other two are `Stop` and a second opener
+  this step did not chase.
+- **`UsbfnDwc3Dxe` is the heaviest consumer** — four sites, two opens and two closes, i.e. the
+  device-mode gadget stack and the host stack hang off the same protocol. `UsbfnDwc3Dxe` is promoted
+  (`ap51`) and 4.177's panel shows it started (`K 51 Ss 47/69 F056673C-…`).
+- **`UsbConfigDxe` is the only publisher in the volume**, which 4.175 asserted from the `Binaries/`
+  trees and this measures on the payload.
+
+### The three installs, and the three handles they name
+
+All three `InstallMultipleProtocolInterfaces` sites disassemble to the same shape — spelled out here
+from the `add` that loads the GUID, which the tool reports four bytes earlier as the `adrp`:
+
+```
+3a88: adrp x8, 0x11000 ; 3a8c: ldr x8, [x8, #1424]   ; gBS, the global at .data 0x11590
+3a90: ldr  x8, [x8, #328]                             ; EFI_BOOT_SERVICES slot 41
+3a94: adrp x9, 0x11000 ; 3a98: add x9, x9, #0x2b8     ; the client-record array
+3a9c: add  x0, x9, #0xe8                              ; &Handle
+3aa0: add  x2, x9, #0x100                             ; &Interface
+3aa4: adrp x1, 0x11000 ; 3aa8: add x1, x1, #0x98      ; &E722B03F, the constant at .data 0x11098
+3aac: mov  x9, xzr
+3ab0: mov  x3, x9                                     ; NULL — the vararg terminator
+3ab4: blr  x8
+```
+
+The slot arithmetic is the part worth writing down, because the three drivers use three different
+slots of the same vtable and nothing else in this record separates them:
+
+| offset | slot | service | who calls it on `E722B03F` |
+|---|---|---|---|
+| `+280` | 35 | `OpenProtocol` | `XhciPciEmulation` (`0x014e0`, `0x019e0`), `UsbfnDwc3Dxe` (`0x01518`, `0x01ba4`) |
+| `+320` | 40 | `LocateProtocol` | `XhciDxe` (`0x01960`), `UsbInitDxe` (`0x017c4`) |
+| `+328` | 41 | `InstallMultipleProtocolInterfaces` | `UsbConfigDxe` — all three sites |
+
+`x3 = NULL` is the vararg terminator, so each of the three calls installs **exactly one** protocol —
+this is an install of `E722B03F`, not an install of several in one call. All three live in the same
+function, the one ending at `0x53cc`, and that function is `UsbStartController`: `0xe977` holds the
+ASCII `UsbStartController`, and every failure print in the body loads it as the `%a` name.
+
+The three failure strings name the three handles, which no earlier step could do:
+
+| site | failure print's string | VA | names |
+|---|---|---|---|
+| `0x3aa8` | (the controller path; its print is the bare `%r` at `0xe8e2`) | — | the controller handle |
+| `0x5180` | `%a: Failed to install USB_CONFIG protocol (Peripheral Client Handle) with error: %r` | `0xea2d` | the peripheral client handle |
+| `0x52cc` | `%a: Failed to install USB_CONFIG protocol (Host Client Handle) with error: %r` | `0xead1` | the host client handle |
+
+The two client installs index an array at `.data 0x112b8` with stride `0xd8`, and two records fit
+before the data changes shape at `0x11468` — `0x11468 − 0x112b8 = 0x1b0 = 2 × 0xd8` exactly. Each
+record's first four bytes are the ASCII tag `usbc` (`0x63627375`). Each install is followed by
+`gBS->ConnectController` (`[vtable + 264]`) on the handle it just installed to, which is what a driver
+that has just published a protocol onto a fresh handle does. `UsbStartController` has **no direct `bl`
+caller anywhere in the file** — the prologue-to-`ret` scan finds zero — so it is reached indirectly,
+which is consistent with the entry point's own strings (`Failed to Create ToggleUsbModeEvent. %r`,
+`Failed to Create ConfigUsbEvent. %r`, `Failed to register for boot services exit event`) but is not
+evidence for which callback runs it. This step records the indirectness and does not name the caller.
+
+### The publisher's own dependency, and the correction to how the record spells it
+
+`UsbConfigDxe`'s `DXE_DEPEX` section is 72 bytes, sha256 `9f1382dd0255d53f…`, byte-equal to the tracked
+file, and decodes as four pushes and three ANDs — a conjunction, not `[Depex] TRUE`:
+
+```
+02 690476b00c977a48a4b528db7b45cef1
+02 d0c7e5f439d2cb47aacd7f66ef763238
+02 455c7a15b221c543ba7c822fee5fe599
+02 8e0897ebdfcfc649be4bd906a5b20e86
+03 03 03 08
+```
+
+**These four were transcribed into the record with their first three fields byte-swapped**, and the
+swap is not cosmetic — it is what made all four look unresolvable. `tools/guid-refs.py` run on the
+swapped spellings returns *0 occurrences* for every one of them, and the previous step's note that
+`tools/depex-census.py` *"cannot be ruled in or out from the image"* for this file follows from that.
+Decoded the PI way — `EFI_GUID` is `Data1` little-endian, `Data2` and `Data3` little-endian, `Data4[8]`
+as stored — three of the four are not merely resolvable, they are **named in this tree**:
+
+| # | GUID, correctly spelled | name | definition | publisher in the volume | who consumes it |
+|---|---|---|---|---|---|
+| 1 | `B0760469-970C-487A-A4B5-28DB7B45CEF1` | `gEfiChipInfoProtocolGuid` | `Silicon/Qualcomm/QcomPkg/QcomPkg.dec:70` | `ChipInfo` (`453C9622`) `InstallMultipleProtocolInterfaces` @`0x018bc` | PdcDxe, FeatureEnablerDxe, PmicDxe, LimitsDxe, **UsbConfigDxe**, SmBiosTableDxe |
+| 2 | `F4E5C7D0-D239-47CB-AACD-7F66EF763238` | `gEfiSMEMProtocolGuid` | `QcomPkg.dec:60` | `SmemDxe` (`94527566`) install @`0x013bc` | DALSys |
+| 3 | `157A5C45-21B2-43C5-BA7C-822FEE5FE599` | `gEfiPlatformInfoProtocolGuid` | `QcomPkg.dec:67` | `PlatformInfoDxeDriver` (`09EE56ED`) install @`0x014b0` | PdcDxe, ClockDxe, SdccDxe, UFSDxe, ButtonsDxe, PmicDxe, ChargerExDxe, QcomChargerDxeLA, UsbPwrCtrlDxe, LimitsDxe, UsbfnDwc3Dxe, **UsbConfigDxe** |
+| 4 | `EB97088E-CFDF-49C6-BE4B-D906A5B20E86` | — | **not defined anywhere in the tree** | **none** | none |
+
+`UsbConfigDxe` also *locates* two of its own terms at run time — `B0760469` at `0x017f4` and
+`157A5C45` at `0x017a8` — which is what its strings `Failed to get chip version` and `Failed to get
+gEfiPlatformInfoProtocolGuid` are the failure paths of. So the depex and the code agree on three terms.
+
+**Term 4 does not agree with anything.** `EB97088E-CFDF-49C6-BE4B-D906A5B20E86` occurs **zero times**
+in the volume — not in the inner FV, and not in the outer `FVMAIN_COMPACT` either, which is the
+uncompressed part of the payload and therefore fully searchable. It is not an artifact of this
+project's packaging: the same search over the **phone's own** volume (`/tmp/fv-stock-p2walk.bin`,
+7,348,224 B, `sha256 c8f57e46…`, the inner FV of `work/out/boot-before-p2walk.img`, whose payload is
+`d0919c00…`) also returns zero, while the other three terms are there (`B0760469` 7, `F4E5C7D0` 2,
+`157A5C45` 13 against 10, 8 and 16 here). `QcomPkg.dec` defines 76 GUIDs and this is not one of them;
+`grep -rn 0xEB97` over the tree returns nothing.
+
+*(The control for the search itself: `E722B03F` counts **6** in the inner FV searched here and **2**
+in the phone's, and both are non-zero, so the byte search finds GUIDs that are there. Also verified
+for this step: the `.img`'s gzip stream at `0x800` inflates to exactly `/tmp/xhci-payload.raw`
+(`c9b7711c20f2a092`, 3,145,840 B), and re-dumping that image's inner FV with
+`tools/fv-inventory.py --dump-fvmain` reproduces `sha256 dbeb98ab…` byte-for-byte — so the volume read
+here is the volume 4.177 booted.)*
+
+### The contradiction, stated as one
+
+4.177's panel contains:
+
+```
+K 57 Ss 53/69 free=1024 0983C7F2-0EF3-5EC4-83AD-3B32DDEB1E60
+```
+
+`0983C7F2` is `UsbConfigDxe`'s FFS name GUID, `S` is the start phase, and `P2WhyLetter` returns `s`
+only for `EFI_SUCCESS` — so `UsbConfigDxe` reached `CoreStartImage` and its entry point returned
+success. But `Dispatcher.c`'s loop (`:1098-1170`) puts an entry on `mScheduledQueue` by exactly two
+routes, and `CoreIsSchedulable` (`Dependency.c:197`) gates both:
+
+- `DriverEntry->Dependent` → the depex is evaluated. Its `EFI_DEP_PUSH` case does
+  `CoreLocateProtocol (&DriverGuid, NULL, &Interface)` and pushes `FALSE` when that fails; the four
+  pushes are all evaluated before the three ANDs, so one unsatisfied term makes the conjunction false.
+- `DriverEntry->Depex == NULL` → `CoreAllEfiServicesAvailable ()`, i.e. the UEFI 2.0 route 4.178
+  documented for `XhciDxe`.
+
+With term 4's 16 bytes absent from the volume, `CoreLocateProtocol` cannot succeed on it — the
+function searches only `mProtocolDatabase` (`Hand/Locate.c`, `CoreFindProtocolEntry`, no special
+cases). So `UsbConfigDxe` should be unschedulable, and it was scheduled. The three candidate
+explanations, none of which this step tests:
+
+1. **The `Depex == NULL` route.** `CoreGetDepexSectionAndPreProccess` (`Dispatcher.c:860`) sets
+   `Depex = NULL` and `Dependent = TRUE` for *any* `ReadSection` failure that is not
+   `EFI_PROTOCOL_ERROR`, and that route reaches `CoreAllEfiServicesAvailable` regardless of what the
+   section contains. A read that fails for a reason other than a missing section takes this branch
+   silently. This is the cheapest explanation and the only one that needs no new mechanism.
+2. **The GUID is built at run time** by whatever publishes it, so its 16 bytes are never contiguous
+   in any file and no byte search can find it.
+3. **Something outside the volume installs it** — a HOB hand-off or a PEIM — which the two payloads
+   searched here cannot show either way.
+
+The measurement that separates them is one `P2` row that prints, for this one driver at discovery
+time, whether `DriverEntry->Depex` is NULL and what `CoreLocateProtocol` returns for each of the four
+terms. That is a counter, not a new instrument, and it is the same class of probe 4.177 and 4.178 both
+left as *"the next thing to build"*.
+
+The consequence is worth stating plainly even though the cause is not settled: three steps have been
+reasoning about when `E722B03F` becomes available from the premise that depex gating decides it. If
+`UsbConfigDxe` is being dispatched down route 1, that premise is void *for the one file that matters* —
+the sole publisher of the protocol both remaining XCHI drivers wait on is being started for a reason
+this record has not measured.
+
+### Rows
+
+- **instrument**: `tools/guid-refs.py` over `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` for five
+  GUIDs; `tools/fv-inventory.py --dump-fvmain` over that image and over
+  `work/out/boot-before-p2walk.img`; a section walker over the two inner FVs reusing
+  `tools/fv-apriori.py`'s `walk_volume`; `aarch64-linux-gnu-objdump` on
+  `device/dxe/UsbConfigDxe.efi`; `Dispatcher/Dispatcher.c`, `Dispatcher/Dependency.c`,
+  `Hand/Locate.c` read. **No tool was modified, no guest was booted, no firmware was built, and no
+  device was touched.**
+- **names**: the publisher (`0983C7F2`, not `CD823A4D`), its three install sites and the three handles
+  they name, the nine consumer sites across four drivers, three of the four depex terms by
+  `QcomPkg.dec` line, and their publishers by file GUID.
+- **closes**: 4.174's unread assertion. The three install sites are now read off the shipped file, each
+  classified as `InstallMultipleProtocolInterfaces` by boot-services slot, and each paired with the
+  failure string that names the handle it targets.
+- **corrects**: (a) which artifact the record must cite for the `E722B03F` publisher — the
+  gauguin-extracted `uefi/Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/` file, not the Bitra
+  `hostmode` variant; (b) the transcription of `UsbConfigDxe`'s four depex GUIDs, whose first three
+  fields were byte-swapped in the record, making three resolvable terms look unresolvable and
+  inverting the step that read them.
+- **records, and does not resolve**: a depex term with no publisher in either payload, and a panel row
+  that says the driver carrying it started anyway.
+- **does not close**: the first P3 clause, the controller question, or anything 4.177 and 4.178 left
+  open. *Schedulable*, *started* and *released* are still three verbs; this step adds a fourth thing
+  that is not a verb — one driver's dependency is not satisfiable from its own volume, and that has to
+  be measured before the other three mean what the record has been taking them to mean.
+- **carries 4.178's limits unchanged**: this step reads the volume 4.177's run booted, so every reading
+  of that run inherits the three artificial places in the instrument — the four `loader` blobs, the
+  suppressed `/pmic/target` DALSys record, and `0x12000c` being QEMU RAM where on hardware it is the
+  clock controller's own register. And this repository tracks no INF of a shipped binary: the
+  `QcomPkg.dec` lines above are a *name* source, not a shipped-binary source, and the shipped artifact
+  is the volume.
+- **not an action**: nothing was flashed, no partition was written, no stub, firmware source or
+  Microsoft image was changed or patched, and no firmware was built. `userdata` (107 GB, unbacked), the
+  partition table and the firmware LUN remain untouched. The porting goal is unchanged and unmet: no
+  Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and P5's
+  peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.
+- **device state**: the phone is off USB. It was wedged by an unsupported `fastboot fetch boot` earlier
+  in this session and has not been power-cycled back to the bootloader; `fastboot devices` lists
+  nothing. Nothing was written to it at any point.

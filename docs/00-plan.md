@@ -1128,6 +1128,48 @@ Work:
 > `tools/depex-census.py`, `tools/fv-inventory.py --roster`; none modified. No guest was booted, no
 > firmware was built. See `docs/08` step 4.178.
 
+> **Step 4.179 — the whole graph of `E722B03F` is now measured, and its publisher's own dependency is
+> not satisfiable from its own volume.** Three steps have rested on the premise that `E722B03F` is
+> published by `UsbConfigDxe`; 4.174 asserted three install sites and no step had read them off the file
+> the volume carries. Read off the inner FV of `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+> (`/tmp/fv-usb-177.bin`, `sha256 dbeb98ab…`, re-dumped for this step and byte-identical to what 4.177
+> booted): the publisher is FFS `0983C7F2-0EF3-5EC4-83AD-3B32DDEB1E60` @`0x3a58f0`, type `0x07`,
+> 77,958 B, sections `DXE_DEPEX` 76→72 + `PE32` 77,828→77,824 + `USER_INTERFACE` 30→26, both payload
+> hashes equal to the tracked `uefi/Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/` files — **not** the
+> Bitra `CD823A4D` / `UsbConfigDxe.hostmode.efi` (94,208 B) that 4.174's citation names and that no
+> part of this payload carries. `tools/guid-refs.py` gives the whole graph: **one publisher, four
+> consumer drivers, twelve sites** — `UsbfnDwc3Dxe` ×4 (two opens, two closes), `XhciPciEmulation` ×3
+> (`0x01488` close, `0x014e0`/`0x019e0` open), `XhciDxe` ×1 and `UsbInitDxe` ×1 (`LocateProtocol`),
+> against three `InstallMultipleProtocolInterfaces` in `UsbConfigDxe`. The three installs disassemble
+> identically — `gBS` from `.data 0x11590`, `[vtable + 328]` (slot 41, against `+320` = `LocateProtocol`
+> for `XhciDxe`/`UsbInitDxe` and `+280` = `OpenProtocol` for `XhciPciEmulation`/`UsbfnDwc3Dxe`), the GUID
+> constant at `.data 0x11098`, `x3 = NULL` so each call installs exactly one protocol — and they sit in
+> one function, `UsbStartController` (`0xe977`), whose three failure strings name the three handles: the
+> bare `%r` path (`0xe8e2`) for the controller handle, `(Peripheral Client Handle)` (`0xea2d`) and
+> `(Host Client Handle)` (`0xead1`) for the two client handles, which index a two-record array at
+> `.data 0x112b8` of stride `0xd8` tagged `usbc`, each install followed by `ConnectController`. The
+> driver's own `DXE_DEPEX` (72 B, `sha256 9f1382dd…`) is a four-term conjunction — and **the record has
+> been spelling all four with their first three fields byte-swapped**, which is why `guid-refs.py`
+> returns *0 occurrences* for each of them and why `depex-census.py` could not resolve the file.
+> Corrected, three of the four are named in this tree: `B0760469-970C-487A-A4B5-28DB7B45CEF1` =
+> `gEfiChipInfoProtocolGuid` (`QcomPkg.dec:70`, published by `ChipInfo` `453C9622`),
+> `F4E5C7D0-D239-47CB-AACD-7F66EF763238` = `gEfiSMEMProtocolGuid` (`:60`, `SmemDxe` `94527566`), and
+> `157A5C45-21B2-43C5-BA7C-822FEE5FE599` = `gEfiPlatformInfoProtocolGuid` (`:67`,
+> `PlatformInfoDxeDriver` `09EE56ED`, twelve consumers including `UsbConfigDxe` itself). **The fourth,
+> `EB97088E-CFDF-49C6-BE4B-D906A5B20E86`, occurs zero times in the volume** — and zero times in the
+> phone's own inner FV (`/tmp/fv-stock-p2walk.bin`, 7,348,224 B, `sha256 c8f57e46…`) as well, while the
+> other three are present in both. `QcomPkg.dec` defines 76 GUIDs and this is not one of them. Yet the
+> 4.177 panel reads `K 57 Ss 53/69 free=1024 0983C7F2-…` — `UsbConfigDxe` reaching `CoreStartImage` and
+> returning success — and `CoreIsSchedulable`'s `EFI_DEP_PUSH` pushes `FALSE` for a GUID
+> `CoreLocateProtocol` (`Hand/Locate.c`, `mProtocolDatabase` only) cannot find, with all four pushes
+> evaluated before any AND. Three candidate routes are named (the `Depex = NULL` branch at
+> `Dispatcher.c:892` for any `ReadSection` failure that is not `PROTOCOL_ERROR`; a run-time-constructed
+> GUID; a HOB/PEIM hand-off) and none is tested. The consequence does not wait on the cause: the sole
+> publisher of the protocol both remaining XCHI drivers wait on is being started for a reason this
+> record has not measured. Instrument: `tools/guid-refs.py`, `tools/fv-inventory.py --dump-fvmain`,
+> `tools/fv-apriori.py`'s `walk_volume`, `aarch64-linux-gnu-objdump`; none modified. No guest was
+> booted, no firmware was built, no device was touched. See `docs/08` step 4.179.
+
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,
 the Type-C controller and I2C, and every one of those nodes answers a shipped driver. Of the three

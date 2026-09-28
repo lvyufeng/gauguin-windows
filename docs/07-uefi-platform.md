@@ -3503,6 +3503,26 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `tools/fv-inventory.py --roster`. No guest was booted and no firmware was built. See `docs/08`
 > step 4.178.
 
+> **Step 4.179 — the shipped `UsbConfigDxe`'s dependency expression, and the fourth term of it that
+> nothing in either payload publishes.** Recorded in this file for the same reason as 4.177's and
+> 4.178's last paragraphs: it is about which artifact is the authority, and it turns on a spelling.
+> `E722B03F-B250-42CE-8EBD-5BD51812D037` — the protocol the two XCHI drivers are gated on — has exactly
+> one publisher in this volume, FFS `0983C7F2-0EF3-5EC4-83AD-3B32DDEB1E60`, whose code section is
+> byte-identical to `uefi/Binaries/gauguin/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.efi` and whose
+> three `InstallMultipleProtocolInterfaces` sites are read off it in `docs/08`. That file's own
+> `DXE_DEPEX` is a four-term conjunction, and the record has carried all four GUIDs with their first
+> three fields byte-swapped — the form in which `tools/guid-refs.py` finds none of them anywhere. In the
+> PI byte order three resolve to `QcomPkg.dec`'s own names (`:70` `gEfiChipInfoProtocolGuid`, `:60`
+> `gEfiSMEMProtocolGuid`, `:67` `gEfiPlatformInfoProtocolGuid`), each with a publisher in the volume,
+> and the fourth (`EB97088E-CFDF-49C6-BE4B-D906A5B20E86`) resolves to nothing: zero occurrences in this
+> payload's inner FV and zero in the phone's, against 10/7, 8/2 and 16/13 for the other three. The same
+> lesson 4.177 drew about INFs and 4.178 about depex sets, one turn further: a GUID transcribed by hand
+> is a claim, and a byte order is part of the claim. For the ACPI half of P3 this changes nothing — none
+> of the four is an ACPI protocol and `PlatformInfoDxeDriver` is not in this file's tables. Instrument:
+> `tools/guid-refs.py`, `tools/fv-inventory.py --dump-fvmain` over the XHCI image and over
+> `work/out/boot-before-p2walk.img`, `Silicon/Qualcomm/QcomPkg/QcomPkg.dec`. No guest was booted, no
+> firmware was built and no device was touched. See `docs/08` step 4.179.
+
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
