@@ -41278,3 +41278,236 @@ the first time that has been used here to read a **call chain** rather than a st
   porting goal is unchanged and unmet, and the three physical actions outstanding from 4.196 — a physical
   reset of the phone, a reboot to the bootloader, and a photograph of the 4.187 P3 payload's screen — are
   still outstanding and still cannot be taken from this host.
+
+## Step 4.198 — the poll the seeded guest spins in is named at its own entry: it is `XhcDriverBindingStart`'s two host-controller polls, and the first of them is the reset whose completion can never come
+
+**The question, and why 4.196 could not answer it.** 4.196 ended with (a) stated as an open item: *which* of
+the poll helper's five ways in the guest was in. Its trace carried `x0`, `x8`, `x22`–`x26` and `lr`, but not
+`w1`/`w2`/`w3`, and both of the sites it had scanned pass the same 10 000 ms. The `lr` it did carry —
+`0x9bdfe91c` = `XhciDxe+0x491c` — was read there as identifying the site. **It does not.** RVA `0x491c` is
+the helper's *own* return address: the instruction after `blr x8` at `0x4918`, which is the `gBS->Stall`
+call *inside* the helper's loop. Every caller's trace shows it, so 4.196's evidence was consistent with all
+five ways in, and the "exactly two callers … both pass `w4 = 0x2710`" scan named the *possible* sites, not
+the actual one. This step reads the arguments at the entry instead — the change 4.196 itself named (*"a
+break-in that also dumped `w1`, or a `Z0` at `0x48f0` reading it, names the register — a probe change, not a
+device change"*).
+
+**The instrument, and the prediction written before the run.** `work/out/qemu-probe-4.198/hand9probe.py`
+(`sha256 0d648e21a40cbb49…`, 29,026 B) is `hand7probe.py` (`30a4e441d8ff2430…`, 22,079 B) plus **one**
+breakpoint — a seventh `Z0` site at `XHCI + 0x48AC`, the poll helper's own entry — and a handler for it.
+Nothing else in the probe changed; the six `ClockDxe` sites, the nine answers and the `/pmic/target`
+suppression are 4.196's. `run-hand9.sh` (`4b61771dc27e4ddb…`, 4,718 B) differs from `run-hand7.sh`
+(`06eb42ab8fcc2d2e…`, 4,636 B) in exactly three places: the `OUT` directory, the added `--xhci 0x9bdfa000`,
+and the summary wording. All **seven** fabricated loaders stand, `/tmp/xhci-cap.bin`
+(`d92559090d42f685…`, 4,096 B) included, and the four EL3 flags are the same four — so this run's machine is
+4.196's machine, plus a listener. The handler writes nothing: it reads `w1`–`w4` and `x30` at the entry,
+prints the helper's own first word as a check, page-walks `x30` to its module and RVA, reads the polled
+dword **through the board's own IPA** at `0x0A600000 + CapLength + w1`, and states whether the first pass
+succeeds. After `--hitcap 16` hits it removes its own breakpoint, "so that a retry loop cannot turn this
+instrument into the experiment". Two hits occurred.
+
+The prediction is in the runner's header, written before the run: the entry prints **either**
+`w1 offset=0x4 w2 mask=0x1 w3 expect=0` — the controller-run poll reached through RVA `0x4BBC`, *"whose
+success needs USBSTS.HCHalted clear and which the seeded blob's own USBSTS = 1 makes impossible"* — **or**
+`w1 offset=0x0 w2 mask=0x2 w3 expect=0`, the reset poll at RVA `0x4B28`; *"if instead it prints
+`w1 offset=0x4..0x4e0 w2 mask=0x200` (a port's PORTSC, PP) then the inheritance argument is wrong about
+`x24`"*; and *"if the breakpoint never fires, the base `0x9bdfa000` is wrong for this run"*. **Both named
+branches occurred, and in that order.**
+
+**The reading, verbatim from `hand9-run.log`** (`sha256 59c593b458562435…`, 8,807 B; the stdout log is
+byte-identical):
+
+    @16.7s xHCI POLL ENTRY #1  x0=0x9bd60018  x30=0x9bdfb64c
+            entry word fa67bba9  (the tree's helper starts a9bb67fa at rva 0x48ac)
+            w1 offset=0x0  w2 mask=0x2  w3 expect=0x0  w4 timeout=0x3e8 ms -> bound 1000000
+            CALLER: 0x9bdfb64c -> MZ at 0x9bdfa000 after 1 page(s); rva = 0x164c  (= this tree's bitra XhciDxe + 0x164c)
+            POLLED: BAR CapLength 0x20 + offset 0x0 = IPA 0xa600020, reads 0x2
+            WANTS (read & 0x2) != 0x2 -- masked = 0x2, so the first pass fails and the poll spins
+    @30.1s xHCI POLL ENTRY #2  x0=0x9bd60018  x30=0x9bdfb684
+            entry word fa67bba9  (the tree's helper starts a9bb67fa at rva 0x48ac)
+            w1 offset=0x4  w2 mask=0x1  w3 expect=0x0  w4 timeout=0x2710 ms -> bound 10000000
+            CALLER: 0x9bdfb684 -> MZ at 0x9bdfa000 after 1 page(s); rva = 0x1684  (= this tree's bitra XhciDxe + 0x1684)
+            POLLED: BAR CapLength 0x20 + offset 0x4 = IPA 0xa600024, reads 0x1
+            WANTS (read & 0x1) != 0x1 -- masked = 0x1, so the first pass fails and the poll spins
+
+There is a defect in the probe's *wording* here, and it must not be read as a finding: the probe's format
+string passes `w2` twice — `out("... (read & %#x) %s %#x ..." % (w2, "==" if want else "!=", w2, ...))`
+(`hand9probe.py:414`) — so the number after `!=` is the **mask**, not the expected value. The verdict on the
+same line is computed from `w3` and is correct. Read correctly: **entry #1 wants `(read & 0x2) == 0`** — i.e.
+USBCMD.HCRST clear, the host-controller reset having completed — and reads `0x2`, so it can never pass; and
+**entry #2 wants `(read & 0x1) == 0`** — i.e. USBSTS.HCHalted clear, the controller having started — and
+reads `0x1`, so it can never pass either.
+
+**Where each entry comes from, by disassembly.** The helper has three tail branches into it —
+`0x4B28`, `0x4B7C` and `0x4BBC`, one per wrapper — and each is taken *after* the wrapper has restored `x30`
+from its own frame (`0x4B10`/`0x4B78`/`0x4BA0`, `ldp x29,x30,[sp,…]`), which is why the `x30` the entry sees
+is the **outermost caller's** return address and not the wrapper's. So the two `x30` values name the two
+call sites directly, and this tree's image at those addresses confirms each one twice over:
+
+| entry | `x30` | RVA | the tree's instruction there | reached by |
+| --- | --- | --- | --- | --- |
+| #1 | `0x9bdfb64c` | `0x164c` | `0x1648 bl 0x4a84` | wrapper `0x4A84`, tail branch `0x4B28` |
+| #2 | `0x9bdfb684` | `0x1684` | `0x1680 bl 0x4b80` | wrapper `0x4B80`, tail branch `0x4BBC` |
+
+The two wrappers are the two halves of a host-controller bring-up, and they are what makes the polled
+register predictable:
+
+- **`0x4A84`** reads offset 4 (`USBSTS`) first; if bit 0 is already set (`HCHalted`) it takes the shortcut
+  at `0x4AA4`, otherwise it calls **`0x4B40`** — clear USBCMD bit 0 (`Run/Stop`) at `0x4B5C` via `0x4870`,
+  then poll offset 4 mask 1 **expect set** — and then, at `0x4AF8`, *sets* USBCMD bit 1 (`HCRST`) through
+  `0x4834` and tail-branches to the helper with `w1=0` `w2=2` `w3=0` `w4=w19`. So entry #1 is the **reset**
+  poll: "HCRST has been written, wait for the controller to clear it". In this run the shortcut *was* taken,
+  because the seed's own `USBSTS = 1` reads as already halted.
+- **`0x4B80`** sets USBCMD bit 0 (`Run/Stop`) at `0x4B9C` via `0x4834`, then tail-branches with `w1=4`
+  `w2=1` `w3=0` `w4=w19`. So entry #2 is the **run** poll: "Run has been written, wait for `HCHalted` to
+  clear". This is the site 4.196's written prediction named, reached as predicted.
+
+**The caller, named by its own rodata.** Both call sites sit in one routine that begins at RVA `0x153C`, and
+that routine carries five failure strings and two asserts which name it:
+
+| RVA | the image's own bytes there |
+| --- | --- |
+| `0x17C4` | `XhcDriverBindingStart: failed to enable controller` |
+| `0x182C` | `XhcDriverBindingStart: failed to create USB2_HC` |
+| `0x18C0` | `XhcDriverBindingStart: failed to start async interrupt monitor` |
+| `0x18E0` | `XhcDriverBindingStart: failed to install USB2_HC Protocol` |
+| `0x18EC` | `XhcDriverBindingStart: failed to install USB Port test Protocol` |
+| `0x1850` | `%a:%d ASSERT: (XhcIsHalt (Xhc))` — `Xhci.c`, line `0xA5E` = 2654 |
+| `0x188C` | `%a:%d ASSERT: (!(XHC_REG_BIT_IS_SET (Xhc, XHC_USBSTS_OFFSET, XHC_USBSTS_CNR)))` — `Xhci.c` line `0xA64` = 2660 |
+
+So the sequence the machine walked is `XhcDriverBindingStart`'s: create the controller object (`bl 0x3e70`
+at `0x162C`, whose null path is the `failed to create USB2_HC` print at `0x1828`), reset it (`0x1648`,
+1000 ms), check `XhcIsHalt` (`0x1650`) and `USBSTS.CNR` (`0x1664`) with an assert on each failure,
+initialise it (`0x1670 bl 0x58f4`), then start it (`0x1680`, 10 000 ms). The instance these calls are made
+on is `x0 = 0x9BD60018`, and it is the *same* address in both entries and in 4.196's trace — one
+`USB_XHCI_INSTANCE`, three sightings at three different depths of the same call.
+
+**The seed is what makes both first passes impossible, and by construction rather than by luck.** The
+fabricated block at pool `0x41A00000` is plain RAM behind the redirect, so the driver's own writes stick:
+after `0x4AF8` writes USBCMD bit 1, offset 0 reads `0x2` — the guest's own `HCRST`, which real hardware
+self-clears and RAM never will; after `0x4B9C` writes USBCMD bit 0, offset 4 reads the seed's `USBSTS = 1`,
+i.e. `HCHalted` still set. Both polls therefore run their whole bound. The bounds are in the arguments and
+in the helper's own arithmetic: `0x48CC mul w25,w4,w8` with `w8 = 0x3E8`, so the bound is
+`Timeout(ms) × 1000` iterations and each iteration burns one `gBS->Stall(1)` — 1 000 000 and 10 000 000.
+
+**The same poll is read out of the break-in register file, which is what turns 4.196's inheritance argument
+into a reading.** 4.198's break-in is at the same PC (`0x9c4b7c10`, the `ret` of `ArmReadCntPct`) after the
+same nine answers and 25 s of free run, and its register file is 4.196's in every field that carries the
+helper's state:
+
+| | 4.196 | 4.198 | what it is |
+| --- | --- | --- | --- |
+| `x22` | `0x9bd60018` | `0x9bd60018` | the `USB_XHCI_INSTANCE` — the entries' own `x0` |
+| `x23` | `0x107ebd` = 1,081,021 | `0x1cbd6e` = 1,883,502 | the helper's iteration counter, `0x48DC mov w23,wzr` / `0x491C add w23,w23,#1` |
+| `x24` | `0` | `0` | the helper's expect byte, `0x48E0 and w24,w3,#0xff` — **0 = the CLEAR flavour**, as 4.196 inferred |
+| `x25` | `0x989680` = 10,000,000 | `0x989680` = 10,000,000 | the bound, i.e. a 10 000 ms site |
+| `x26` | `0x9be0f000` | `0x9be0f000` | `XHCI + 0x15000`, the helper's own `adrp x26, 0x15000` |
+| `x20` | `0x9b240a40` | `0x3b9aca0` | **not** the helper's — `MicroSecondDelay` overwrites it (`0x1748 mov x20,x0`) |
+
+The last row is a correction to the inheritance argument as 4.196 stated it: the four frames between the
+helper and the break-in (DxeCore `CoreStall`, DxeCore `CoreInternalWaitForTick`, MetronomeDxe `WaitForTick`,
+MetronomeDxe `MicroSecondDelay`) preserve `x22`–`x26` but **not** `x20`, which is why the two runs' `x20`
+differ and why `x20` may not be used to identify the poll. `x24 = 0` is the one that matters most, and it is
+now read at the entry as well: both entries have `w3 = 0`, the expect-clear flavour.
+
+**The two timestamps and the counter agree on the instrument's `Stall(1)` cost.** Entry #1 is at 16.7 s with
+a 1 000 000-iteration bound, entry #2 at 30.1 s, and the break-in at 55.1 s with `x23` = 1,883,502 of
+10 000 000 — 18.8 % into the second poll. Two independent intervals then imply the same per-iteration cost:
+(55.1 − 30.1) s over 1,883,502 iterations is **13.27 µs** per iteration, and against that the first poll's
+1 000 000 iterations *predict* 13.27 s for the 13.4 s actually observed between the two entries — a
+residual of 0.13 s for the real work between the polls (`XhcIsHalt`, the `USBSTS` read, and `0x58f4`). The
+residual is small but the agreement is not a measurement of the constant: the panel reader was sampling the
+same host for all 300 s, so the guest's speed varies with host load. What the arithmetic does fix is the
+*second* poll's wall-clock expiry: 30.1 s + 10 000 000 × 13.3 µs ≈ **163 s**, well inside the panel's 300 s
+window.
+
+**Both statuses are discarded by this caller, which is why no failure row can exist.** At `0x164C` the
+instruction after `bl 0x4a84` is `mov x0,x20`, and at `0x1684` the instruction after `bl 0x4b80` is
+`ldr x10,[x23,#992]` — neither branches on the call's result, and no later instruction in the routine tests
+it either. So the `EFI_TIMEOUT` the helper returns in `x0` is dropped on the floor and the routine proceeds
+either way. The probe's own timeout value is `mov x20,#0x12` + `movk x20,#0x8000,lsl #48` =
+`0x8000000000000012`, and the strings that *would* report it —
+`%a: Faile to reset host controller` (`0x1235B`), `%a: Failed to halt the host controller` (`0x123C5`),
+`%a: Failed to start host controller` (`0x123ED`) — are referenced from a *different* routine (around
+`0xA4F0`/`0xA598`, which does branch on its own `bl 0x4a84`), not from `XhcDriverBindingStart`. That closes
+4.196's open item (b) in the negative for the row: the panel has no reset-failure row because this call site
+has no print for one, and the same reasoning says the routine's continuation past a timed-out reset is
+itself a silent, status-free step.
+
+**The console.** Panel `work/out/qemu-panel-4.198-trace.txt` (`sha256 8cc2cdf2fd7dfd8a…`, 24,149 B) is 281
+rows with 4 gaps, weakest margin 1.00 of 60 sub-blocks. It holds **0** `ASSERT` rows, **0** `CapLength` rows
+and **0** `XhciReg` rows — the third run in this family to keep the assert away while the seed is present —
+and it ends on UsbConfigDxe's Vbus trio twice, rows 275–280. Its `{K24, K25, K26}` census is **`K24`
+alone** (rows 96–98: `K 23`, `K 24`, `K 27`), which is 4.197's subset, and the four-run census
+(4.192 none, 4.196 all three, 4.197 `K24`, 4.198 `K24`) is a fourth sample of the sampling loss 4.197
+identified rather than a new effect. The panel row count is lower than the other runs' (281 against 349 and
+363) and nothing here explains it: a panel is rebuilt from 1,199 samples and cleared as it is read, so its
+row count is a property of the sampling and not of the guest.
+
+**What this settles, and the experiment it names.** 4.196's open item (a) is decided, and the answer is
+*both* sites rather than either: the seeded guest enters the reset poll (1000 ms) from
+`XhcDriverBindingStart+0x1648`, exhausts it, then enters the run poll (10 000 ms) from the same routine at
+`+0x1680` — so the ten-million-iteration bound 4.196 predicted is the *second* of two, and the first is
+reached and failed 13.4 s earlier. `0xAA2C` (`XhcDisableAllDeviceSlotsAndPorts`) is excluded for this run:
+its only appearance is the helper's own return `lr = 0x9bdfe91c`, which every caller shows. The experiment
+this names and does not run is now sharper than 4.196's: seed **both** polled bits — HCRST clear at
+`0x0A600020` and HCHalted clear at `0x0A600024` — and the two polls succeed on their first pass instead of
+spinning. Unlike 4.190's vote bit, this changes what the driver *does* and not only what it prints, because
+the statuses are discarded: with both polls returning success the routine proceeds past them and the run
+tests whether anything downstream of the reset depends on the block being real.
+
+**Rows.**
+
+- **artifacts**, all host-side and none of them a device read: `work/out/qemu-probe-4.198/hand9probe.py`
+  (`0d648e21a40cbb49…`, 29,026 B), `run-hand9.sh` (`4b61771dc27e4ddb…`, 4,718 B), `hand9-run.log`
+  (`59c593b458562435…`, 8,807 B), `panel4198.log` (`6609c412eb2475c5…`), `work/out/qemu-panel-4.198-trace.txt`
+  (`8cc2cdf2fd7dfd8a…`, 24,149 B); the fabricated block `/tmp/xhci-cap.bin` (`d92559090d42f685…`, 4,096 B)
+  unchanged from 4.196; and two `diff`s — probe against `hand7probe.py`, runner against `run-hand7.sh` — plus
+  one RVA read each of the wrapper region `0x48AC`–`0x4BC0` and the caller region `0x153C`–`0x1900` of
+  `/tmp/xhci-bitra.asm` and one rodata dump of `/tmp/xhcidxe-bitra.bin`. Nothing was written outside `docs/`
+  and `work/` (gitignored).
+- **shows**: the poll helper's entry fired twice, printed the four arguments, the caller's return address with
+  its module and RVA, the polled dword through the board's own IPA and a verdict; the two call sites are
+  `XhcDriverBindingStart+0x1648` and `+0x1680`, confirmed independently by the tail-branch mechanism and by
+  the tree's instructions at those addresses; the routine is named by its own five failure strings and two
+  asserts; both polls' first passes fail on the seeded values; and the break-in register file carries the
+  same poll's bound, counter, expect byte and instance as the entries do.
+- **decides**: which poll site the seeded guest is in — 4.196's open item (a) — and the answer is the reset
+  poll at `+0x1648` *and then* the run poll at `+0x1680`, not `0xAA2C` and not a port's PORTSC (the
+  prediction's falsifying branch did not occur); that the base `0x9bdfa000` is exact for this run (the entry
+  fired and its first word read `fa67bba9`, the tree's `a9bb67fa` in memory order, with both `x30` values
+  page-walking to `MZ` there); and that the caller does not test either poll's status, so no reset-failure row
+  from this site exists to be looked for.
+- **corrects**: the reading 4.196 published of its own `lr`. `0x9bdfe91c` is `XhciDxe+0x491c`, the
+  instruction after the helper's internal `blr x8` — the helper's own return, not a caller's — so it names no
+  site and is shared by every caller. The site 4.196's scan offered as an alternative, `0xAA2C`, is excluded
+  for this run on that same ground. Also corrected: 4.196's statement of the inheritance argument implied
+  `x20` was the helper's; it is not, because `MicroSecondDelay` overwrites it at RVA `0x1748`, and the two
+  runs' differing `x20` values are that overwrite rather than a difference of call site.
+- **corrects, instrument**: the probe's `WANTS` line prints the mask where the expected value belongs
+  (`hand9probe.py:414` passes `w2` twice). The verdicts it printed are computed from `w3` and are correct;
+  the mid-line numbers `0x2` and `0x1` after `!=` are the masks. Read as written here: entry #1 wants
+  `(read & 2) == 0` and entry #2 wants `(read & 1) == 0`.
+- **does not decide**: whether the polls were ever *left* — the arithmetic puts the second poll's bound at
+  ≈163 s, inside the panel window, and the panel's stream ends on the Vbus trio with no further xHCI row,
+  which is consistent with either a silent continuation or a lost tail (a panel read is destructive and
+  sampled at 0.25 s); whether anything downstream of the reset ever ran correctly under this instrument; and
+  nothing about the live phone, which still has no host instance whose capability block could be read.
+- **carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the
+  fourteen-rung ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and
+  the EL3 stub's three fabricated structures all stand, and the panel's own header says so. The fabricated
+  xHCI block is a fourth lie of that family and is named as one where it is used.
+  `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`
+  and was read, not written.
+- **not an action**: no `fastboot` command, no console read from the device, and no seed written anywhere but
+  the QEMU command line. The porting goal is unchanged and unmet — no Windows 11 image runs on gauguin, P3 is
+  unfinished, P4's `userdata`-destroying install and P5's peripherals are not begun, and the end state remains
+  a Windows tablet whose modem and cameras cannot be driven.
+- **device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty and
+  `lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken
+  from this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot`
+  workflow needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out
+  screencap -p` still returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that
+  photograph exists. Nothing on the device's storage was written, so `userdata`, the partition table and the
+  firmware LUN are all as they were.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s.

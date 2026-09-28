@@ -1682,6 +1682,28 @@ Work:
 > is the seed's doing; and three runs holding three different subsets of `{K24, K25, K26}` with the fully
 > lost gaps every panel reports makes 4.196's row-163 difference sampling loss, not an effect of the blob.
 > A panel read is destructive (`efi_panic_clear()`) and cannot settle what the guest executed; the CPU can.)
+> **4.198: the poll is named at its own entry.** 4.196's open item (a) — *which* way into the poll helper
+> the seeded guest had taken — is decided by reading the helper's arguments instead of its `lr`, because the
+> `lr` 4.196 published, `0x9bdfe91c` = `XhciDxe+0x491c`, is the helper's *own* return after its internal
+> `blr x8` and is shared by every caller. One added `Z0` at `XHCI + 0x48AC` fired twice: `@16.7s`
+> `w1=0 w2=2 w3=0 w4=0x3E8` from `x30 = XhciDxe+0x164C`, the reset poll (`0x4A84` sets `USBCMD.HCRST` and
+> waits for it to clear) reading `0x2` at IPA `0x0A600020`; and `@30.1s` `w1=4 w2=1 w3=0 w4=0x2710` from
+> `x30 = XhciDxe+0x1684`, the run poll (`0x4B80` sets `Run/Stop` and waits for `USBSTS.HCHalted` to clear)
+> reading the seed's own `0x1` at `0x0A600024`. Both call sites are in one routine, `XhciDxe` RVA `0x153C`,
+> named by its own five failure strings (`XhcDriverBindingStart: failed to enable controller`, `…create
+> USB2_HC`, `…start async interrupt monitor`, `…install USB2_HC Protocol`, `…install USB Port test
+> Protocol`) and by its `Xhci.c` 2654/2660 asserts; so the ten-million-iteration bound 4.196 predicted is the
+> *second* poll, and the first is the reset, reached and failed 13.4 s earlier. The break-in register file
+> reads the same poll out (`x22 = 0x9BD60018`, `x24 = 0`, `x25 = 0x989680`, `x26 = XHCI + 0x15000`,
+> `x23 = 1,883,502` of 10,000,000 at 55.1 s) and two intervals agree on the instrument's `Stall(1)` cost at
+> 13.27 µs per iteration, putting the second poll's expiry at ≈163 s. This caller **discards both statuses**
+> (`0x164C mov x0,x20`, `0x1684 ldr x10,[x23,#992]`), which is why the 281-row panel ends on UsbConfigDxe's
+> Vbus trio with no reset-failure row. Corrected from 4.196: the `x22`–`x26` inheritance holds but `x20` is
+> not the helper's (`MicroSecondDelay` overwrites it at RVA `0x1748`), and the probe's `WANTS` line prints
+> the mask where the expected value belongs. `0xAA2C` is excluded for this run. The next experiment is the
+> sharper mirror of 4.190's: seed **both** polled bits — HCRST clear at `0x0A600020` *and* HCHalted clear at
+> `0x0A600024` — after which the two polls pass on their first try and the run tests what lies downstream of
+> a reset that reads as successful, rather than only what the driver prints.)
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts

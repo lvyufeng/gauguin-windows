@@ -3999,6 +3999,34 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > was flashed, no partition was written, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step
 > 4.197.
 >
+> **Step 4.198 — the poll is named at its own entry, and it is `XhcDriverBindingStart`'s reset that fails
+> first.** 4.196's own open item (a) was *which* way into the poll helper the seeded guest had taken, and its
+> evidence for a site — `lr = 0x9bdfe91c` = `XhciDxe+0x491c` — does not name one: `0x491c` is the instruction
+> after the helper's internal `blr x8`, the helper's *own* return address, so every caller shows it. So the
+> probe was changed rather than the machine: a seventh `Z0` site at `XHCI + 0x48AC`, the helper's entry,
+> where `w1`–`w4` are still the arguments and `x30` is the outermost caller — because the three wrappers
+> reach the helper by tail branch *after* restoring `x30` from their own frames (`0x4B10`/`0x4B78`/`0x4BA0`).
+> It fired **twice**, and both branches of the runner's pre-written prediction occurred in order:
+> `@16.7s` `w1=0 w2=2 w3=0 w4=0x3E8` from `x30 = XhciDxe+0x164C` — the `bl 0x4A84` at `0x1648`, the wrapper
+> that halts if needed and then sets `USBCMD.HCRST` and waits for it to clear, i.e. the **reset** poll,
+> reading `0x2` through the board's IPA at `0x0A600020`, so its first pass can never succeed — and `@30.1s`
+> `w1=4 w2=1 w3=0 w4=0x2710` from `x30 = XhciDxe+0x1684` — the `bl 0x4B80` at `0x1680`, the **run** poll
+> waiting for `USBSTS.HCHalted` to clear, reading the seed's own `0x1` at `0x0A600024`, likewise impossible.
+> Both call sites are in one routine, RVA `0x153C`, which the image's own rodata names five times over
+> (`XhcDriverBindingStart: failed to enable controller` `0x17C4`, `…failed to create USB2_HC` `0x182C`,
+> `…failed to start async interrupt monitor` `0x18C0`, `…failed to install USB2_HC Protocol` `0x18E0`,
+> `…failed to install USB Port test Protocol` `0x18EC`) and which asserts `Xhci.c` 2654 `(XhcIsHalt (Xhc))`
+> and 2660 `(!(USBSTS.CNR))`. The break-in register file reads the same poll out — `x22` = the entries' own
+> `x0 = 0x9BD60018`, `x24 = 0` (expect clear), `x25 = 0x989680`, `x26 = XHCI + 0x15000`, `x23 = 1,883,502` of
+> 10,000,000 at 55.1 s — and two intervals agree on the instrument's `Stall(1)` cost (13.27 µs per iteration;
+> the first poll's 1,000,000 iterations predict the 13.4 s observed between the entries), which puts the second
+> poll's expiry at ≈163 s. **The caller discards both statuses** (`0x164C mov x0,x20`, `0x1684 ldr
+> x10,[x23,#992]` — no branch on either), and the strings that would report them live in a different routine,
+> which is why the 281-row panel ends on UsbConfigDxe's Vbus trio and carries no reset-failure row. Also
+> corrected: 4.196's inheritance argument holds for `x22`–`x26` but not `x20`, which `MicroSecondDelay`
+> overwrites at RVA `0x1748`. Nothing was flashed, no partition was written, `UsbConfigDxe.efi` is still
+> `sha256 6943cc61…`. See `docs/08` step 4.198.
+>
 
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
