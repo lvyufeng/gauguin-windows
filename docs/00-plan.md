@@ -1094,6 +1094,39 @@ Work:
 > `tools/depex-census.py`, `tools/fv-inventory.py` (`--roster`, `--acpi`, `--dump-fvmain`) and
 > `tools/apriori-stock-diff.py --index` were read, not modified. No tool was changed, nothing was
 > flashed and no firmware was built. See `docs/08` step 4.177.
+>
+> **Step 4.178 — the three XCHI drivers' gates are now all named, and `XhciDxe`'s is not a depex at
+> all.** 4.177 answered *started* and closed on *bound*; neither it nor 4.176 asked **what made the
+> three schedulable**, which is decidable from the volume alone and needs no guest. Measured with
+> `tools/fv-apriori.py`'s own `walk_volume` over the inner FV (`/tmp/fv-usb-177.bin`, `sha256
+> dbeb98ab…`, 126 files): `XhciPciEmulation` @`0x34a628` `DXE_DEPEX` 234 B + `PE32` 45,056 B,
+> `UsbInitDxe` @`0x3b8978` `DXE_DEPEX` 18 B + `PE32` 32,768 B, and **`XhciDxe` @`0x355760` with
+> `PE32`, `USER_INTERFACE` and `VERSION` sections and no `DXE_DEPEX` at all** — not an omission of
+> this project's packaging: its INF's `[Binaries.AARCH64]` is one line, `PE32|XhciDxe.efi|*`, and no
+> `XhciDxe.depex` exists beside the `.efi` while both siblings have one. Every section payload hashes
+> equal to the Bitra source `tools/make_xbl_binaries.py:142` copies. The two depexes are pure
+> conjunctions — `UsbInitDxe`'s is the single term `E722B03F-B250-42CE-8EBD-5BD51812D037`, and
+> `XhciPciEmulation`'s 234 bytes are **thirteen** terms, now all named for the first time
+> (`MdePkg.dec:1183-1223`, `:1550`), whose set is exactly
+> `{gEfiDriverBindingProtocolGuid} ∪ (mArchProtocols[] − {Capsule})` — and the only 234-byte depex in
+> the volume. Because `XhciDxe` has none, `Dispatcher.c:892` leaves `Depex` NULL and
+> `CoreIsSchedulable` (`Dependency.c:221`) takes `CoreAllEfiServicesAvailable`
+> (`DxeProtocolNotify.c:81`), i.e. one predicate over all **thirteen** `mArchProtocols[]` —
+> `Capsule` included, and `Capsule` is exactly the one term `XhciPciEmulation`'s list omits, so the
+> one document in the tree that looks like an authoritative arch-protocol list is short by the one
+> entry the other route turns on. `tools/arch-protocol-census.py` settles it: **13 present, 0
+> absent**, `Capsule` produced by `CapsuleRuntimeDxe` (`42857F0A-…B840`, 21,612 B, `ap42 s`, the only
+> Capsule-family file in the roster) — which 4.177's `K 74`/`K 75` had already *implied* without
+> saying. `gEfiDriverBindingProtocolGuid`, the depex's first term, is installed by no file in
+> `Mu_Basecore/` (`DxeMain.inf:149` is `SOMETIMES_CONSUMES`); it comes from the first promoted
+> `DRIVER` to publish its own binding, by 4.176's drain. Also corrects one sentence of 4.177's
+> `provenance limit` bullet — `find . -name 'XhciDxe.inf'` returns **40** hits and `uefi/Binaries/`
+> **exists**, so the evidence was wrong though the conclusion holds: all 40 resolve via
+> `git check-ignore` to `.gitignore:8:work/` and the untracked-by-`work/` `Binaries` tree carries no
+> XCHI driver. *Schedulable* is a third verb and joins *released* and *started*; all three stop short
+> of *bound*. Instrument: `tools/fv-apriori.py`, `tools/arch-protocol-census.py`,
+> `tools/depex-census.py`, `tools/fv-inventory.py --roster`; none modified. No guest was booted, no
+> firmware was built. See `docs/08` step 4.178.
 
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,

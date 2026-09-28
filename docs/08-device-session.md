@@ -36432,3 +36432,240 @@ no `K` rows.
   unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
   `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
   Windows tablet whose modem and cameras cannot be driven.
+
+## Step 4.178 — the three XCHI drivers' depexes are read off the shipped artifact with every term named, and the gate `XhciDxe` goes through instead is not a depex at all: it ships with **no `DXE_DEPEX` section**, so its schedulability is `CoreAllEfiServicesAvailable`'s thirteen-name list — which this volume satisfies in full, `Capsule` included, from a file no earlier step had named
+
+### The question, and why it can be answered from the artifact rather than from a probe
+
+Step 4.177 closed on the limit in its own words: *"An entry point returning `EFI_SUCCESS` is not a
+bound controller and not an enumerated USB device … whether `XhciDxe` binds to `XhciPciEmulation`'s
+published root bridge under `EfiBootManagerConnectAll` is unmeasured. A `ConnectController`-side
+probe or a `P2`-side counter would answer it; this panel cannot."* That is the next question and it
+is still the next question. But 4.176 and 4.177 established only that the three drivers were
+*released* and *started*; neither asked **what made them schedulable**, and that is not the same
+question as either. It is also the cheaper one: it is a property of two files in the volume plus one
+branch in `Dependency.c`, and it needs no guest, no probe and no new row.
+
+The answer turns out to have two halves that do not look alike, and the difference is the finding.
+
+### What the volume carries for the three files, read off the artifact
+
+Parsed out of the inner FV of `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img`
+(`/tmp/fv-usb-177.bin`, 7,536,640 B, `sha256 dbeb98abb69a3c3a3b5c20914b84b6512d985f2174a1b74860656eef4a738a95`,
+126 files) with `tools/fv-apriori.py`'s own `walk_volume` — so the walk is the one the project's
+other volume tools use and not a second parser:
+
+| file | FFS offset | FFS type | FFS size | sections (type, size → payload) |
+|---|---|---|---|---|
+| `XhciPciEmulation` | `0x34a628` | `0x07` `DRIVER` | 45,362 | `DXE_DEPEX` 238→234 @`0x34a640`; `PE32` 45,060→45,056 @`0x34a730`; `USER_INTERFACE` 38→34 @`0x355734` |
+| `XhciDxe` | `0x355760` | `0x07` `DRIVER` | 94,270 | `PE32` 94,212→94,208 @`0x355778`; `USER_INTERFACE` 20→16 @`0x36c77c`; `VERSION` 14→10 @`0x36c790` |
+| `UsbInitDxe` | `0x3b8978` | `0x07` `DRIVER` | 32,846 | `DXE_DEPEX` 22→18 @`0x3b8990`; `PE32` 32,772→32,768 @`0x3b89a8`; `USER_INTERFACE` 26→22 @`0x3c09ac` |
+
+Every section payload hashes equal to the corresponding file under
+`work/uefi/Mu-Silicium/Binaries/bitra/QcomPkg/Drivers/`, which is what `tools/make_xbl_binaries.py`'s
+`SIBLING_BLOBS` (`:142`) copies verbatim — `XhciPciEmulationDxe.efi` `sha256 68ee8cf1…`,
+`XhciPciEmulationDxe.depex` `6e3f0219…`, `XhciDxe.efi` `d579eaa0…`, `UsbInitDxe.efi` `bb95fcb9…`,
+`UsbInitDxe.depex` `ac68645c…`. The chain source → volume is closed for all five.
+
+**`XhciDxe` has no `DXE_DEPEX` section.** That is not an omission of this project's packaging. Its
+INF's `[Binaries.AARCH64]` section holds one line, `PE32|XhciDxe.efi|*`, there is no `DXE_DEPEX` line,
+and no `XhciDxe.depex` file exists beside the `.efi` — while both sibling directories have one. So
+the volume reproduces the source exactly, and the absence is the shipped shape.
+
+### The two depexes, decoded and named
+
+Both are well-formed PI dependency expressions: opcode `0x02` pushes a GUID, `0x03` is AND, `0x08`
+is END. Both are pure conjunctions.
+
+**`UsbInitDxe.depex`, 18 bytes** — `02 3FB022E7 50B2 CE42 8EBD5BD51812D037 08`, one term:
+
+```
+E722B03F-B250-42CE-8EBD-5BD51812D037
+```
+
+which no header under `work/uefi/Mu-Silicium` defines — `tools/depex-census.py` says so in as many
+words — and which 4.174 established `UsbConfigDxe` installs at three sites. One term, one publisher,
+and the publisher is promoted (`UsbConfigDxe` ap57). 4.176's drain argument does the rest.
+
+**`XhciPciEmulationDxe.depex`, 234 bytes** — thirteen pushes and twelve ANDs, so a conjunction of
+thirteen terms, and it is **the only 234-byte depex in the volume** (`depex-census.py`'s size
+histogram: `2 B ×15, 18 B ×29, 36 B ×12, 54 B ×1, 72 B ×4, 90 B ×1, 216 B ×2, 234 B ×1, 306 B ×1`).
+Every one of the thirteen now has a name, and this is the first step in which all thirteen are
+named; earlier steps named the subset a resolver could reach.
+
+| # | GUID | name | definition |
+|---|---|---|---|
+| 1 | `18A031AB-B443-4D1A-A5C0-0C09261E9F71` | `gEfiDriverBindingProtocolGuid` | `MdePkg.dec:1550` |
+| 2 | `665E3FF6-46CC-11D4-9A38-0090273FC14D` | `gEfiBdsArchProtocolGuid` | `MdePkg.dec:1183` |
+| 3 | `26BACCB1-6F42-11D4-BCE7-0080C73C8881` | `gEfiCpuArchProtocolGuid` | `:1186` |
+| 4 | `26BACCB2-6F42-11D4-BCE7-0080C73C8881` | `gEfiMetronomeArchProtocolGuid` | `:1193` |
+| 5 | `1DA97072-BDDC-4B30-99F1-72A0B56FFF2A` | `gEfiMonotonicCounterArchProtocolGuid` | `:1196` |
+| 6 | `27CFAC87-46CC-11D4-9A38-0090273FC14D` | `gEfiRealTimeClockArchProtocolGuid` | `:1199` |
+| 7 | `27CFAC88-46CC-11D4-9A38-0090273FC14D` | `gEfiResetArchProtocolGuid` | `:1202` |
+| 8 | `B7DFB4E1-052F-449F-87BE-9818FC91B733` | `gEfiRuntimeArchProtocolGuid` | `:1205` |
+| 9 | `A46423E3-4617-49F1-B9FF-D1BFA9115839` | `gEfiSecurityArchProtocolGuid` | `:1208` |
+| 10 | `26BACCB3-6F42-11D4-BCE7-0080C73C8881` | `gEfiTimerArchProtocolGuid` | `:1214` |
+| 11 | `6441F818-6362-4E44-B570-7DBA31DD2453` | `gEfiVariableWriteArchProtocolGuid` | `:1217` |
+| 12 | `1E5668E2-8481-11D4-BCF1-0080C73C8881` | `gEfiVariableArchProtocolGuid` | `:1220` |
+| 13 | `665E3FF5-46CC-11D4-9A38-0090273FC14D` | `gEfiWatchdogTimerArchProtocolGuid` | `:1223` |
+
+(all in `work/uefi/Mu-Silicium/Mu_Basecore/MdePkg/MdePkg.dec`). Read as a set against
+`mArchProtocols[]` (`MdeModulePkg/Core/Dxe/DxeMain/DxeProtocolNotify.c:21-35`, thirteen entries) the
+thirteen terms are **exactly `{gEfiDriverBindingProtocolGuid} ∪ (mArchProtocols[] − {Capsule})`**.
+`Capsule` is the only architectural protocol the file does not name.
+
+That last clause is a *measurement* and the step stops there. Why a shipped Qualcomm driver would
+carry that particular set — a conjunction of the twelve pre-`Capsule` architectural protocols plus
+the driver-binding protocol, which is the dependency shape of the EFI 1.10 driver model that the
+UEFI 2.0 rule replaced — is a **hypothesis this step does not test**, and it is not needed for
+anything below. What is needed is the set, and the set is now named.
+
+### The gate `XhciDxe` goes through is not a depex at all
+
+`XhciDxe`'s file has no `DXE_DEPEX` section, so `Dispatcher.c` leaves `DriverEntry->Depex` NULL —
+":892-896", *"If no Depex assume UEFI 2.0 driver model"* — and `CoreIsSchedulable`
+(`Dispatcher/Dependency.c:197`) takes its first branch at `:221`:
+
+```c
+if (DriverEntry->Depex == NULL) {
+  Status = CoreAllEfiServicesAvailable ();
+```
+
+`CoreAllEfiServicesAvailable` (`DxeMain/DxeProtocolNotify.c:81`) returns `EFI_NOT_FOUND` at the first
+entry of `mArchProtocols[]` whose `Present` is still `FALSE`. So `XhciDxe`'s schedulability is not
+"thirteen terms published by other drivers" as `XhciPciEmulation`'s is; it is one predicate over the
+core's own thirteen-entry list, and the two routes are *almost* the same list — the difference is
+that `XhciDxe`'s route **does** include `Capsule` and does not include `DriverBinding`.
+
+`XhciDxe` and `UsbInitDxe` were started in the 4.177 run (`K 74 Ss 68/69`, `K 75 Ss 69/69`), which
+means `CoreAllEfiServicesAvailable` returned `EFI_SUCCESS` at that instant — so **all thirteen,
+`Capsule` among them, were `Present`**. Nothing in 4.177 said which file produced `Capsule`, and
+`tools/depex-census.py`'s own report leaves the two drivers in its *"cannot be ruled in or out from
+the image"* bucket, because it resolves a term only when the term is a depex term. The producer is
+decidable from the volume, and this is where it is decided.
+
+### The thirteen, from the volume, with a producer for each
+
+`tools/arch-protocol-census.py work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` prints one row per
+architectural protocol, names its producer, and places that producer in the a-priori array:
+
+```
+     #  protocol           guid                                 producer                      ap  pos SEQ  verdict
+     1  Security           A46423E3-4617-49F1-B9FF-D1BFA9115839 SecurityStubDxe               37   36   s  present
+     2  CPU                26BACCB1-6F42-11D4-BCE7-0080C73C8881 ArmCpuDxe                      6    5   s  present
+     3  Metronome          26BACCB2-6F42-11D4-BCE7-0080C73C8881 MetronomeDxe                   8    7   s  present
+     4  Timer              26BACCB3-6F42-11D4-BCE7-0080C73C8881 ArmTimerDxe                    9    8   s  present
+     5  Bds                665E3FF6-46CC-11D4-9A38-0090273FC14D BdsDxe                        44   43   s  present
+     6  Watchdog Timer     665E3FF5-46CC-11D4-9A38-0090273FC14D WatchdogTimer                 36   35   s  present
+     7  Runtime            B7DFB4E1-052F-449F-87BE-9818FC91B733 RuntimeDxe                     5    4   s  present
+     8  Variable           1E5668E2-8481-11D4-BCF1-0080C73C8881 VariableRuntimeDxe            31   30   s  present
+     9  Variable Write     6441F818-6362-4E44-B570-7DBA31DD2453 VariableRuntimeDxe            31   30   s  present
+    10  Capsule            5053697E-2CBC-4819-90D9-0580DEEE5754 CapsuleRuntimeDxe             42   41   s  present
+    11  Monotonic Counter  1DA97072-BDDC-4B30-99F1-72A0B56FFF2A EmbeddedMonotonicCounter      38   37   s  present
+    12  Reset              27CFAC88-46CC-11D4-9A38-0090273FC14D ResetSystemRuntimeDxe         34   33   s  present
+    13  Real Time Clock    27CFAC87-46CC-11D4-9A38-0090273FC14D RealTimeClock                 39   38   s  present
+
+  0 absent, 13 present
+```
+
+with the tool's own trailer *"13 protocols, 13 with a promoted producer, 0 whose producer is in the
+volume but not in the a-priori array, 0 with none in the volume at all."*
+
+**`Capsule` is produced by `CapsuleRuntimeDxe`** — `42857F0A-13F2-4B21-8A23-53D3F714B840`, FFS type
+`0x07`, 21,612 B in `tools/fv-inventory.py --roster`, and the only Capsule-family file in the roster
+(there is no `CapsuleDxe`) — and the tool places it at a-priori index 42 (41 under the letter map).
+So the name 4.177 could not supply — the one whose absence from a term list is the only asymmetry
+between the two schedulability routes — is a file in the a-priori array, draining before any depex is
+evaluated by 4.176's argument, and `s` in `P2 SEQ` at the same run.
+
+The 16-byte pattern of `gEfiCapsuleArchProtocolGuid` occurs **twice** in the inner FV, at `0x274a4`
+and `0x7356c`. Whatever those two occurrences are — a producer's own constant and a consumer's, or
+two consumers' — they are not needed: a pattern count cannot separate publisher from consumer, which
+is the caveat `tools/guid-refs.py` exists to remove, and the census above answers the same question
+from the a-priori array instead. The measurement is recorded here because a count of zero would have
+been a very different finding and this step did not want to leave the number implicit.
+
+### The three gates, each with a named satisfier
+
+| driver | its gate | satisfied by | evidenced by |
+|---|---|---|---|
+| `XhciPciEmulation` | thirteen-term depex (table above) | twelve arch protocols from promoted drivers + `DriverBinding` from the first promoted `DRIVER` to publish its own binding | census: *"1 wait on them"*, and `K 73 Ss 67/69` |
+| `UsbInitDxe` | one-term depex, `E722B03F` | `UsbConfigDxe` ap57, promoted | 4.174's three install sites; `K 75 Ss 69/69` |
+| `XhciDxe` | **no depex** → `CoreAllEfiServicesAvailable` → all thirteen | the thirteen rows above | `K 74 Ss 68/69` |
+
+`gEfiDriverBindingProtocolGuid` needs its own sentence, because it is the one term in
+`XhciPciEmulation`'s list that **no file in `Mu_Basecore/` installs**: the only reference to it in
+`Core/Dxe` is `DxeMain.inf:149`, `## SOMETIMES_CONSUMES`. It is published by whichever UEFI driver
+first installs its own `EFI_DRIVER_BINDING_PROTOCOL` — that is, by the first promoted `DRIVER` in the
+drain — and hits the same 4.176 argument as the other twelve. It is worth naming because it is the
+term a reader would otherwise assume the core supplies, which it does not.
+
+### Rows
+
+- **instrument**: `tools/fv-apriori.py`'s `walk_volume` over
+  `/tmp/fv-usb-177.bin` (`sha256 dbeb98ab…`), the inner FV of
+  `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` (`sha256 34360470b8a7aafad7340e02787f72366302ab673d11bd20570cb51f4219cb79`);
+  `tools/arch-protocol-census.py`, `tools/depex-census.py`, `tools/guid-refs.py` read, none
+  modified; `Mu_Basecore/MdePkg/MdePkg.dec` and `Mu_Basecore/MdeModulePkg/Core/Dxe/{Dispatcher/Dependency.c,DxeMain/DxeProtocolNotify.c,DxeMain.inf}`.
+  **No guest was booted for this step, no firmware was built, and no tool was changed.**
+- **names**: all thirteen terms of the 234-byte depex. 4.174 named the non-architectural ones and
+  `depex-census.py` resolves eight of the arch terms — `Bds`, `Monotonic Counter`, `Real Time Clock`,
+  `Reset`, `Security`, `Variable Write`, `Variable`, `Watchdog Timer`; the four it does not reach
+  (`Cpu`, `Metronome`, `Timer`, `Runtime`) are the four whose producers sit *earlier* in the
+  a-priori array than `XhciPciEmulation` itself, so there was nothing for it to report. All thirteen
+  are named above from `MdePkg.dec`, and the asymmetry the eight-vs-thirteen gap hid is that `Capsule`
+  is not in the file's list at all.
+- **closes**: the schedulability question for all three XCHI drivers. Each driver's gate is named,
+  its satisfier is a file this volume carries, and for all three the satisfier is promoted or
+  `Present`. This is the question 4.176's drain argument and 4.177's `K` rows each assumed and
+  neither measured.
+- **closes, and this one is the finding**: `XhciDxe` has no dependency expression. Step 4.173 counted
+  it among *"4 more are held back by the UEFI 2.0 rule, which is the same absence reached by the
+  other route"* — and the route is only the same if all thirteen are present. They are, and `Capsule`
+  is the entry in that list a step could most easily have assumed rather than found: it is in
+  `mArchProtocols[]` (`DxeProtocolNotify.c:29`) and it is *not* in `XhciPciEmulationDxe`'s depex, so
+  the one document in the tree that looks like an authoritative list of "the architectural protocols"
+  is missing it. A step that had read the depex as that list would have concluded that twelve names
+  settle the rule. Thirteen do, and the thirteenth is `CapsuleRuntimeDxe` at a-priori index 42.
+- **corrects**: one sentence of 4.177's `provenance limit` bullet, which is the evidence and not the
+  claim. It says *"`find . -name 'XhciDxe.inf'` and `ls -d Binaries` both come back empty"*. Both
+  halves are wrong as written: `find . -name 'XhciDxe.inf'` returns **40** hits, and `uefi/Binaries/`
+  **exists** (`RawFiles`, `QcomPkg`, `QcomPkg/Drivers`) — it is the working directory that does not,
+  `Binaries` being at `work/uefi/Mu-Silicium/Binaries/`. The bullet's *conclusion* survives, and is
+  now checkable: all 40 hits are under `work/`, which `.gitignore:8` ignores, so
+  `git check-ignore` resolves every one of them to `.gitignore:8:work/`, `git ls-files work` is 0, and
+  the one `Binaries` tree that is *not* under `work/` — `uefi/Binaries/`, ignored at `.gitignore:22` —
+  contains no `XhciPciEmulation`, `XhciDxe` or `UsbInitDxe` directory and no file matching `BEB12BEE`
+  at all. So "this repository tracks no INF of a shipped binary" is true, and the honest statement of
+  why is *"the INFs exist in the tree but every one is under a gitignored path, and the tracked
+  packaging output carries no XCHI driver"*, not *"they do not exist"*.
+- **also records, because two tools print different indices for one array**:
+  `tools/arch-protocol-census.py` prints a-priori positions 0-based and `tools/depex-census.py`
+  prints them 1-based — the same convention 4.177 already flagged for
+  `tools/apriori-stock-diff.py --index`. Measured on the seven rows both tools name, the offset is
+  exactly one everywhere: `BdsDxe` `44`/`45`, `WatchdogTimer` `36`/`37`, `SecurityStubDxe` `37`/`38`,
+  `EmbeddedMonotonicCounter` `38`/`39`, `RealTimeClock` `39`/`40`, `ResetSystemRuntimeDxe` `34`/`35`,
+  `VariableRuntimeDxe` `31`/`32`. Every index in this step is the 0-based one, which is the one
+  4.176's and 4.177's tables use; `CapsuleRuntimeDxe` is `ap42` there and `pos 41` under the letter
+  map.
+- **does not close**: the first P3 clause, the controller question, or anything 4.177 left open. This
+  step says which files *permitted* three entry points to be called. It does not say a controller
+  handle was created, that `XhciDxe` bound to it, that a `UsbBusDxe` hub was enumerated, or that any
+  USB mass-storage handle exists. *Schedulable* is a third verb and it joins *released* and
+  *started*; all three stop short of *bound*. The `ConnectController`-side probe or `P2`-side counter
+  4.177 asked for is still unbuilt, and is still the next thing to build.
+- **does not say**: that the hypothesis in the depex-section above is true. The set
+  `{DriverBinding} ∪ (arch − Capsule)` is measured; that it is the EFI 1.10 driver-model template is
+  an inference this step deliberately leaves unproven, because nothing downstream turns on it.
+- **carries 4.177's limits unchanged**: this step reads the same volume that 4.177's run booted, and
+  every reading of that run inherits the three artificial places in the instrument — the four
+  `loader` blobs, the suppressed `/pmic/target` DALSys record, and `0x12000c` being QEMU RAM where on
+  hardware it is the clock controller's own register. The `K 73`/`K 74`/`K 75` rows are quoted here
+  as *evidence that the gates were satisfied*, and on a machine whose memory is not this one they
+  would be evidence of the same thing.
+- **not an action**: no device was touched, nothing was flashed, no partition was written, no stub,
+  firmware source or Microsoft image was changed or patched, and no firmware was built. `userdata`
+  (107 GB, unbacked), the partition table and the firmware LUN remain untouched. The porting goal is
+  unchanged and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's
+  `userdata`-destroying install and P5's peripherals are not begun, and the end state remains a
+  Windows tablet whose modem and cameras cannot be driven.

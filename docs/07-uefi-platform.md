@@ -3480,6 +3480,28 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > `--dump-fvmain`) and `tools/depex-census.py`, both reading the **volume** rather than the tree,
 > because this repository tracks no INF of a shipped binary. No firmware was built. See `docs/08`
 > step 4.177.
+>
+> **Step 4.178 — the shipped XCHI drivers' dependency expressions, read off the volume, and the one
+> that does not have one.** Nothing here is ACPI work, and it is recorded in this file because the
+> two things it settles are both about *which files in this volume are the authority* — the same
+> question 4.177's last paragraph raises about INFs. (1) `work/uefi/Mu-Silicium/Binaries/bitra/QcomPkg/Drivers/`
+> does hold `XhciDxe.inf`, `XhciPciEmulationDxe.inf` and `UsbInitDxe.inf`, contrary to the evidence
+> 4.177 gave — but every one of them is under `work/`, which `.gitignore:8` ignores, and the only
+> `Binaries` tree that is not, `uefi/Binaries/` (ignored at `.gitignore:22`), holds no XCHI driver at
+> all. So 4.177's conclusion stands and its wording did not: the authority is the volume, and the
+> tree's copies are untracked build inputs. (2) The volume's `XhciPciEmulation` carries a 234-byte
+> `DXE_DEPEX` whose thirteen terms are
+> `{gEfiDriverBindingProtocolGuid} ∪ (mArchProtocols[] − {Capsule})` — so the one *file* in this
+> payload that reads like a list of the architectural protocols omits `Capsule`, while `XhciDxe`,
+> which carries no `DXE_DEPEX` section anywhere in its FFS file, is judged against all thirteen of
+> `mArchProtocols[]` including it. `Capsule`'s producer is `CapsuleRuntimeDxe`
+> (`42857F0A-13F2-4B21-8A23-53D3F714B840`), the only Capsule-family file in the roster and promoted
+> at a-priori index 42. For the ACPI half of P3 that changes nothing; for the record-keeping discipline this
+> file keeps it is the same lesson as 4.177's, one layer down: a shipped artifact is the authority
+> even about itself, and the depex a driver carries is not the spec it was written against.
+> Instrument: `tools/fv-apriori.py`'s `walk_volume`, `tools/arch-protocol-census.py`,
+> `tools/fv-inventory.py --roster`. No guest was booted and no firmware was built. See `docs/08`
+> step 4.178.
 
 
 ### What exists and what is missing, so the next session starts from the right
