@@ -4145,7 +4145,38 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > construction-time value — record 1 with record 0's index — and the patcher's own cost paragraph is carried
 > with it. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.202.
 >
-
+> **Step 4.203 — the `GetOtgStatus` row is printed by `XhciDxe`, the payload's provenance is measured, and the
+> head of 4.202's chain is an instrument artefact.** The string `PmicUsbProtocol->GetOtgStatus %r\n` lives at
+> `0x10637` in `Binaries/bitra/QcomPkg/Drivers/XhciDxe/XhciDxe.efi` and is referenced **once** in that image, at
+> `0x33d0`/`0x33d4` (not the carried `0x43d0`), inside the function whose prologue is `0x32d0`; it prints only
+> from `0x33b4`'s `tbnz x8, #63` on the result of the protocol member at `[x0, #152]` (`ldr x12, [x0, #152]`
+> `0x338c`, `blr x12` `0x33a0`), *after* `EFI_UNSUPPORTED` has already been returned home silently at `0x33b0` —
+> a generic error arm, not a device message. The second `add x1, x1, #0x637` is at `0xaeac` over an `adrp` base of
+> `0x12000`, so it addresses `0x12637`, the unrelated `!USB_HC_BIT_IS_SET` assert. **The provenance census**: the
+> build tree's `FV/Ffs` has 128 directories, 87 carrying a `<GUID>SEC2.1.pe32` that is the matching image with 4
+> bytes prepended, and against the 86 stock `device/dxe/*.efi` it gives 41 byte-identical, 21 wholesale-different
+> (the EDK2 core is Mu-Silicium's — `ArmCpuDxe`, `ArmGicDxe`, `ArmTimerDxe`, `DevicePathDxe`, `Fat`,
+> `HiiDatabase`, `MetronomeDxe`, `PartitionDxe`, `RuntimeDxe`, …), **`UsbConfigDxe` different by exactly six
+> bytes**, 23 stock images with no `SEC2.1.pe32` (`DxeCore` is built as `SEC1.1.pe32` and differs wholesale
+> too), and 24 build-only images including `XhciDxe`, `XhciPciEmulation`, `UsbBusDxe`, `UsbKbDxe`,
+> `UsbMassStorageDxe`, `UsbInitDxe`, `MassStorage`, `MsBootPolicy`, `PcdDxe`, `VariableRuntimeDxe` — so the
+> payload's USB *device* stack is stock Qualcomm and the whole host-mode stack is Mu-Silicium's. The six bytes are
+> one basic block writing two adjacent words, `FVMAIN.Fv` `0x3a9d30` against `FVMAIN-xhci-host-pre-depex.bin`
+> `0x3a8cec` with identical surroundings: `orr w9, wzr, #0x1` → `mov w9, wzr` (index 1 → 0) and `orr w10, wzr,
+> #0x10000` → `mov w10, #0x1` (host `0x10000` → 1), stored to `[x8, #392]` and `[x8, #396]`. The pair signature is
+> what tests it — `mov w10, #0x1` alone is generic (116 occurrences) — and it occurs exactly once in `FVMAIN.Fv`
+> and zero times in both the archive and the device copy, while the stock pair occurs once in the archive
+> (`0x3a8cf8`) and once in the device copy (`0x39e4`) and never in `FVMAIN.Fv`. **`PMIC was not detected` is
+> instrument arithmetic**: `MemoryMapLib.c:75` declares `PMIC ARB SPMI` at `0x0C400000`+`0x02800000`, and
+> `tools/qemu-panel-read.py`'s own `low_regions()`/`l2_plan()`/`block_for_ipa()` (57 regions, 55 blocks, pool from
+> `0x40000000`, `STAGE2_BLOCK` `0x200000`) put it in stage-2 **blocks 98-117 → pool `0x42c00000`-`0x45200000`**,
+> zeroed RAM, while both GIC windows are block 189 → `0x46800000`. Every SPMI read in `PmicDxe`'s presence probe
+> (`0x155c` → `0x10188` → `0x6bc4` → `0x6a74` → `0x70dc` → `0x13320`) therefore reads zero, the 13-slave scan for
+> slave `0x51` finds nothing, the guard byte at `0x1f000+672` is never set, and the driver reports not-detected —
+> so the `Access Denied` / IOMMU chain 4.202 called "a payload failure on real hardware" has an instrument-side
+> head, and its device-side status is open. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`.
+> See `docs/08` step 4.203.
+>
 ### What exists and what is missing, so the next session starts from the right
 place.** Present: the table sets above, `iasl` at `/usr/bin/iasl`, the ASL source
 for the CPU skeleton at `Silicon/Qualcomm/Moorea/DSDT_Minimal.asl`, and 20 platform

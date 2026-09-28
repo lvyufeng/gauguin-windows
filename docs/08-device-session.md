@@ -42269,3 +42269,201 @@ returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the pa
 Nothing on the device's storage was written, so `userdata`, the partition table and the firmware LUN are all as
 they were. Nothing was flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.203 — the `GetOtgStatus` row is printed by `XhciDxe` at `0x33d0`, the payload's provenance is measured rather than assumed, and `PMIC was not detected` — the row 4.202 built its chain on — is producible by this instrument's own stage-2 map with no device involved
+
+4.202 closed with a named-and-not-answered item: the rows at about `99 s` that begin its USB chain,
+`UsbPwrCtrlLib_Init Initialize Hardware Configuration Error[Access Denied]` and `UsbConfigInit: Failed to attach
+USB Arid 0x0 HAL IOMMU domain`, and behind them `PmicUsbProtocol->GetOtgStatus` — a string no image in
+`device/dxe` contains. This step finishes that search, and on the way it measures two things that change what the
+whole P3 payload thread is entitled to claim: **where the payload's images actually come from**, and **whether the
+`PMIC was not detected` at the head of 4.202's chain is a device fact or an instrument fact**. No run was made for
+this step and no instrument was changed; every number below came off files already on disk.
+
+**The printer, decoded — `XhciDxe`, and the carried address was wrong.** The string `PmicUsbProtocol->GetOtgStatus
+%r\n` lives at VA/file offset `0x10637` in
+`work/uefi/Mu-Silicium/Binaries/bitra/QcomPkg/Drivers/XhciDxe/XhciDxe.efi` (94,208 B, sha256
+`d579eaa0c1238b7dfd7de00ff98f4171a57be49df9cdfae793a421eb5cc00275`). It is referenced **exactly once** in the
+whole image, and it is not at `0x43d0`: it is `adrp x1, 0x10000` at `0x33d0` + `add x1, x1, #0x637` at `0x33d4`,
+inside the function whose prologue is `str x27, [sp, #-96]!` at `0x32d0`. The print block is four instructions:
+
+```
+33d0: b0000061  adrp x1, 0x10000
+33d4: 9118dc21  add  x1, x1, #0x637          ; the format string, 0x10637
+33d8: 320103e0  orr  w0, wzr, #0x80000000    ; DEBUG_ERROR
+33dc: aa0803e2  mov  x2, x8                  ; the Status
+33e0: 9400277d  bl   0xd1d4                  ; DebugPrint
+```
+
+and the branch that reaches it is the whole finding. The call is `ldr x12, [x0, #152]` at `0x338c`, `blr x12` at
+`0x33a0`, and then:
+
+```
+33a8: b2410bed  mov  x13, #0x8000000000000003   ; EFI_UNSUPPORTED
+33ac: eb0d011f  cmp  x8, x13
+33b0: 54000360  b.eq 0x341c                     ; UNSUPPORTED returns home in silence
+33b4: b7f800e8  tbnz x8, #63, 0x33d0            ; any other error bit -> the print
+```
+
+So the row is a **generic error arm for protocol member 152**, not a device-specific message: an image that links
+this code prints `PmicUsbProtocol->GetOtgStatus` for any non-`UNSUPPORTED` failure of whatever sits at `[x0,
+#152]`. The sibling arm at `0x33e8` calls `[x0, #160]`, compares its result to `EFI_UNSUPPORTED` the same way, and
+counts whatever survives into a static byte at `0x15000 + 928 = 0x153A0`, capping at 2 (`cmp w8, #0x2` / `b.hi`);
+the arm at `0x33c4` clears that byte. The signature guard that makes this a public entry point is at
+`0x3324-0x3334`: `w23 = x22 - 32`, `ldr w10, [x23]`, `w9 = 0x69636878` ("xchi") built as `mov w9, #0x6878` +
+`movk w9, #0x6963, lsl #16`, with the assert failing into `Xhci.c` at `0x10538` / `CR has Bad Signature` at
+`0x1053f` / line `0x1c0` = 448 at `0x3338-0x334c`. Two corrections to the carried note, both from this
+measurement: the second `add x1, x1, #0x637` in the image is at `0xaeac`, not `0xbeac`, and its `adrp` base is
+`0x12000`, so it addresses **`0x12637`**, a *different* string — `%a:%d ASSERT: (!USB_HC_BIT_IS_SET (Block->Bits
+[Byte], Bit))`; it is not a second reference to the `GetOtgStatus` format. And `0x43d0` in this image is `ldrb w8,
+[x0, #264]` inside a different function whose prologue is `0x43c4`, which is what the carried address was reading.
+
+**Why `device/dxe` never had it, and what that implies.** That string is present in the exported Qualcomm
+`XhciDxe` of several SoC trees and in this tree's `Binaries/bitra/…/XhciDxe/XhciDxe.efi`. It is absent from
+`device/dxe/` because **gauguin's stock ROM ships no `XhciDxe` at all** — which this step established by the
+census below rather than by absence of a filename. A second negative is worth recording because a previous step
+carried a claim about it: the three PMIC-USB interface GUIDs `E07DF17E…`, `AE6AE96E…` and `157A5C45…` appear in
+neither `XhciDxe.efi` nor `XhciPciEmulation`, in either their ASCII or their `bytes_le` form; what `XhciDxe` does
+carry is `05AD34BA-6F02-4214-952E-4DA0398E2BB9` at `0x15078` and `E722B03F-B250-42CE-8EBD-5BD51812D037` at
+`0x150b8`, the latter being the interface `UsbConfigDxe` also declares (at `0x11098`). So no GUID block ties these
+three USB binaries to a PMIC backend through `XhciDxe`, and that earlier reading is dropped rather than carried.
+And gauguin's own `PmicDxe.efi` exports no `GetOtgStatus` — `EFI_PmicSchgGetOtgStatus` appears only in other SoCs'
+`PmicDxeLa.efi` — so the row's *printer* is now named while the *reachability of the row on a device* is not.
+
+**The provenance census — the payload's USB stack is stock Qualcomm plus three Mu-Silicium drivers.** The build
+tree's `FV/Ffs` holds 128 directories, 87 of which carry a `<GUID>SEC2.1.pe32`; every one of those is the
+corresponding PE image with exactly 4 bytes prepended (`04 90 00 10`, `04 30 01 10`, `04 70 01 10`), so
+`pe32[4:4+len] == dev` is a byte-exact identity test against the 86 stock `device/dxe/*.efi`. Run over all of
+them:
+
+- **41 are byte-identical**: AdcDxe, ButtonsDxe, ChargerExDxe, ChipInfo, CipherDxe, ClockDxe, CmdDbDxe, DALSys,
+  DALTLMM, DDRInfoDxe, EnvDxe, FeatureEnablerDxe, GpiDxe, HALIOMMU, HWIODxeDriver, HashDxe, I2C, LimitsDxe, MacDxe,
+  NpaDxe, PdcDxe, PlatformInfoDxeDriver, **PmicDxe**, PwrUtilsDxe, QcomChargerDxeLA, RngDxe, RpmhDxe, SPMI, ScmDxe,
+  SdccDxe, ShmBridgeDxe, SmemDxe, TsensDxe, TzDxe, UFSDxe, ULogDxe, UsbDeviceDxe, UsbMsdDxe, **UsbPwrCtrlDxe**,
+  UsbfnDwc3Dxe, VcsDxe. So the drivers 4.200-4.202 read rows from — `PmicDxe`, `UsbPwrCtrlDxe`, `AdcDxe`,
+  `QcomChargerDxeLA`, `UFSDxe` — are the *stock* binaries in the payload, not rebuilds.
+- **22 differ, and 21 of them differ wholesale**: ArmCpuDxe (39,255 of 53,248 bytes), ArmGicDxe (24,629/36,864),
+  ArmTimerDxe (18,233/32,768), CapsuleRuntimeDxe, ConPlatformDxe, ConSplitterDxe, DevicePathDxe (55,387/73,728),
+  DiskIoDxe, EmbeddedMonotonicCounter, EnglishDxe, Fat (50,316/65,536), GraphicsConsoleDxe, HiiDatabase
+  (116,303/143,360), MetronomeDxe, PartitionDxe, PrintDxe, RealTimeClock, RuntimeDxe, SecurityStubDxe,
+  SimpleTextInOutSerial, WatchdogTimer — a distinct Mu-Silicium build of the EDK2 core, differing from the first
+  byte of the COFF header. This is the family 4.200 named when it read `ArmGicDxe`'s own `movz/movk` sequence out
+  of the build: the payload's ArmPkg images are Mu-Silicium's, not Qualcomm's, which is exactly why the GIC
+  question had to be asked of the tree and not of the ROM.
+- **exactly one differs by six bytes: `UsbConfigDxe`.**
+- **23 stock images have no `SEC2.1.pe32` at all**: ADSPDxe, ASN1X509Dxe, CPRDxe, DisplayDxe, DxeCore, FontDxe,
+  FvDxe, FvSimpleFileSystem, MiTokenDxe, MinidumpTADxe, PILDxe, PILProxyDxe, QcomBds, QcomChargerApp,
+  QcomMpmTimerDxe, QcomWDogDxe, ResetRuntimeDxe, RscRtDxe, SCHandlerRtDxe, SecRSADxe, VariableDxe,
+  VerifiedBootDxe, VibratorDxe. `DxeCore` is the interesting one: it *is* built, as a `SEC1.1.pe32` of 175,108
+  bytes against the stock 266,240, and it differs wholesale too — so the payload's DXE Core is Mu-Silicium's.
+- **24 build-only images**, i.e. names in the build tree with no stock counterpart: AcpiPlatform, AcpiTableDxe,
+  BdsDxe, BootGraphicsResourceTableDxe, BootManagerMenuApp, MassStorage, MsBootPolicy, PcdDxe, RamManagerDxe,
+  ReportStatusCodeRouterRuntimeDxe, ResetSystemRuntimeDxe, SetupBrowser, SimpleFbDxe, SmBiosTableDxe, SmbiosDxe,
+  StatusCodeHandlerRuntimeDxe, UFPLoader, UsbBusDxe, UsbInitDxe, UsbKbDxe, UsbMassStorageDxe, VariableRuntimeDxe,
+  **XhciDxe**, **XhciPciEmulation**. That list is the honest shape of the port: everything the stock ROM has for
+  USB *device* mode it keeps, and the entire host-mode stack — the emulated PCI xHCI, the xHCI driver, and the USB
+  bus driver 4.199-4.202 spent five steps inside — is supplied by Mu-Silicium and exists in no Qualcomm image for
+  this board.
+
+**The six bytes, read as instructions — the patch is one basic block writing two adjacent words.** In
+`Build/gauguinPkg/DEBUG_CLANGPDB/FV/FVMAIN.Fv` at `0x3a9d30`, against the archived
+`work/out/fd-archive/FVMAIN-xhci-host-pre-depex.bin` at `0x3a8cec`, the surrounding instructions are identical
+byte-for-byte and the two words are not:
+
+```
+stock    (fd-archive, 0x3a8cec)            patched  (FVMAIN.Fv, 0x3a9d30)
+  320003e9  orr w9, wzr, #0x1                2a1f03e9  mov w9, wzr
+  f85a83a8  ldur x8, [x29, #-88]             f85a83a8  ldur x8, [x29, #-88]
+  b9018909  str w9, [x8, #392]               b9018909  str w9, [x8, #392]
+  321003ea  orr w10, wzr, #0x10000           5280002a  mov w10, #0x1
+  b9018d0a  str w10, [x8, #396]              b9018d0a  str w10, [x8, #396]
+```
+
+which is `tools/patch-usbcfg-sentinel.py`'s `SITES` table executed literally: index `1 -> 0`, host `0x10000 -> 1`,
+into the two adjacent fields at `+392` and `+396` of the same record, at the tail of a `bl`-terminated block. A
+loose byte count cannot test this — `mov w10, #0x1` is a generic instruction that occurs 116 times in `FVMAIN.Fv`
+and 115 times in the archive — so the test used the **pair**. `mov w10, #0x1` followed by `str w10, [x8, #396]`
+occurs **exactly once** in `FVMAIN.Fv` (`0x3a9d3c`) and **zero** times in both the pre-depex archive and
+`device/dxe/UsbConfigDxe.efi`; `orr w10, wzr, #0x10000` followed by the same store occurs **exactly once** in the
+archive (`0x3a8cf8`) and once in the device copy (`0x39e4`) and **zero** times in `FVMAIN.Fv`. The same pairing
+holds for the index word (`0x39d8` in the device copy). So of the three on-disk artifacts, exactly one carries the
+patch: the scratch FV. The device copy is pristine and so is the archive, and no run in the `pre-depex` family can
+be read as having had the gate open.
+
+**`PMIC was not detected` — the head of 4.202's chain, and this instrument produces it by construction.** The
+presence probe in `device/dxe/PmicDxe.efi` (sha256
+`8267f86a58bf356ff20a66afd805b6a8b250da49157d77843423a1fd7868a09a`) is a chain of five routines: `PmicInitialize`
+at `0x155c` calls `0x10188`, which calls `0x6bc4`, whose answer decides `orr w19, wzr, #0x1` — "not detected".
+`0x6bc4` returns the sentinel `0x7fffffff` (`orr w0, wzr, #0x7fffffff`) unless the slave index is `<= 13` **and**
+the byte at `0x1f000 + 672` is set; when they hold it returns the word at `[table + index*16 + 116]`. The table is
+built by `0x6a74`, which memsets 56 bytes per entry (`orr w2, wzr, #0x38`), loops the index from 0 to 13 calling
+`0x70dc`, accepts a record when a byte reads `0x51` — 81, the SPMI primary PMIC slave ID — fills `+116`, `+120`,
+`+124`, `+128` and `+60`, and finally sets the guard byte at `0x1f000 + 672` to 1. `0x70dc` is the SPMI read
+itself: it requires `[0x1f000 + 1016] == 1` and otherwise returns `0x80`, and on the happy path calls `0x13320`,
+the arbiter. **So the row means the 13-slave SPMI scan found no slave `0x51` — every SPMI read failed.**
+
+Where those reads land is not a matter of opinion, because the instrument's own map is a tool in this repository.
+`uefi/Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c:75` declares `{"PMIC ARB SPMI", 0x0C400000,
+0x02800000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}`, and running `tools/qemu-panel-read.py`'s own
+`low_regions()`, `l2_plan()` and `block_for_ipa()` against the same platform package gives 57 regions, 55 blocks
+with the zeroed pool starting at `0x40000000` (`LOW_MMIO_LIMIT`, `ZERO_MEM_POOL_BASE`) at `0x200000` a block
+(`STAGE2_BLOCK`), and puts that region in **stage-2 blocks 98 through 117**, handed the pool addresses
+**`0x42c00000` through `0x45200000`**; `block_for_ipa (plan, 0x0C400000, 0x9c40b000)` is `0x42c00000`. That is 20
+blocks, 40 MB, of ordinary zeroed RAM. The same arithmetic puts both GIC windows in block 189 at `0x46800000`,
+which is 4.200's result reproduced by the same three functions. **A register window that is a page of zeroed RAM
+answers every SPMI read with zero, the scan never sees `0x51`, the guard byte is never set, `0x6bc4` returns its
+sentinel, `0x10188` reports not-detected, and `PmicInitialize` prints `PmicDxe: PMIC was not detected` — in this
+instrument, with no device in the loop.** The rest of 4.202's chain follows from that head: no PMIC protocols, so
+`AdcDxe` has nothing to read, `UsbPwrCtrlDxe` fails its hardware configuration, `QcomChargerDxe` reports charging
+unsupported, `UsbConfigLibOpenProtocols` reads PMI version `0x0`, and `UsbConfigInit` fails to attach the USB ARID
+0x0 IOMMU domain. That chain is *consistent* with an instrument that cannot serve SPMI, and it is not evidence of
+what the device would do.
+
+**What this corrects, and what it does not.** 4.202 carried the sentence *"That is a payload failure on real
+hardware, it is what the device copy of `UsbConfigDxe` is waiting on, and it is named here rather than answered."*
+The naming is now done and the *realsness* is not: the first row of that chain is producible by the stage-2 map
+alone, so the chain as a whole cannot be read as a device-side finding until something removes the instrument as
+the cause. What is *not* claimed here is the converse — that the device would pass this probe. The SPMI arbiter is
+real hardware at `0x0C400000`; nothing in this step shows it working or failing on the phone, and the row the
+device prints at this point is still unmeasured. The question is narrowed to one experiment that can only be run
+on hardware, and it is named here rather than answered. A second, smaller corrective: this step's census is what
+establishes that gauguin's ROM ships no `XhciDxe`, so the absence of that driver's strings from `device/dxe` was
+never evidence about the payload — the payload's `XhciDxe` is `B7F50E91-…`, present in the build tree and in no
+stock image, and byte-identical to bitra's at offset 4.
+
+**decides**: that the `PmicUsbProtocol->GetOtgStatus` row is printed by `XhciDxe` at `0x33d0` through the single
+reference to the format string at `0x10637`, reached from `0x33b4`'s `tbnz x8, #63` on the result of the protocol
+member at `[x0, #152]` and only after `EFI_UNSUPPORTED` has already been sent home at `0x33b0` — a generic error
+arm for whatever is linked at that member, not a device-specific message; that the second `add x1, x1, #0x637` is
+at `0xaeac`, addresses `0x12637`, and is a different string; that of the 86 stock `device/dxe/*.efi`, 41 are
+byte-identical to the payload build's `SEC2.1.pe32` at offset 4, 21 differ wholesale, `UsbConfigDxe` differs by
+exactly six bytes, 23 have no `SEC2.1.pe32` counterpart, and 24 build-tree images including `XhciDxe` and
+`XhciPciEmulation` have no stock counterpart; that those six bytes are the paired `host,index` rewrite of the two
+adjacent words at `+392` and `+396`, matched by the instruction *pair* exactly once in `FVMAIN.Fv` and exactly
+once in each of the stock copies and never in the other; and that `PMIC was not detected` is what this
+instrument's own stage-2 map produces, because `PMIC ARB SPMI` at `0x0C400000` plus `0x02800000` is blocks 98-117
+of the plan, handed pool `0x42c00000`-`0x45200000`, so the 13-slave scan for slave `0x51` in `PmicDxe` at
+`0x6a74`/`0x6bc4` cannot succeed. **corrects**: 4.202's carried sentence that the `Access Denied` / `PMIC was not
+detected` chain is "a payload failure on real hardware" — its head is an instrument-side construction, and the
+chain's device-side status is open; the carried note that the print block sits at `0x43d0` (it is `0x33d0`) and
+that the second `#0x637` reference is at `0xbeac` (it is `0xaeac`); and the earlier reading that a PMIC-USB GUID
+block ties `XhciDxe`/`XhciPciEmulation`/`UsbConfigDxe` to a PMIC backend, which the direct search does not
+support. **does not decide**: whether the device's own `PmicDxe` passes its presence probe — the question is now
+precisely posed and needs hardware; whether the `[x0, #152]` member is ever reached on this board, since gauguin's
+stock `PmicDxe.efi` exports no `GetOtgStatus`; which of `XhciDxe`'s two arms (`+152`, `+160`) the shipped stack
+takes; and everything 4.201 and 4.202 left open, the `UsbfnDwc3Dxe` answer flip and the two open items of 4.200.
+**carries the standing limits unchanged**: `0x41E00000` stays retired; the thirteen rungs, the fourteen-rung
+ladder with `P2FreeWhy` missing on device, the SEEDED SMEM word, the AOP `0xC3F000C` seed and the EL3 stub's three
+fabricated structures all stand; and the patched payload remains a **counterfeit** construction-time value — this
+step adds that it is counterfeit in exactly two words of one basic block, and that the device copy and the
+`pre-depex` archive are both stock. **not an action**: no `fastboot` command, no console read from the device, no
+seed written anywhere, no instrument changed and no run made. The files this step read — the bitra `XhciDxe`, the
+two FVs, the FFS tree, the three device images, `MemoryMapLib.c` and `tools/qemu-panel-read.py` — were all already
+on disk. **device state**: unchanged, and still not enumerating — `adb devices` and `fastboot devices` both empty
+and `lsusb` showing no Xiaomi or Qualcomm id. Three physical actions remain outstanding and none can be taken from
+this host: **a physical reset** of the phone, the **reboot to the bootloader** the P3 `fastboot boot` workflow
+needs, and a **screen photograph** of the 4.187 P3 payload's judgement lines — `adb exec-out screencap -p` still
+returns 53 bytes, and `先读屏，再刷下一次` still forbids booting the payload before that photograph exists. Nothing on the
+device's storage was written, so `userdata`, the partition table and the firmware LUN are all as they were.
+Nothing was flashed, no partition was written, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.

@@ -1787,6 +1787,24 @@ Work:
 > and all 41 digest passes would run, because no counter the digest prints moves across the eighteen the window
 > captured. The patched payload is a **counterfeit** construction-time value and the patcher's cost paragraph is
 > carried with it. Nothing was flashed, `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.202.
+> **4.203: the `GetOtgStatus` row is printed by `XhciDxe`, the payload's provenance is measured, and the head of
+> 4.202's chain is an instrument artefact.** The format string lives at `0x10637` in the bitra `XhciDxe.efi` and is
+> referenced once, at `0x33d0`/`0x33d4` (not the carried `0x43d0`), printing only for a non-`UNSUPPORTED` result of
+> the protocol member at `[x0, #152]` — a generic error arm, not a device message; the second `#0x637` reference is
+> at `0xaeac` over base `0x12000`, i.e. `0x12637`, an unrelated assert. The provenance census compares the build
+> tree's 87 `<GUID>SEC2.1.pe32` images against the 86 stock `device/dxe/*.efi`: 41 byte-identical, 21 wholesale
+> different (the EDK2 core is Mu-Silicium's), **`UsbConfigDxe` different by exactly six bytes** — one basic block,
+> `FVMAIN.Fv` `0x3a9d30` against the pre-depex archive `0x3a8cec`, `orr w9, wzr, #0x1` → `mov w9, wzr` and
+> `orr w10, wzr, #0x10000` → `mov w10, #0x1`, the paired signature occurring once in `FVMAIN.Fv` and never in the
+> archive or the device copy — 23 stock images with no `SEC2.1.pe32`, and 24 build-only images including `XhciDxe`,
+> `XhciPciEmulation` and the whole host-mode USB stack, so the payload's device-mode stack is stock Qualcomm.
+> **And `PMIC was not detected`, the head of 4.202's chain, is producible by this instrument alone**:
+> `MemoryMapLib.c:75` declares `PMIC ARB SPMI` at `0x0C400000`+`0x02800000`, and `tools/qemu-panel-read.py`'s own
+> `low_regions()`/`l2_plan()`/`block_for_ipa()` put it in stage-2 blocks **98-117 → pool `0x42c00000`-`0x45200000`**,
+> zeroed RAM (both GIC windows being block 189 → `0x46800000`), so every SPMI read in `PmicDxe`'s presence probe
+> returns zero, the 13-slave scan for slave `0x51` finds nothing, and the driver reports not-detected — which makes
+> "a payload failure on real hardware" an open question rather than a finding. Nothing was flashed,
+> `UsbConfigDxe.efi` is still `sha256 6943cc61…`. See `docs/08` step 4.203.
 > **One map gap named**: the platform's own
 > `MemoryMapLib.c` declares `USB30_PRIM`, `USB_RUMI`, `USB30_SEC` and the four `*_CLK_CTL` at
 > `0x18280000`, and **no row *named* for `0x088E3000` or `0x088E8000`**, where the live tree puts
