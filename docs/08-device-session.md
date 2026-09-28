@@ -43748,3 +43748,129 @@ P3 `fastboot boot` workflow needs, and the screen photograph. `userdata` (107 GB
 and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
+
+---
+
+## Step 4.216 — the installer medium is re-derived from what the firmware can read, and the stick boots
+
+**The ISO's El Torito catalog, read correctly this time.** `tools/inspect-win-iso.py` prints
+`catalog at LBA 1412: 3 slots used, 2 bootable entries` — slot 1 a default entry, media `no emulation`,
+8 sectors, load RBA 1413; slot 2 a **section header** with platform id `0x00` and a declared count of
+**1**; slot 3 that one entry, media `no emulation`, 3360 sectors, load RBA 1415 (byte 2,897,920). The
+record has carried this catalog under two wrong readings and both are withdrawn. "No `0xEF` entry" was
+true but not the point; "a PowerPC section header declaring zero entries" was wrong on both fields, and
+the arithmetic that produced it is worth naming because it is the same error twice: the entry count is
+the **little-endian** word at offset 2 (`91 00 01 00` is id `0x91`, platform byte `0x00`, count one),
+so reading it big-endian yields `0x0100`, whose low byte is the `1` that was then mistaken for the
+platform id, and the real platform byte reads as the next field along. `inspect-win-iso.py` had exactly
+the same defect in its first version and is corrected in place; what it now prints for slots 2 and 3 is
+the control.
+
+**What the boot image actually is, measured rather than named.** LBA 1413 is not FAT (`no FAT boot
+sector signature`) — 8 sectors of x86 boot code, genisoimage's `-b` stub for the BIOS path, which
+`PartitionDxe` will surface as a child that `Fat` then refuses. LBA 1415 **is** FAT16, and it holds
+exactly two files: `EFI/BOOT/BOOTAA64.EFI`, 968,096 bytes, `MZ`/`PE`, machine `0xAA64`, subsystem 10 —
+a real AArch64 EFI application — and `EFISECTO.R`, 0 bytes, the Rock Ridge artefact of a volume label.
+So there *is* an AArch64 bootloader in the boot catalog, and `PartitionDxe`'s El Torito path will run
+it: that file validates only `Indicator == ELTORITO_ID_CATALOG`, `Id55AA == 0xAA55` and a 16-bit
+word-sum, then takes every 32-byte slot whose boot indicator is `0x88` and whose `Lba` is non-zero, so
+the section header is skipped by the indicator test and **the platform id is never read at all**. What
+that stub then needs is a readable filesystem, and there is none. The ISO 9660 root holds **0** entries
+— the reader now prints `(nothing)` where it used to print two blanks, because ECMA-119 spells `.` as
+the single byte `0x00` and `..` as `0x01` and neither is a name, so a root holding only itself was
+being counted as a root holding two nameless entries — and the payload exists only in UDF: a read-only
+loop mount of the volume gives `sources/boot.wim` **465,806,736** bytes and `sources/install.wim`
+**3,520,950,655** bytes, with `efi/microsoft/boot/bcd`, `cdboot.efi`, `efisys.bin`, `fonts/` and
+`resources/bootres.dll` beside them.
+
+**The firmware half, and the gap is narrower than a grep says.** `DXE.inc:76-78` and
+`APRIORI.inc:52-59` list `DiskIoDxe`, `PartitionDxe` and `Fat`; `grep -rn -i -E 'udf|iso9660'` over the
+whole `gauguinPkg` returns nothing; the built `Ffs/` directory's 131 entries contain no `UdfDxe`. But
+`PartitionDxe.inf` in this tree **does** list `Udf.c`, so the built `PartitionDxe.efi` can recognise a
+UDF volume and carve it into a partition child — it calls `PartitionInstallChildHandle` and installs
+`EFI_PARTITION_INFO_PROTOCOL`, and installs no filesystem. Publishing
+`EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` over that child is `MdeModulePkg/Universal/Disk/UdfDxe`'s job alone
+(`UdfDxe/Udf.c:191`), and that driver is not built and not listed. EDK2 also ships **no ISO 9660 driver
+anywhere**: `MdeModulePkg/Universal/Disk/` holds DiskIoDxe, UdfDxe, PartitionDxe, UnicodeCollation,
+RamDiskDxe and CdExpressPei, and nothing else. So on UDF-bridge install media the only reader EDK2 has
+is precisely the one gauguin lacks, and the media the port's own converter builds closes the fallback
+door as well, because `--hide "*"` empties the ISO 9660 tree. **Prediction, recorded before any
+flash**: on the phone this ISO would launch the El Torito stub successfully and the stub would then
+fail to find `\EFI\Microsoft\Boot\BCD`, because the BCD is in a tree nothing on the phone can mount.
+
+**A method written this step, controlled, and withdrawn.** The check for whether a firmware contains a
+named driver was "does that driver's `FILE_GUID`, in little-endian byte order, appear in the `.fd`".
+The control is three drivers that firmware certainly contains: `PartitionDxe`'s
+`1FA1F39E-FEFF-4aae-BD7B-38A070A3B609`, `Fat`'s `961578FE-B6B7-44c3-AF35-6BC705CD2B1F` and
+`DiskIoDxe`'s `6B38F7B4-AD98-40e9-9093-ACA2B5A253C4` all read **absent** from both
+`AAVMF_CODE.no-secboot.fd` and `AAVMF_CODE.fd`. The method therefore does not measure what it was
+written to measure against this firmware's layout, and its result about AAVMF — that AAVMF carries no
+`UdfDxe` — is not a finding and is withdrawn. Whether AAVMF has a UDF driver is still open, and is
+answered by running the medium rather than by grepping the firmware.
+
+**The medium changes, not the firmware.** A FAT32 stick carrying the UDF tree verbatim is read by the
+three drivers gauguin already has, and it is the medium the gate names — "boots off a USB stick".
+`install.wim` at 3,520,950,655 bytes is **under FAT32's 4 GiB per-file limit**, so no `install.swm` set
+and no reassembly by Setup is needed; had it been larger, `wimlib-imagex split` would have been, which
+is what Microsoft's own Media Creation Tool does. `tools/make-win-stick.sh` builds it: MBR, one
+partition, type `0x0C`, boot flag `0x80`, start LBA 2048, 12,580,864 sectors = 6.00 GiB, image
+6,442,450,944 bytes. Two independent readers agree on the result — `fsck.fat 4.2` reports `1035 files,
+1040995/1569536 clusters` with no errors, and a read-only mount reports `efi/boot/bootaa64.efi`
+2,622,784 bytes, `efi/microsoft/boot/bcd` 16,384 bytes, `sources/boot.wim` 465,806,736 bytes and
+`sources/install.wim` 3,520,950,655 bytes. The bootloader's size is the finding inside that list: on
+the stick it is **2,622,784** bytes where the ISO's El Torito copy of the same path is **968,096**, so
+the stick carries the full boot manager — the one that finds its BCD on its own volume — and that is
+why the stick needs no UDF and the ISO does. sha256 of the image before any boot:
+`9de61c33d881fc9de4832c0d41f7045d9fc7f95a57b96ebe1e6090ccee04e177`.
+
+**And it boots.** Under AAVMF on `virt`, attached as USB mass storage with `bootindex=1`, the serial log
+reads `BdsDxe: loading Boot0001 "UEFI QEMU QEMU USB HARDDRIVE 1-0000:00:01.0-3" from
+PciRoot(0x0)/Pci(0x1,0x0)/USB(0x2,0x0)` and the first scheduled frame is **66 colours** where the
+firmware's own EFI-shell frame was 4. The ASCII view of that frame is a text banner across the top and
+a centred panel below it: boot manager's own screen, not the shell's. The device path ends
+`USB(0x2,0x0)` — the stick, on the bus a phone would also use — and the driver set that got there is
+`DiskIoDxe` + `PartitionDxe` + `Fat`, identical in name to gauguin's. TCG means this is the first tenth
+of a Setup boot and the run continues; what is already established is narrower and worth stating
+exactly: **the medium is not the thing that fails first**, on a firmware whose disk stack matches the
+phone's.
+
+**Three harness defects, all found by running it, all fixed.** `fsck.vfat` handed the whole disk image
+reads the MBR's partition table as a BPB and reports `only 1 or 2 FATs are supported, not 251`, from
+the LBA field of partition entry 1; the check now runs on the partition, and `--offset` is not
+supported by this `fsck.fat 4.2`, so it runs on the loop partition device instead. QEMU answered
+`Could not open '...win11arm64-stick.img': Permission denied` **on the `-device` line rather than the
+`-drive` line**, which reads like a missing bus and is not one — the cause is that the stick is created
+by a script run under `sudo` and left root-owned 0644 while QEMU opens it read-write. And a `swtpm`
+from a run that died before its own kill still holds the control socket, so the harness now clears its
+own stale server first, with a bracketed pattern, because an inline `pkill -f` of the same literal
+matches the calling shell's command line and kills the caller — a failure this project has already
+paid for once.
+
+**decides**: that the El Torito catalog has three slots and two bootable entries, one a default entry
+of 8 sectors at LBA 1413 and one under a section header whose platform id is `0x00` and whose declared
+count is 1, withdrawing both of the record's earlier readings of that catalog; that the boot image at
+LBA 1415 is FAT16 holding one 968,096-byte AArch64 PE and a zero-byte label file; that the ISO's
+ISO 9660 root is empty by construction and `install.wim` (3,520,950,655 B) and `boot.wim`
+(465,806,736 B) are reachable only through UDF; that gauguin's `PartitionDxe` does carry UDF partition
+detection while publishing no filesystem, and that `UdfDxe` is the driver that would; that EDK2 ships
+no ISO 9660 driver at all; that the GUID-presence test is invalid on this firmware and its AAVMF
+result is withdrawn; that a FAT32 stick carrying the tree is 6,442,450,944 bytes with sha256
+`9de61c33…` and passes `fsck.fat` and a mount; and that AAVMF boots that stick through the USB path
+with the same three disk drivers gauguin has. **does not decide**: whether a Windows 11 ARM64
+installer completes a boot off the stick — the run is in progress under TCG and is hours long, and
+nothing here predicts its outcome; whether AAVMF carries a UDF driver; whether adding `UdfDxe` to
+gauguin is worth a firmware flash, since the stick path does not need it and the ISO path is not the
+gate's medium; and nothing about the P3 gate on the device, which is still unmet. **Not an action**:
+two new tracked tools (`tools/make-win-stick.sh`, and `tools/qemu-boot-win11-iso.sh` extended to take
+either media shape), five corrections inside `tools/inspect-win-iso.py`, one new bullet and one
+reworded heading in `docs/03`, and offline reads of artifacts already on disk. Every measurement above
+was taken on files under `work/`, which is gitignored; the loop mounts and the 6.00 GiB image are
+`work/` paths and are unmounted and detached. No flash, no `fastboot` command, no partition written,
+no seed written, no console read from the device and no device file opened. **device state**:
+unchanged — `adb devices`, `fastboot devices`, `lsusb` and both tty globs are empty, so the three
+physical actions remain outstanding: a reset of the phone, the reboot to the bootloader the P3
+`fastboot boot` workflow needs, and the screen photograph that `先读屏，再刷下一次` requires before any
+payload boots. There is also still **no removable USB stick attached to this host**, so the gate's
+medium exists here only as an image. `userdata` (107 GB, unbacked), the partition table and the
+firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.

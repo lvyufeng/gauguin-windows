@@ -49,7 +49,8 @@ rebuilding the volume) and `<Name>.raw` (config/panel payloads).
 
 ## Not present, and what that means
 
-Two things a Windows boot needs are **not** in the XBL driver set:
+Three things this port needs are **not** in the XBL driver set — the first two for booting
+Windows, the third for reading the medium Windows is installed from:
 
 - **`UsbBusDxe` / `UsbKbDxe` / `UsbMassStorageDxe`** — USB *host* support. XBL only ever
   acts as a USB *device*, so it ships device-side drivers only. Windows setup needs host
@@ -59,6 +60,22 @@ Two things a Windows boot needs are **not** in the XBL driver set:
 - **`AdrenoDxe`** — GPU. Nothing in XBL initialises the GPU. Mu-Silicium adds an
   `AdrenoDxe` in source form, and the Windows-side acceleration comes from the Adreno
   WoA driver package, not from UEFI.
+- **`UdfDxe`** — the UDF/ECMA-167 **filesystem** driver, and this one is subtler than the
+  other two because two of its three pieces are already here. `DiskIoDxe`, `PartitionDxe`
+  and `Fat` are all present, so FAT media is fully readable; and `PartitionDxe.inf` in this
+  tree **does** list `Udf.c`, so the built `PartitionDxe.efi` recognises a UDF volume and
+  carves it into a partition child (`PartitionInstallChildHandle`,
+  `EFI_PARTITION_INFO_PROTOCOL`). What no driver does is *mount* that child: publishing
+  `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` over it is `MdeModulePkg/Universal/Disk/UdfDxe`'s job
+  alone (`UdfDxe/Udf.c:191`), and neither this package's `DXE.inc` / `APRIORI.inc` nor the
+  built volume lists it. This matters because the installer ISO the port's own converter
+  builds is **UDF-bridge media with an empty ISO 9660 tree** — the converter passes
+  `--hide "*"` — and because EDK2 ships **no ISO 9660 driver at all**:
+  `MdeModulePkg/Universal/Disk/` holds DiskIoDxe, UdfDxe, PartitionDxe, UnicodeCollation,
+  RamDiskDxe and CdExpressPei, and nothing else. `UdfDxe` is therefore the only reader that
+  would work on that media, and it is exactly the one missing. Install from a FAT32 stick
+  instead — `tools/make-win-stick.sh`, and step 4.216 in `docs/08-device-session.md` for the
+  measurements.
 
 Everything else needed for a first boot is already present as signed binaries.
 
