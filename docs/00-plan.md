@@ -1359,6 +1359,46 @@ Work:
 > the "initializaition" rows), the first P3 clause, and the phone — whose prediction is now one
 > character wide, since 4.183's `shut` and 4.185's `open` are the two values a single word can take.
 > No device was touched. See `docs/08` step 4.185.
+>
+> **Step 4.186 — the pair opens the guard and the run then stops inside the publisher's own common
+> initialisation, in ClockDxe.** Both words of the record are rewritten at once (`--site host,index`), and
+> the two inner FVMAINs differ in **exactly two bytes** — bytes 2 and 3 of the instruction at PE RVA
+> `0x39D8` — because the `host` patch was already in 4.185; from the other side, the volume's own
+> `UsbConfigDxe` differs from the shipped `device/dxe/UsbConfigDxe.efi` in exactly the six bytes the tool's
+> `SITES` table names and no others. `ConfigUsb`'s two refusal rows (`Invalid CoreNum passed: 1`, `Unable to
+> configure USB in host mode, Status = (0x2)`) occur **once each** in 4.185's panel and **zero times** in any
+> of 4.186's five. What replaces them is a **position**: the re-connect prints `P2 SUPP n=17` and two of its
+> seventeen answers — the second being `BEB12BEE`'s `Success` — and then stops, where 4.185 prints fourteen
+> more SUPP rows, `cap=24 more`, two `P2 RECONN` rows, `P2 GATE` and `P2 GATE2`; and this build prints **no**
+> `P2 GATE`/`GATE2`/`CONN`/`RCNN`/`KEY` row at all, so the headline row that carried 4.185 is not what
+> carries this. The frame chain, read out of the machine by matching live bytes against the build's own
+> inner FVMAIN, is `XhciPciEmulation+0x15d8` (its `Start` into the `+0x10` thunk) ← `UsbConfigDxe+0x2ffc`
+> (`ConfigUsb`'s post-`blr` into `UsbCoreIfc->InitCommon`, past the `0x2fa0` null-guard) ←
+> `UsbConfigDxe+0x73c8` (a helper called with `w0 = 1` **and the string `gcc_usb30_prim_gdsc` at RVA
+> `0xf059`**) ← `UsbConfigDxe+0x8ad4` (interface `+0x58`, reached only when that bool is 1) ←
+> `ClockDxe+0x17a4` (vtable `+0xB0`) ← **`ClockDxe+0x11e8c`, the spin**. That address is ClockDxe's own
+> `.data`: `x0 = 0x9c385410` is the GDSC descriptor table's `gcc_usb30_prim_gdsc` entry (file offset
+> `0x25400`) plus `0x10`, whose `+0x28` is the ops block `0x2ba20 = {0x11e5c, 0x11e98}` — so the routine the
+> run is in is the one the descriptor names — and whose `+0x48` is the rail `/vcs/vdd_cx`, the rail the
+> console's last row complains about. The register it clears bit 0 of and then polls bit 31 of is
+> **`0x11a004`**, inside `{"GCC CLK CTL", 0x00100000, 0x00200000}` as the board's own `MemoryMapLib.c`
+> declares — one of the 55 low regions the run's `--el3-zero-mem` stage-2 map redirects to zeroed RAM, so
+> bit 31 never sets. **The decision this forces**: 4.185's two candidates for the next row are both wrong —
+> `UsbCoreIfc` is **not** null (the run passes `0x2fa0` and reaches the `blr`), so neither the
+> `(NULL != UsbCoreIfc)` assert at `UsbConfigLib.c:304` nor the self-loop at `0x2f80` happened, and it does
+> not reach `UsbCoreIfc+0x18` either; the abort is one level further in, on a named GDSC in a named register
+> block, on a machine that answers zero. So the remaining question is one bit wide **and is a device
+> question**: if the phone's hardware acknowledges, the run gets past `ClockDxe+0x11e8c` and the next rows
+> are the ones 4.185 printed after `BEB12BEE s=Success`, or `0xe13d`'s "failed to perform common
+> initialization" appears if it fails there for a real reason. Two method corrections are recorded: the
+> prior reading's `UsbConfigDxe` PE base was `0x3a7394` and the roster gives **`0x3a6358`** (`0x3c` lower),
+> and `iface+0x88`, `rec+0xb0` and the hand-written block's `0x188` are **one word** seen from three bases
+> (`0x28 + 0x88 = 0xb0`, `0xd8 + 0xb0 = 0x188`, `0x112b8 + 0xd8 + 0x28 = 0x113b8`), which is why 4.184's
+> `loop` patch at `0x3b6c` never moved the gate. Instrument: `tools/patch-usbcfg-sentinel.py`
+> (`--site host,index`, `--in-image`, comma-separated sites), `tools/build-apriori-variant.sh`
+> (`usb-sentinel-host+index`), `gdbprobe38c.py`/`gdbprobe38e.py`. **Still open**: whether the GDSC operation
+> completes on hardware, whether `Supported` is reached at all on the device, the first P3 clause, and
+> `P2 WHY`'s `O` at SEQ/WHY index 42. No device was touched. See `docs/08` step 4.186.
 
 
 **Status (2026-09-25, corrected 2026-09-27 — see Steps 4.147, 4.149, 4.150, 4.151, 4.152, 4.153, 4.154, 4.155, 4.156 and 4.157): item 1 is done for UFS, USB, the PMIC family, the GPIO controller,

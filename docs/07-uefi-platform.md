@@ -3649,6 +3649,48 @@ pages — the same 0x1000/0x10000 swap, and the same claim that alignment is not
 > change to a shipped binary, which makes the next measurement a probe of `ConfigUsb` rather than a
 > platform change. Instrument: `tools/patch-usbcfg-sentinel.py` (`--site host`, `--site index`),
 > `tools/build-apriori-variant.sh`. No device was touched. See `docs/08` step 4.185.
+>
+> **Step 4.186 — with both words written, `ConfigUsb`'s guard opens, the run reaches
+> `UsbCoreIfc->InitCommon`, and it stops in ClockDxe on the `gcc_usb30_prim_gdsc` descriptor's own
+> register poll.** `--site host,index` writes the record's index and mode words together; the volume's
+> `UsbConfigDxe` then differs from the shipped `device/dxe/UsbConfigDxe.efi` in exactly the six bytes the
+> tool's `SITES` table names (`0x39da`/`0x39db` and `0x39e4`–`0x39e7`) and the two inner FVMAINs differ in
+> exactly two bytes, because `host` was already in the previous build. The platform-level result is that
+> `ConfigUsb`'s entry guard — `0x2e80`, `0x2ea4: cmp w8, #0x1 ; b.hs 0x2eb0`, which admits only `0` — no
+> longer fires: its `ConfigUsb: Error - Invalid CoreNum passed: 1` row and the emulation's `Unable to
+> configure USB in host mode, Status =  (0x2)` row each occur **once** in 4.185's panel and **zero times**
+> in 4.186's five. In their place the run walks one link further and **stops** — the re-connect prints
+> `P2 SUPP n=17` and two of its answers, the second `BEB12BEE-… s=Success`, where 4.185 follows that same
+> row with fourteen more SUPP rows, `cap=24 more`, `P2 RECONN`, `P2 GATE` and `P2 GATE2`; this build prints
+> no `P2 GATE`/`GATE2`/`CONN`/`RCNN`/`KEY` row at all. The chain the run is on, read out of the machine by
+> matching live bytes to the build's own inner FVMAIN and deriving every PE base from the volume roster:
+> `XhciPciEmulation+0x15d8` (`Start`'s `blr x15` into the `+0x10` thunk) ← `UsbConfigDxe+0x2ffc`
+> (`ConfigUsb`'s `blr x9` into `UsbCoreIfc->InitCommon`, `0x2fe4: ldr x9,[x8,#8]`, `0x2ff4: ldr w1,[sp,#52]`,
+> past the `0x2fa0` guard for `(NULL != UsbCoreIfc->InitCommon)`) ← `UsbConfigDxe+0x73c8` (post-`73c4: bl
+> 0x8a30`, and `0x73b8: adrp x1,0xf000 ; 0x73bc: add x1,x1,#0x59` is the string `gcc_usb30_prim_gdsc` at
+> `0xf059`, with `w0 = 1`) ← `UsbConfigDxe+0x8ad4` (post-`8ad0: blr x9`, the interface's `+0x58`, taken only
+> when that bool is 1; the `+0x50` name lookup is at `0x8a80` on the pointer at RVA `0x11900`) ←
+> `ClockDxe+0x17a4` (post-`17a0: blr x8`, vtable `+0xB0` on `[0x2ba60]`) ← **`ClockDxe+0x11e8c`**, the poll.
+> That is ClockDxe's own data, not a device: `x0 = 0x9c385410` is the GDSC descriptor table's
+> `gcc_usb30_prim_gdsc` entry at file offset `0x25400` plus `0x10`, whose fields are
+> `+0x00 → "gcc_usb30_prim_gdsc"` (`0x17604`), `+0x10 → 0x11a004` (the register),
+> `+0x28 → 0x2ba20` (the ops block `{0x11e5c, 0x11e98}` — the
+> very routine the run is in, and its set-bit sibling, occurring at those two offsets and nowhere else) and
+> `+0x48 → "/vcs/vdd_cx"`, the rail the console's last DALLOG row complains about. The register at
+> `0x11a004` is in the platform's own `MemoryMapLib.c:43` declaration
+> `{"GCC CLK CTL", 0x00100000, 0x00200000, …}`, one of the 55 declared low regions this instrument's
+> stage-2 map redirects to zeroed RAM, so the bit-31 poll cannot complete here. **The platform conclusion is
+> two-sided and both sides matter**: the emulation's `Start` does reach the publisher's common
+> initialisation with the platform's own interface — so nothing in the Apriori ordering or the record
+> construction is what stops it now — and what stops it is a clock register the phone has and this
+> instrument deliberately zeroes, which makes the remaining question a one-bit device question rather than
+> another QEMU pass. Recorded as method, not as conclusion: the earlier reading of this volume used
+> `0x3a7394` for `UsbConfigDxe`'s PE base where the roster gives `0x3a6358`, and the gate's `iface+0x88`,
+> the record's `+0xb0` and the hand-written block's `+0x188` are one word seen from three bases
+> (`0x28 + 0x88 = 0xb0`, `0xd8 + 0xb0 = 0x188`, `0x112b8 + 0xd8 + 0x28 = 0x113b8`). Instrument:
+> `tools/patch-usbcfg-sentinel.py` (`--site host,index`), `tools/build-apriori-variant.sh`
+> (`usb-sentinel-host+index`), `gdbprobe38c.py`/`gdbprobe38e.py`. No device was touched. See `docs/08`
+> step 4.186.
 
 
 ### What exists and what is missing, so the next session starts from the right

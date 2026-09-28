@@ -38264,3 +38264,428 @@ kind of question a four-byte build settles.
   Nothing was written to it at any point.
 - **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every
   ~3.4 s, so a phone belongs on the chipset controller `0000:00:14.0`.
+
+## Step 4.186 — the pair opens the gate and the run then stops one level further in, in the publisher's own `InitCommon`: `ConfigUsb`'s two refusal rows are gone, `XhciPciEmulation`'s `Start` reaches `UsbCoreIfc->InitCommon`, and the thread is found in ClockDxe driving `gcc_usb30_prim_gdsc` by the name its own descriptor carries — clearing bit 0 of the register at `0x11A004` and polling bit 31, on an address this instrument's stage-2 map reads as zero
+
+### What 4.185 left, and why one more reading could not settle it
+
+4.185 closed the question of whether the `0x10000` at `iface+0x8C` is load-bearing: writing `1` there moved
+the gate and the emulation's `Supported` from `Unsupported` to `Success`. It left, in its own words, "whether
+the paired build gets past `ConfigUsb` (both candidate next rows are named above and neither is observed)",
+and it named the two candidates: if `rec[0]+0x18` is null, the run should print
+`%a:%d ASSERT: (NULL != UsbCoreIfc)` at `UsbConfigLib.c:304` and halt in the self-loop at `0x2f80`; if it is
+populated, the run should reach `UsbCoreIfc+0x18` and one of the two "initializaition" rows.
+
+What 4.185 could not do is *decide which*, and no reading of its own panel could: the abort it saw was one
+guard earlier (`ConfigUsb`'s entry, on the record's index word), so both candidates were downstream of
+`ConfigUsb` ever being entered with admissible arguments. One more variable settles it. The `index` site was
+already a site in `tools/patch-usbcfg-sentinel.py` and passing its in-volume gate as `original`; the build
+that writes it is the build that gets past the guard.
+
+### The instrument, and the two things it had to be careful about
+
+`SENTINEL_SITE=host,index` — the first build this project has made with two sites at once — writing to
+`work/out/usb-sentinel-host+index/`, so 4.185's artifact is not overwritten and a `+` rather than a comma
+keeps the directory one argument to anything that splits on commas. `--site` now takes a comma-separated
+list and checks *each* named site; the two pairs are eight bytes each and distinct, so a volume carrying one
+patch and not the other fails the gate rather than passing on the strength of the other. Measured on both
+volumes:
+
+```
+host+index volume   --site host,index --expect patched   exit 0 (both pairs patched, once, no original)
+                    --site loop       --expect patched   exit 1 (0 patched, 1 original)
+host volume (4.185) --site host       --expect patched   ok
+                    --site index      --expect original  ok
+```
+
+The first thing to be careful about is that the *headline row is not printed*. 4.185's panel carries `P2
+GATE2 w80=9BEBC650 w88=00000001 w8c=00000001` twenty-five times; no 4.186 panel carries a `P2 GATE`,
+`P2 GATE2`, `P2 CONN`, `P2 RCNN` or `P2 KEY` row at all — measured across all five. So the evidence that
+the gate opened is *not* the gate row: it is the two rows that stop being printed, and the position the
+console stops at. That is weaker in kind than 4.185's positive row, and it is why this step also had to run
+the frame-chain probe: the *position* is what carries the finding, and only the probe turns a position into
+a name.
+
+The second is the one 4.185 already paid for and this step inherits: the record the emulation is handed is a
+**counterfeit construction-time value** — in the probe's own words, "a *counterfeit* construction-time value
+no device produces, built to move the abort one instruction further and read the row that appears". In this
+build the hand-written record reads `{Index 0, Mode 1}`: record 1's index word carrying record 0's value.
+Nothing about it is device behaviour and no row it produces may be quoted as such.
+
+**The diff between the two volumes, and what it is.** Both inner FVMAINs are 7,540,736 B and differ in
+**exactly two bytes**, at `0x3A9D32` and `0x3A9D33` (`00 32` → `1F 2A`) — bytes 2 and 3 of the instruction
+at PE RVA `0x39D8`, `0x320003E9` (`orr w9, wzr, #0x1`) → `0x2A1F03E9` (`mov w9, wzr`). Only the `index`
+site appears, because 4.185 already carried `host`. The same measurement from the other side, which is a
+sharper one: the volume's own `UsbConfigDxe` differs from the shipped `device/dxe/UsbConfigDxe.efi` in
+**exactly the six bytes the tool's `SITES` table names** — `0x39DA`/`0x39DB` (the high half of `index`) and
+`0x39E4`–`0x39E7` (all four of `host`) — so the volume carries the two intended instructions and nothing
+else, which is a check on the tool as well as on the build.
+
+| artifact | size | sha256 |
+|---|---|---|
+| `work/out/usb-sentinel-host+index/Mu-gauguin-usbcfg-sentinel-gzip.img` (**new**, `SENTINEL_SITE=host,index`) | 1,173,504 | `0b791b0df28b7527edca2317aad9ceb0fa74f25fe90dd72a27a33e5e2c3805f3` |
+| `/tmp/xhci-sentinel-pair.raw` (inflated outer blob) | 3,145,840 | `a64010f46a2e002176670347bd62601a522bddf9717728e891904d4a7b973159` |
+| `/tmp/xhci-sentinel-host.raw` (4.185's, unchanged) | 3,145,840 | `8fbb3a9b7f3366fa743b16a6421cc5e48d5911714a4bdbc495619cda9b00c59c` |
+| `/tmp/fvmain-4185.fv` / `/tmp/fvmain-4186.fv` (inner volumes) | 7,540,736 each | `3c4f05992edbd95cf4894d8157c111612f7ffa6be9e464381bd499a98936fbcf` / `7ddec6da917b6202f01b1d2eb148b360783a3be49fa7a2c0893b7dbfe3919faf` |
+| `work/out/qemu-panel-4.186-hostindex.txt` | 27,291 | `add6998c5582a11359c292d73dc4f1110f9ecc9060ad6b46293906c884e328f0` |
+| `work/out/qemu-panel-4.186-hostindex-b.txt` | 22,377 | `a4c4d850437f4f49eb99c1a9054ef08bc81200a116323d42559f2f759cb0de25` |
+| `work/out/qemu-panel-4.186-hostindex-c.txt` | 21,410 | `7abdc6ef69f7aff9bc82dda07b464ab0830433e215a18ac92d53172e3ccfd7c8` |
+| `work/out/qemu-panel-4.186-hostindex-e.txt` | 25,648 | `b26e7ec3aef2b3ab69bfe9a4b5b4794552b16cd5fee8c85a7155ea0e6a04c3df` |
+| `work/out/qemu-panel-4.186-hostindex-plain.txt` | 24,723 | `aee450c55102954b9805e2a0ed9f12c2070d554e27aec5fd24ade1d19745b53a` |
+
+Four instrumented passes (`run38.sh`, `run38b.sh`, `run38c.sh`, `run38e.sh`) and one plain pass
+(`run38-plain.sh`); pass 1 again paid for the base, `0x9C40B000`, `+0x346C`, a sixth consecutive step. All
+five panels carry `--el3-zero-mem`, and the plain pass reaches `K 46 Ss 44/69` while all four instrumented
+passes reach `K 83 SO 76/69 free=4096 CB933912-DF8F-4305-B1F9-7B44FA11395C`.
+
+### The reading
+
+The first digest block completes, and it completes *identically to 4.185*: last `K` row
+`K 82 Ss 76/69 free=4096 EBF342FE-B1D3-4EF8-957C-8048606FF671` in both, and `K 83 SO 76/69` on the
+instrumented passes. `P2 STATS discovered=83 apriori=69/70 started=76 diag=7 noload=0` (row 315) and
+`P2 USB n=1 all=139 pciio=0 usb2hc=0 usbio=0 blkio=0 fs=0 cfg=1 loaded=77` (row 328) are where 4.185 has
+them. `pciio` is still zero.
+
+What `ConfigUsb` was refusing is *gone*. `ConfigUsb: ConfigUsb: Error - Invalid CoreNum passed: 1` and
+`XhcPciEmulationDriverBindingStart: Unable to configure USB in host mode, Status =  (0x2)` occur **once
+each** in `work/out/qemu-panel-4.185-host.txt` (rows 377 and 378) and **zero times in any of the five 4.186
+panels**. The guard at `2E80` admits only `0`, and with `iface+0x88` now reading `0` — the pair's index word
+— the guard does not fire.
+
+What is printed instead is nothing, at a place that is exactly one row further on. Both runs print the same
+row at the same point in the re-connect's walk:
+
+```
+4.185  374 |P2 SUPP n=17|
+       375 |P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Unsupported|
+       376 |P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success|
+       377 |ConfigUsb: ConfigUsb: Error - Invalid CoreNum passed: 1|
+       378 |XhcPciEmulationDriverBindingStart: Unable to configure USB in host mode, Status =  (0x2)|
+       379 |P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Access Denied|
+       ... 380-393, fourteen more SUPP rows, two of them the emulation's own GUID repeated
+       394 |P2 SUPP cap=24 more|
+       395 |P2 RECONN h=9C028D98 s=Not Found|
+       396 |P2 RECONN sup=949+18 cfg=7+18|
+       397 |P2 GATE h=9C028D98 i=9BECC3B8 w00=00010004 w04=00000000|
+       398 |P2 GATE2 w80=9BEBC650 w88=00000001 w8c=00000001|
+
+4.186  329 |P2 SUPP n=17|
+       330 |P2 SUPP F056673C-EC45-5D81-B2B0-848EBF31C42F s=Unsupported|
+       331 |P2 SUPP BEB12BEE-F6E1-11E1-9FB8-6C626DE4AEB1 s=Success|
+       332 |DALLOG Device [0x0]: DALLOG Device VCS: Unable to set rail[/c/d_x/c/d_xm.v|   (last row)
+```
+
+4.186 prints two of the block's seventeen answers and then stops. Twenty more SUPP rows, the `cap=24 more`
+line, both `P2 RECONN` rows, `P2 GATE` and `P2 GATE2` — every one of them present in 4.185 — are absent,
+and the panel ends at 333 rows (last #332) against 4.185's 1,324 (last #1323). The last thing the console
+says is a DALLOG rail row, and it is one stage further on than 4.185's: 4.185's rail rows stop at
+`Unable to init rail`, 4.186's at `Unable to set rail`.
+
+So the reading is a position, and it is one row wide: **the run is stopped between the row that reports
+`BEB12BEE`'s `Supported` as `Success` and the row that would report the next binding — that is, inside that
+binding's `Start`.** Everything 4.185 listed as downstream of `ConfigUsb` being entered is downstream of
+exactly this point. Which of the two candidates is true is not readable from the console: the run never
+returns to print either.
+
+### The frame chain, and what each frame is
+
+Two probes answer it by reading the machine rather than the log. `gdbprobe38c.py` establishes that the stop
+is deterministic — the same register file at the same PC on three consecutive samples — and names the
+module owning that PC; `gdbprobe38e.py` walks the frame chain out of it and names every frame. Verbatim from
+`work/out/qemu-probe-4.186/gdb38e-run.log`:
+
+```
+walking the frame chain out of the spin at PC=0x9c371e8c (lr=0x9c365090, fp=0x9ffce7f0)
+  pc     0x9c371e8c  base=0x9c360000  RVA=0x11e8c  entry=0x1000  size=0x2f000
+         wrote /tmp/frame-0x9c360000-text.bin (32768 bytes at base+0x1000)
+  lr     0x9c365090  base=0x9c360000  RVA=0x5090  entry=0x1000  size=0x2f000
+  frame 0  fp=0x9ffce7f0  ret=0x9c3617a4
+  f0     0x9c3617a4  base=0x9c360000  RVA=0x17a4  entry=0x1000  size=0x2f000
+  frame 1  fp=0x9ffce800  ret=0x9bec3ad4
+  f1     0x9bec3ad4  base=0x9bebb000  RVA=0x8ad4  entry=0x1000  size=0x13000
+         wrote /tmp/frame-0x9bebb000-text.bin (32768 bytes at base+0x1000)
+  frame 2  fp=0x9ffce850  ret=0x9bec23c8
+  f2     0x9bec23c8  base=0x9bebb000  RVA=0x73c8  entry=0x1000  size=0x13000
+  frame 3  fp=0x9ffcea20  ret=0x9bebdffc
+  f3     0x9bebdffc  base=0x9bebb000  RVA=0x2ffc  entry=0x1000  size=0x13000
+  frame 4  fp=0x9ffceaa0  ret=0x9be2a5d8
+  f4     0x9be2a5d8  base=0x9be29000  RVA=0x15d8  entry=0x1000  size=0xb000
+  frame 5  fp=0x9ffceb20  ret=0x9cca33f8
+  f5     0x9cca33f8  base=0x9cc96000  RVA=0xd3f8  entry=0x123c  size=0x33000
+  frames 6..9 all base=0x9cc96000: 0x12190, 0x3dac, 0x1260, 0x1250
+```
+
+Read outward from the spin, with each returned address disassembled in the module it lands in:
+
+- **`ClockDxe+0x11E8C`** — the spin itself.
+- **`ClockDxe+0x17A4`** — the return one level out, post-`17A0: blr x8`, a vtable `+0xB0` call made on
+  `[[0x2BA60]+8]`:
+  ```
+  1790: adrp x8, 0x2b000 ; 1794: ldr  x0, [x8, #2656]   ; the ClockDxe global at RVA 0x2BA60
+  1798: ldr x9, [x0, #8]
+  179c: ldr x8, [x9, #176]                              ; vtable +0xB0
+  17a0: blr x8
+  ```
+- **`UsbConfigDxe+0x8AD4`** — post-`8AD0: blr x9`, and the call is interface `+0x58`, made **only when the
+  helper's bool argument is 1**:
+  ```
+  8aa8: orr  w8, wzr, #0x1
+  8aac: ldurb w9, [x29, #-4]   ; the bool the helper was called with
+  8ab4: cmp  w8, w9 ; b.ne 0x8afc
+  8abc: adrp x8, 0x11000 ; ldr x8, [x8, #2304]          ; the pointer at RVA 0x11900
+  8ac4: ldr  x9, [x8, #88]                              ; vtable +0x58
+  8ad0: blr  x9
+  ```
+- **`UsbConfigDxe+0x73C8`** — post-`73C4: bl 0x8A30`, and this frame is where the name is:
+  ```
+  73b8: adrp x1, 0xf000 ; 73bc: add x1, x1, #0x59       ; = 0xF059 "gcc_usb30_prim_gdsc"
+  73c0: orr  w0, wzr, #0x1
+  73c4: bl   0x8a30
+  ```
+  and `0x8A30` is the helper that resolves a name through the interface and then acts on it:
+  ```
+  8a50: adrp x8, 0x11000 ; add x8, x8, #0x900           ; the address 0x11900
+  8a5c: ldr  x9, [x9, #2304]                            ; the pointer at 0x11900; cbz -> 0x8b50
+  8a70: ldr  x9, [x8, #80]                              ; vtable +0x50, called with (obj, name, &local)
+  8a80: blr  x9
+  ...
+  8ad0: blr  x9                                         ; then +0x58, with the bool deciding whether it is reached
+  ```
+- **`UsbConfigDxe+0x2FFC`** — post-`2FF8: blr x9`, and this is `ConfigUsb`'s call into `UsbCoreIfc`:
+  ```
+  2fe0: ldur x8, [x29, #-32]   ; UsbCoreIfc
+  2fe4: ldr  x9, [x8, #8]
+  2ff0: mov  x0, x8
+  2ff4: ldr  w1, [sp, #52]     ; w1 = 0
+  2ff8: blr  x9
+  2ffc: mov  x8, x0
+  ```
+  reached past the null-guard at `2FA0`, whose string is
+  `0xE10D "%a:%d ASSERT: (NULL != UsbCoreIfc->InitCommon)\n"`, and whose failure path prints `0xE13D`
+  `"%a: ConfigUsb: Error - failed to perform common initialization for USB core %d: %r"`.
+- **`XhciPciEmulation+0x15D8`** — post-`15D4: blr x15`, and it is the emulation's `Start` calling the
+  template thunk `+0x10` with `(w1 = 1, w2 = iface+0x88)`:
+  ```
+  15c4: ldr x0, [sp, #32]
+  15c8: orr w1, wzr, #0x1
+  15cc: ldr x15, [x0, #16]
+  15d0: ldr w2, [x0, #136]      ; iface+0x88
+  15d4: blr x15
+  15d8: mov x19, x0 ; 15dc: tbnz x19, #63, 0x16d8
+  ```
+- **`DxeCore+0xD3F8`** and the four above it — the dispatch loop. `f5`'s base `0x9CC96000` and entry
+  `0x123C` are the firmware's own numbers: the same panel prints
+  `Loading DxeCore at 0x009CC96000 EntryPoint=0x009CC9723C`, and `0x9CC96000 + 0x123C = 0x9CC9723C`.
+
+So the chain is `XhciPciEmulation.Start → ConfigUsb → UsbCoreIfc->InitCommon → (a GDSC looked up by the name
+"gcc_usb30_prim_gdsc") → a ClockDxe vtable +0xB0 method → the poll at ClockDxe+0x11E8C`, and the thread the
+instrument caught spinning in ClockDxe is the thread `BEB12BEE`'s `Start` is on.
+
+**The identification is not an address this project guessed.** Each frame was named by reading the module's
+live bytes out of the machine and locating a unique 64-byte window of them in this build's own inner
+FVMAIN. Two independent checks hold on all four modules: the `entry` and `SizeOfImage` the probe read out of
+live memory equal the PE headers of the files the roster names (`0x1000`/`0x2F000` ClockDxe,
+`0x1000`/`0x13000` UsbConfigDxe, `0x1000`/`0xB000` XhciPciEmulation, `0x123C`/`0x33000` DxeCore), and
+ClockDxe's extracted PE, 192,512 B, `sha256 c200d38eb3224b31354912947f93eacf238c9d18897cc9fd03c821b677da329d`,
+is **byte-identical** to `device/dxe/ClockDxe.efi` and to
+`uefi/Binaries/gauguin/QcomPkg/Drivers/ClockDxe/ClockDxe.efi`. XhciPciEmulation's extracted PE is the
+Bitra build 4.185 identified, 45,056 B,
+`sha256 68ee8cf1f8412b1bdc31388a08ebd43a93a37f7bb32257a2c47c132f27e098f0`.
+
+### Where the poll lands: a descriptor that names its own routine, and an address the instrument zeroes
+
+The register file at the spin, from `gdb38c-run.log`, is `PC=0x9c371e8c`, `x0 = 0x9c385410`, `[x0] =
+0x11A004`. The function containing the spin is a clear-then-poll pair:
+
+```
+11e5c: ldr  x8, [x0, #8]        ; the descriptor's mask field -- 0 for this one, so the next branch is taken
+11e70: ldr  x8, [x0]            ; x8 = the register address
+11e78: orr  w9, wzr, #0xfffffffe
+11e7c: ldr  w11, [x8] ; and w12, w11, w9 ; str w12, [x8]     ; clear bit 0
+11e88: ldr  x9, [x0]            ; x9 = the same register address
+11e8c: ldr  w8, [x9]            ; THE SPIN
+11e90: tbz  w8, #31, 0x11e8c    ; wait for bit 31 to set
+11e94: ret
+...
+11e98: (the sibling) ldr x8,[x0,#8] ... 11eb0: orr w9, wzr, #0x1 ; orr w11, w10, w9 ; str w11, [x8]   ; set bit 0
+```
+
+`x0 = 0x9C385410` is **not** a device address and not a guess: it is ClockDxe's own `.data`. ClockDxe's
+`.data` is at VA `0x1D000` with `roff == VA`, so live VA `0x9C385410` is file offset `0x25410`. ClockDxe
+holds a GDSC descriptor table of stride `0x58` from file offset `0x25400`, and the entry at `0x25400` is:
+
+```
++0x00  0x0000000000017604   -> "gcc_usb30_prim_gdsc"   (the string, in the same section)
++0x08  0
++0x10  0x000000000011a004   <- the register address; x0 = this field
++0x18  0
++0x20  0
++0x28  0x000000000002ba20   -> the ops block, {+0x00: 0x00011e5c, +0x08: 0x00011e98}
++0x30  0
++0x38  0
++0x40  0
++0x48  0x0000000000025638   -> "/vcs/vdd_cx"
+```
+
+Three things fall out of that table and none of them is inferred.
+
+**The routine the run is in is the descriptor's own.** The ops block at `.data 0x2BA20` holds exactly two
+pointers, `0x11E5C` and `0x11E98` — the clear-then-poll function the run is spinning in and its set-bit
+sibling — and they occur at those two file offsets and nowhere else in the image. The entry that names
+`gcc_usb30_prim_gdsc` names that ops block at `+0x28`, and its neighbours in the table
+(`gcc_ufs_phy_gdsc` at `0x253A8`, `cx_gdsc` at `0x25458`) share the same ops block, because the ops are
+generic GDSC operations parameterised by the register address at `+0x10`.
+
+**The name matches on both ends.** The USB side asks for `gcc_usb30_prim_gdsc` by name (`UsbConfigDxe`
+RVA `0xF059`, loaded at `0x73B8`); the ClockDxe side is the descriptor whose `+0x00` points at the string
+`gcc_usb30_prim_gdsc` (RVA `0x17604`). One name, looked up on one side and carried by the other.
+
+**And the rail name matches the console.** The entry's `+0x48` is `/vcs/vdd_cx`, a VCS rail; the last thing
+the 4.186 console prints, immediately before it stops, is `DALLOG Device VCS: Unable to set rail[...]`. The
+rail rows are among the ten 90-column rows in this panel (rows 259, 262, 265 wrap and their tails sit on
+the unnumbered line below), so the row quoted here is the row's visible part and the tail is the rest of the
+rail path.
+
+**And why the poll never completes.** The register the descriptor names is `0x11A004`, and
+`uefi/Platforms/Xiaomi/gauguinPkg/Library/MemoryMapLib/MemoryMapLib.c:43` declares
+
+```
+{"GCC CLK CTL", 0x00100000, 0x00200000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE},
+```
+
+— the window `0x100000..0x300000`, which contains `0x11A004`. The run's own panel header says what this
+instrument does with it:
+
+```
+# el3 zero-mem on: stage 2 gives the guest a 4 GB identity map, with the 55 2 MB block(s) holding this
+# platform's declared regions below 0x40000000 redirected to 0x40000000..0x46e00000, one block each so
+# that a register written and read back is the value that was written. No byte of the payload was changed
+```
+
+So the 2 MB block holding `GCC CLK CTL` is pointed at zeroed RAM, `[0x11A004]` reads zero on every
+iteration, bit 31 never sets, and the thread does not return. **That is the mechanism of the stop, and it
+is the instrument's own design working as documented** — the tool's docstring gives the redirection's
+purpose as getting past "a driver which reads a pointer out of one", and this is the same coin's other
+face: the driver gets past, and then polls a bit a real clock controller would raise and a zeroed page
+never will.
+
+The consequence for the reading is direct. **The position of this stop is partly a property of the
+instrument, not only of the driver.** What the run establishes is that `Start` reached `UsbCoreIfc`'s
+common initialisation, resolved the `gcc_usb30_prim_gdsc` GDSC by name, and got as far as a register
+operation on it; it does not establish that the operation would fail on hardware. On the phone that
+address is a real GCC register with a real GDSC behind it, and bit 31 is the power-down acknowledgement.
+Whether it sets there is a one-bit question the device can answer and this machine cannot.
+
+### The method, and a correction to it
+
+The identification above is by reading live bytes and matching them to the build's own inner FVMAIN, and by
+deriving each PE base from the roster — `fv_files()` for the FFS offset, then `MZ` at that offset and
+`PE\0\0` at the `MZ+0x3C` dword. **Not from a guessed offset.** The prior reading of this build used
+`0x3A7394` for `UsbConfigDxe`'s PE base; the roster gives `0x3A6358`, and `0x3C` is exactly the error
+that produced a disassembly in which `0x2FF8` read as `mov w3, w8` and the `InitCommon` claim looked false.
+With the roster's base every site this step argues about disassembles consistently, and each of them is
+confirmed a second time by arithmetic that has to agree:
+
+- `0x39D8`'s store pair writes `[x8, #392]` (Index) and `[x8, #396]` (Mode) on the **same `x8`** — and the
+  volume's bytes at `0x39DA`/`0x39DB` are the `index` site, which is measured by the gate moving.
+- The interface the gate reads is at `rec[1]+0x28`, and `0x28 + 0x88 = 0xB0`. The record's own Index/Mode
+  words are at `rec[i]+0xB0`/`rec[i]+0xB4` — the offsets `UsbStartController` writes at `0x50F0`/`0x5108`
+  and the initialiser loop writes at `0x3B5C`/`0x3B70`. So **`iface+0x88` and `rec+0xB0` are one word**,
+  seen from two bases, and the hand-written block's `str w9, [x8, #392]` with `x8` at the table base is
+  `0xD8 + 0xB0` — record 1's index word. Both readings name the same address, and that is why 4.184's
+  `loop` patch at `0x3B6C`, which writes `rec[0]+0xB4`, never moved the gate.
+- The record table's stride is `0xD8` from `0x112B8`, so `rec[1] = 0x11390`, `rec[1]+0x28 = 0x113B8` — the
+  interface constant the earlier steps recorded — and `rec[1]+0xB0 = 0x11440 = 0x112B8 + 0x188`, the
+  address `0x39E0`'s store actually writes.
+
+The earlier draft of this section gave the loop's stores as `+0x88`/`+0x8C` and called that a disagreement
+with the hand-written block. It is not a disagreement: they are the same offsets in two different records'
+coordinate systems. The correction is in the arithmetic, not in the reading.
+
+**And the probe's own vocabulary must not be quoted as an identification.** `gdbprobe38c.py` still carries
+`whose()`'s docstring line about a "fixed `MAP` list whose bases are stale", and its DALSys entry reads
+`0x9C499000` where this build's exception dump reads `0x9C40B000`. Every address this step reports comes
+from the roster, from the live bytes, or from the panel's own `Loading ... EntryPoint=...` row — never from
+that list.
+
+### What this decides
+
+**4.185's two candidates are both wrong, and the outcome is a third thing.** `UsbCoreIfc` was **not** null:
+the run passed the guard at `0x2FA0` and reached the `blr` at `0x2FF8`, so neither
+`%a:%d ASSERT: (NULL != UsbCoreIfc)` nor the self-loop at `0x2F80` occurred. And it did not reach
+`UsbCoreIfc+0x18` either — the "host initializaition" row at `0xE244` is not printed either. The abort is
+one level further in than 4.185 could see: inside the common initialisation, on a clock descriptor's own
+register operation.
+
+**The two-word reading is now the measured one.** Opening `iface+0x88` and `iface+0x8C` together is
+necessary and still not sufficient, and what it buys is precisely a *position*: `ConfigUsb`'s guard passes,
+its two refusal rows disappear, the run walks one link further, and it stops inside
+`UsbCoreIfc->InitCommon` on `gcc_usb30_prim_gdsc`. Every earlier obstacle in this chain — the gate, the
+index guard, the `Invalid CoreNum` message — is behind it.
+
+**What it does not decide, and why the device is now the only instrument that can.** The stop is a poll of
+bit 31 of a register the board's own memory map places in `GCC CLK CTL` and this instrument's stage-2 map
+reads as zero. On the phone that register is real. So the prediction this step makes is one bit wide and it
+is a device prediction, not a QEMU one: **if the phone's `ConfigUsb` → `InitCommon` path reaches the
+`gcc_usb30_prim_gdsc` operation and the hardware acknowledges, the run gets past `ClockDxe+0x11E8C` and the
+next rows to appear are the ones 4.185 printed after `BEB12BEE s=Success` — or, if the common
+initialisation fails for a real reason there, `0xE13D`'s "failed to perform common initialization" row.**
+Either way the device run is a two-outcome experiment with the strings already named, and it is cheaper
+than any further QEMU pass: it needs `fastboot boot`, 先读屏, and the stock-boot restore path standing by.
+
+**And the chain is now attributable end to end, which it was not before.** One string — `gcc_usb30_prim_gdsc`
+— is on both ends of the link, the ops block that runs is the one the descriptor names, and the rail the
+console complains about last is the descriptor's own `+0x48`. The USB port's first link is not a mystery
+with a name on it; it is a named GDSC in a named register block, on a machine that answers zero.
+
+### Rows
+
+- **instrument**: `SENTINEL_SITE=host,index` (new: the tool's `--site` takes a comma-separated list and
+  checks each site independently; `tools/build-apriori-variant.sh` writes to a directory per site set);
+  `run38.sh` / `run38b.sh` / `run38c.sh` / `run38e.sh` instrumented and `run38-plain.sh` plain, all five
+  with `--el3-stub --el3-zero-mem --el3-seed-smem --el3-seed-aop`; `gdbprobe38c.py` (the spin's module) and
+  `gdbprobe38e.py` (the frame chain), both of which read live bytes and match them against this build's own
+  inner FVMAIN rather than using any address this project guessed.
+- **acts**: **six bytes** of a shipped Qualcomm driver are rewritten inside this project's own payload — two
+  bytes at PE RVA `0x39D8` and four at `0x39E4`, the index and mode words of the same record — and the
+  volume differs from the shipped `device/dxe/UsbConfigDxe.efi` in exactly those six and no others.
+  Nothing was flashed.
+- **answers**: what `ConfigUsb` does when its guard is satisfied — it calls `UsbCoreIfc->InitCommon`, which
+  resolves `gcc_usb30_prim_gdsc` by name and reaches a GDSC register operation; and where the run stops,
+  to the instruction and the module.
+- **eliminates**: both of 4.185's candidates for the next row (a null `UsbCoreIfc` with an assert and a
+  self-loop, and a reach into `UsbCoreIfc+0x18`'s "initializaition" strings) — neither the assert nor either
+  string is printed, because `UsbCoreIfc` is non-null and the abort is one level further in; and the
+  reading that the emulation's `Start` fails inside `UsbConfigDxe` at all.
+- **closes**: 4.185's *"does not close: whether the paired build gets past `ConfigUsb`"* — it does, and the
+  row after it is in ClockDxe.
+- **does not close**: whether the `gcc_usb30_prim_gdsc` operation completes on hardware (the device
+  prediction above), whether `Supported` is reached at all on the device (4.180's open counter at its
+  entry), the first P3 clause, and `P2 WHY`'s `O` at SEQ/WHY index 42 (`CCCB0C28-4B24-11D5-9A5A-0090273FC14D`,
+  the 70th APRIORI GUID) whose reason code is still unread.
+- **pays a debt and records a method correction**: the prior reading of this build used `0x3A7394` for
+  `UsbConfigDxe`'s PE base; the roster gives `0x3A6358`, `0x3C` lower, and every site here is re-read at the
+  roster's base. The three arithmetic identities in "The method" above (`0x28+0x88 = 0xB0`, `0xD8+0xB0 =
+  0x188`, `0x112B8+0xD8+0x28 = 0x113B8`) are what tie 4.181 through 4.186 to one word.
+- **carries the standing limits unchanged**: the four `loader` blobs; the `/pmic/target` suppression at
+  `0x12000C`; the seeded SMEM target-info word and the AOP gate word, both fabricated and both flagged in
+  the panel header; the stage-2 redirection of the platform's 55 declared low regions; and that this
+  repository has no source for the drivers it reads — the disassembly is the whole of what is known about
+  them.
+- **a note on the instrument's own data**: this step's panel is the second in this project with a
+  90-column row in it that matters (the rail rows at 259, 262, 265, listed in the panel's own header), and
+  the row this step reads as its last — `332 |... Unable to set rail[/c/d_x/c/d_xm.v|`, 81 characters — is
+  not one of them, so it is complete as printed. The two rows whose absence carries the finding are the
+  ones quoted from 4.185 (62 and 95 characters, both under the console's 90 columns plus framing, both
+  complete in that panel).
+- **not an action**: nothing was flashed, no partition was written, no stub or Microsoft image was changed,
+  and no volume with a patched `UsbConfigDxe` has left this host. `userdata` (107 GB, unbacked), the
+  partition table and the firmware LUN remain untouched. `device/dxe/UsbConfigDxe.efi` is still
+  `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The porting goal is unchanged
+  and unmet: no Windows 11 image runs on gauguin, P3 is unfinished, P4's `userdata`-destroying install and
+  P5's peripherals are not begun, and the end state remains a Windows tablet whose modem and cameras cannot
+  be driven.
+- **device state**: the phone is off USB — `fastboot devices` and `adb devices` both list nothing. Nothing
+  was written to it at any point.
+- **host**: unchanged, `0000:6c:00.0` (the dock's `JHL6340`) still deregistering its buses every ~3.4 s, so
+  a phone belongs on the chipset controller `0000:00:14.0`.

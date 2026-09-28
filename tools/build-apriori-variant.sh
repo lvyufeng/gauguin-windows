@@ -111,6 +111,16 @@
 #                cannot overwrite the artifact of the other. work/out/usb-sentinel/
 #                holds 4.184's, built before the split, and is not written to again.
 #
+#                SENTINEL_SITE=host,index is 4.186: both words of the same record,
+#                which is the only pair that can say what ConfigUsb does next, since
+#                the gate needs +0x8C == 1 and the guard needs +0x88 == 0 and
+#                neither value is a property of one word. It is a *counterfeit*
+#                construction-time record -- no device produces record 1 with record
+#                0's index -- so the run is a probe of the shipped binary and never a
+#                device behaviour; it is built for the same reason the other two are,
+#                to move the abort one instruction further and read the row that
+#                appears. Its output directory is usb-sentinel-host+index/.
+#
 # Environment:
 #   DISPLAY=simple|qcom   which display driver the platform is regenerated with.
 #                         Default simple, because that is what the baseline
@@ -197,15 +207,20 @@ print(' '.join(SIBLING_BLOBS.values()))")
         [ -n "$STAGED_BLOBS" ] || die "SIBLING_BLOBS is empty - nothing would be staged"
         if [ "$EXP" = usbcfg-sentinel ]; then
             SENTINEL=1
-            case "$SENTINEL_SITE" in
-                host|loop) ;;
-                *) die "SENTINEL_SITE must be host or loop, not '$SENTINEL_SITE'" ;;
-            esac
-            # A directory of its own, both against the other site and against
-            # 4.182/4.183's artifacts: a run of one site must not be able to
-            # overwrite the payload of the other, or the two images stop being
-            # distinguishable by where they are.
-            OUTDIR="$OUT/usb-sentinel-$SENTINEL_SITE"
+            IFS=',' read -r -a _sites <<< "$SENTINEL_SITE"
+            for _s in "${_sites[@]}"; do
+                case "$_s" in
+                    host|index|loop) ;;
+                    *) die "SENTINEL_SITE is '$SENTINEL_SITE'; each name must be host, index or loop (comma-separated for a paired build)" ;;
+                esac
+            done
+            # One directory per site set, both against the other sites and against
+            # 4.182/4.183's artifacts: a run of one set must not be able to
+            # overwrite the payload of another, or the images stop being
+            # distinguishable by where they are. `+` because a comma in a
+            # directory name reads as two arguments to anything that splits on it.
+            SITE_TAG="${SENTINEL_SITE//,/\+}"
+            OUTDIR="$OUT/usb-sentinel-$SITE_TAG"
         fi
         ;;
     apriori-extras)
@@ -432,12 +447,14 @@ else
     note "payload that answers the open P2 question and must not take the place of"
     note "the one in boot until that reading has been taken."
     if [ "$SENTINEL" = 1 ]; then
-        note "This one also carries four changed bytes - UsbConfigDxe's host-client"
-        note "record now reads as mode 1 instead of unassigned (site $SENTINEL_SITE) -"
-        note "so it is a counterfactual and not a candidate: it is here to answer"
-        note "whether the gate opens, and it is not to be flashed to the boot"
-        note "partition as a fix. The panel to read is P2 GATE2's w8c (1, against"
-        note "00010000), P2 SUPP BEB12BEE...'s s=, and pciio in the P2 USB census on"
+        note "This one also carries one rewritten instruction per site ($SENTINEL_SITE):"
+        note "UsbConfigDxe's host-client record no longer holds its shipped values, and"
+        note "with both words changed it is a *counterfeit* record that no device"
+        note "produces - so it is a counterfactual and not a candidate: it is here to"
+        note "answer whether the gate opens and what the publisher does next, and it is"
+        note "not to be flashed to the boot partition as a fix. The panel to read is"
+        note "P2 GATE2's w8c (1, against 00010000), P2 SUPP BEB12BEE...'s s=, the first"
+        note "ConfigUsb row if the guard now passes, and pciio in the P2 USB census on"
         note "the pass after the re-connect."
     fi
 fi

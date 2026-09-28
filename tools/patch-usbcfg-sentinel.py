@@ -137,10 +137,18 @@ Usage:
     tools/patch-usbcfg-sentinel.py --check FILE
     tools/patch-usbcfg-sentinel.py --check FILE --site host
     tools/patch-usbcfg-sentinel.py --apply FILE --site host|index|loop
-    tools/patch-usbcfg-sentinel.py --in-image IMG --site S --expect patched|original
+    tools/patch-usbcfg-sentinel.py --apply FILE --site host,index
+    tools/patch-usbcfg-sentinel.py --in-image IMG --site S[,S...] --expect patched|original
 
 `--apply` is in place and refuses a file that is neither the known pristine image
 nor already patched, so it cannot be run twice or against the wrong binary.
+
+A comma-separated `--site` applies to several sites in one pass, which is how the
+paired `host,index` build is made: the two words are in the same record and
+neither alone is a working controller, so the experiment that asks what
+`ConfigUsb` does next has to change both. See the note on `counterfeit` above --
+the pair is a construction-time value no device would produce, and the run it
+makes is a probe of the shipped binary.
 
 `--in-image` is the gate that a build has to pass, and it deliberately does not
 look for the file at a fixed offset. The build runs `GenFw` over a `PE32` binary
@@ -176,6 +184,18 @@ PRISTINE_SHA256 = "6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e256
 # that follows it, a one-line description). The pair (original, following) must
 # occur exactly once in the shipped binary or the gate below is not a gate; that
 # count is asserted by `--check-seeds`.
+# What the two instruction words of each site read as, for the report only. The
+# pair convention above is "the rewritten instruction and whatever follows it",
+# so the second half is a store for two of the three sites and a load for the
+# third; naming it "the store that follows" for every site -- which this report
+# did while there was one site -- misdescribed `index` and printed a fixed
+# `orr w?, wzr, #0x10000` label over a word that is not that instruction.
+WORDS = {
+    "host":  ("orr  w10, wzr, #0x10000", "mov  w10, #0x1"),
+    "index": ("orr  w9,  wzr, #0x1",     "mov  w9,  wzr"),
+    "loop":  ("orr  w9,  wzr, #0x10000", "mov  w9,  #0x1"),
+}
+
 SITES = {
     "host": (
         0x39E4,
@@ -217,6 +237,30 @@ def _fv_inventory():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def parse_sites(text):
+    """A comma-separated `--site` value as a list of known site names.
+
+    Several sites in one invocation is not a convenience: `host` and `index` are
+    two words of the same record, neither of which alone leaves a controller the
+    publisher will initialise, so the run that asks what happens next has to write
+    both (and is a counterfeit construction-time record -- see the module
+    docstring). Order is kept as given, minus duplicates; the writes themselves go
+    in ascending offset order so that a log of two runs is comparable.
+    """
+    names = [s.strip() for s in text.split(",") if s.strip()]
+    if not names:
+        sys.exit("error: --site was given but names no site")
+    bad = [n for n in names if n not in SITES]
+    if bad:
+        sys.exit(f"error: unknown site(s) {', '.join(bad)} - "
+                 f"known: {', '.join(SITES)}")
+    out = []
+    for n in names:
+        if n not in out:
+            out.append(n)
+    return out
 
 
 def sha256(data):
@@ -288,39 +332,46 @@ def check_seeds(path):
     return 0 if not bad else 2
 
 
-def check_image(img, site, expect):
-    """Does the volume inside IMG carry the instruction pair we asked for?
+def check_image(img, sites, expect):
+    """Does the volume inside IMG carry the instruction pairs we asked for?
 
     Reads the payload out of the Android boot image with tools/fv-inventory.py, so
     the volume this examines is the one the build actually produced rather than
     the one it meant to produce.
+
+    Every site named is checked, and each has to be exactly one of the variant
+    asked for and none of the other. With several sites the checks are
+    independent -- the pairs are eight bytes each and distinct -- so a volume that
+    carries the `host` patch and not the `index` one fails here rather than
+    passing on the strength of the other.
     """
     inv = _fv_inventory()
-    po, pp = pairs(site)
     # unpack() walks boot image -> FD -> FVMAIN and prints two lines of its own
     # about the payload and the inner volume; they are left in, because this is
     # the same descent every other gate in this repository reads and a gate that
     # hid it would be the only one whose input is unstated.
     _out, _len, _offs, inner = inv.unpack(img)
-    n_orig = inner.count(po)
-    n_patch = inner.count(pp)
-    va, orig, patched, follows, note = SITES[site]
 
     print(f"{os.path.basename(img)}: FVMAIN {len(inner)} bytes")
-    print(f"  site \"{site}\" @ {va:#06x}: {note}")
-    print(f"  {'orr w?, wzr, #0x10000 ; the store that follows':<48}"
-          f" {n_orig}   (original)")
-    print(f"  {'mov w?, #0x1          ; the store that follows':<48}"
-          f" {n_patch}   (patched)")
+    for site in sites:
+        po, pp = pairs(site)
+        n_orig = inner.count(po)
+        n_patch = inner.count(pp)
+        va, orig, patched, follows, note = SITES[site]
 
-    want, other, want_n = (
-        ("patched", "original", n_patch) if expect == "patched"
-        else ("original", "patched", n_orig))
-    if want_n != 1 or (n_orig + n_patch) != 1:
-        sys.exit(f"error: expected exactly one {want} pair for site {site} in "
-                 f"the volume, found {n_patch} patched and {n_orig} original")
-    print(f"  ok: the volume carries the {want} pair of site \"{site}\" once "
-          f"and no {other} pair")
+        print(f'  site "{site}" @ {va:#06x}: {note}')
+        w_o, w_p = WORDS[site]
+        print(f"  {w_o + f' then {follows:#010x}':<48} {n_orig}   (original)")
+        print(f"  {w_p + f' then {follows:#010x}':<48} {n_patch}   (patched)")
+
+        want, other, want_n = (
+            ("patched", "original", n_patch) if expect == "patched"
+            else ("original", "patched", n_orig))
+        if want_n != 1 or (n_orig + n_patch) != 1:
+            sys.exit(f"error: expected exactly one {want} pair for site {site} in "
+                     f"the volume, found {n_patch} patched and {n_orig} original")
+        print(f'  ok: the volume carries the {want} pair of site "{site}" once '
+              f"and no {other} pair")
 
 
 def main():
@@ -332,16 +383,18 @@ def main():
     g.add_argument("--apply", metavar="FILE", help="patch in place")
     g.add_argument("--in-image", metavar="IMG",
                    help="check the volume inside a built payload (needs --site)")
-    ap.add_argument("--site", choices=tuple(SITES),
-                    help=f"which instruction (default {DEFAULT_SITE} for --check)")
+    ap.add_argument("--site", metavar="S[,S...]",
+                    help=f"which instruction(s), comma-separated (default "
+                         f"{DEFAULT_SITE} for --check); known: {', '.join(SITES)}")
     ap.add_argument("--expect", choices=("patched", "original"),
                     help="with --in-image: which pair the volume should carry")
     args = ap.parse_args()
+    sites = parse_sites(args.site) if args.site else None
 
     if args.in_image:
-        if not args.site or not args.expect:
+        if not sites or not args.expect:
             sys.exit("error: --in-image needs --site and --expect")
-        check_image(args.in_image, args.site, args.expect)
+        check_image(args.in_image, sites, args.expect)
         return
     if args.expect:
         sys.exit("error: --expect only means something with --in-image")
@@ -349,15 +402,15 @@ def main():
     if args.check_seeds:
         sys.exit(check_seeds(args.check_seeds))
 
-    if args.check and not args.site:
+    if args.check and not sites:
         return check_file(args.check, list(SITES))
     if args.check:
-        return check_file(args.check, [args.site])
+        return check_file(args.check, sites)
 
     # --apply: the site has to be named. Three sites with different meanings and a
     # default among them is how a build ends up patching the wrong instruction,
     # which is exactly what 4.184 did.
-    if not args.site:
+    if not sites:
         sys.exit(f"error: --apply needs --site {{{','.join(SITES)}}} - "
                  f"\"{DEFAULT_SITE}\" is the store the gate reads, \"index\" is the"
                  f" word ConfigUsb's guard reads in the same record, \"loop\" is"
@@ -366,27 +419,32 @@ def main():
     path = args.apply
     data = bytearray(open(path, "rb").read())
     dig = sha256(data)
-    va, orig, patched, _f, _n = SITES[args.site]
-    st = state(data, args.site)
-
-    if st not in ("pristine", "patched"):
-        sys.exit(f"error: {path}: {st}")
+    st = state(data, sites[0])
 
     # Both checks before the write: the site says this is the image the offsets
     # were read off, the digest says it is the build this project has measured.
-    if st == "patched":
-        sys.exit(f"error: {path} already carries the {args.site} patch "
-                 f"(sha256 {dig})")
+    if st not in ("pristine", "patched"):
+        sys.exit(f"error: {path}: {st}")
     if dig != PRISTINE_SHA256:
         sys.exit(f"error: {path} has sha256 {dig}, but these offsets were read off\n"
                  f"       {PRISTINE_SHA256}\n"
                  f"       and a different build is a different set of offsets")
 
-    struct.pack_into("<I", data, va, patched)
-    open(path, "wb").write(bytes(data))
-    print(f"{path}")
-    print(f"  site \"{args.site}\"  {va:#06x}: {orig:#010x} -> {patched:#010x}")
+    # Ascending offset, so a two-site run writes the record's words in the order
+    # they appear in the image and the log reads like the source does.
+    print(path)
+    for site in sorted(sites, key=lambda s: SITES[s][0]):
+        va, orig, patched, _f, _n = SITES[site]
+        st = state(data, site)
+        if st == "patched":
+            sys.exit(f"error: {path} already carries the {site} patch "
+                     f"(sha256 {dig})")
+        if st != "pristine":
+            sys.exit(f"error: {path}: site {site}: {st}")
+        struct.pack_into("<I", data, va, patched)
+        print(f"  site \"{site}\"  {va:#06x}: {orig:#010x} -> {patched:#010x}")
     print(f"  sha256  {dig}\n       -> {sha256(bytes(data))}")
+    open(path, "wb").write(bytes(data))
 
 
 if __name__ == "__main__":
