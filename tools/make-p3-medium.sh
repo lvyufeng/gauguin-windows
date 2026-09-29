@@ -48,6 +48,28 @@
 # and `libadsprpc.dll`), so flattening hands two of them the wrong catalog and
 # Windows rejects them as unsigned.
 #
+# `X:\Drivers` serves the P3 gate only. Those INFs are `drvload`ed into the
+# running WinPE, which is what lets Setup's disk enumeration find the UFS - and
+# nothing carries them past Setup into the image being installed. A Windows
+# installed from this medium therefore had *inbox drivers only*, and in
+# particular no display driver: `qcdx7280.inf` (`Class = Display`,
+# `ClassGUID {4d36e968-...}`, the Adreno miniport) is in the 112 CABs but would
+# have reached only the installer. The P4 gate is "the Windows desktop appears",
+# and it needs the display driver inside the *installed* OS, so the display
+# package is additionally placed where Setup will inject it into that image:
+# `$WinPEDriver$` at the media root, which Setup scans and adds to the offline
+# image. `$WinPEDriver$` is copied onto the stick by `make-win-stick.sh`'s
+# byte-for-byte `cp -r "$SRC/."`, so a tree carrying it needs nothing else.
+#
+# Only the display package goes there, and only its ARM64 members. The other 111
+# CABs describe hardware this port does not drive yet, and the full 747 MiB of
+# extracted packages would put the tree over the FAT32 stick's headroom for no
+# gain. Within `qcdx7280` the x86 and CHPE binaries are dropped (they are the
+# members a *x64* Windows needs - this install is ARM64, and the ARM32 members
+# are kept because `qcdx7280.inf`'s `QCDX.Files.NTarm_13` lists them for WOW) and
+# `qcdxwsaum.img` is dropped (a 153 MiB Windows-Subsystem-for-Android image, not
+# a driver). What remains is ~185 MiB and is the whole of what the INF installs.
+#
 # One further difference from `make-p3-stick.sh`, and it is a correctness one:
 # the injection targets the WIM's **boot index**, not image 1. This ISO's
 # `boot.wim` boot index is 2 - the `Microsoft Windows Setup` image - and
@@ -195,6 +217,43 @@ echo "   pkg: $infs INFs, $syss .sys, $cats .cat in $(find "$DRV" -mindepth 1 -m
 [ "$infs" -eq "$n_cabs" ] || die "only $infs of $n_cabs CABs hold an INF"
 
 # ---------------------------------------------------------------------------
+# Build the `$WinPEDriver$` display package. See the header: `X:\Drivers` serves
+# WinPE, this serves the image Setup writes to disk, and the P4 gate - a desktop
+# - needs the second. The pruned membership is exactly what `qcdx7280.inf`'s
+# `[QCDX.Files.NTarm_13]` and `QCDX_AcpiConfig` names for an ARM64 install, plus
+# the catalog the driver's signature is checked against.
+say "staging the display package for \$WinPEDriver\$"
+DISPLAY_SRC=$DRV/qcdx7280
+if [ -d "$DISPLAY_SRC" ]; then
+    WINPE_DRV=$TREE/'$WinPEDriver$'
+    rm -rf "$WINPE_DRV"; mkdir -p "$WINPE_DRV"
+    keep='QCDX.Files.NTarm_13'
+    for f in qcdx7280.inf qcdx7280.cat qcdxkm7280.sys \
+             qcdx11arm64xum7280.dll qcdx12arm64xum7280.dll \
+             qcdx11arm32um7280.dll qcdx12arm32um7280.dll \
+             qcdxarm64xcompiler7280.dll qcdxarm32compiler7280.dll \
+             qcdxsdarm64x.dll qcdxsdarm32.dll qchdcpumd7280.dll \
+             qcvidencarm64xmfth2647280.dll qcvidencarm64xmfthevc7280.dll \
+             qcvidencmfth2647280.dll qcvidencmfthevc7280.dll \
+             libqcdx12arm64wslum.so libqcdxarm64wslcompiler.so \
+             qcdxkmbase7280.bin qcdxkmbase7280_45.bin qcdxkmbase7280_55.bin \
+             qcdxkmbase7280_90.bin qcdxkmbase7280_5.bin qcdxkmbase7280_45_5.bin \
+             qcdxkmbase7280_55_5.bin qcdxkmbase7280_90_5.bin \
+             qcdxkmsuc7280.mbn qcvss7280.mbn ; do
+        [ -f "$DISPLAY_SRC/$f" ] || die "qcdx7280 is missing $f"
+        cp -p "$DISPLAY_SRC/$f" "$WINPE_DRV/$f"
+    done
+    # The x86/CHPE members and the WSA image are deliberately absent; assert it,
+    # so a later edit that reintroduces one is a failure rather than 200 MiB.
+    x=$(find "$WINPE_DRV" -type f \( -iname '*x86*' -o -iname '*chpe*' -o -iname '*.img' \) | wc -l)
+    [ "$x" -eq 0 ] || die "\$WinPEDriver\$ holds $x x86/CHPE/image member(s)"
+    n=$(find "$WINPE_DRV" -type f | wc -l)
+    echo "   \$WinPEDriver\$: $n file(s), $(du -sh "$WINPE_DRV" | cut -f1)"
+else
+    die "the display package is not in the staged cabs - the P4 gate needs it"
+fi
+
+# ---------------------------------------------------------------------------
 say "injecting into the boot image"
 # The tree is ours, so the WIM is edited in place.
 WIM=$TREE/sources/boot.wim
@@ -239,11 +298,17 @@ fail=
 [ -f "$TREE/efi/microsoft/boot/bcd" ] || fail="$fail BCD"
 [ -f "$TREE/sources/boot.wim" ]      || fail="$fail boot.wim"
 [ -f "$TREE/boot/boot.sdi" ]         || fail="$fail BOOT.SDI"
+# The P4 gate's driver. Not a `fail=` entry alone: it has to be the ARM64
+# package with its catalog, not merely a directory that exists.
+[ -f "$TREE/\$WinPEDriver\$/qcdx7280.inf" ] || fail="$fail \$WinPEDriver\$/qcdx7280.inf"
+[ -f "$TREE/\$WinPEDriver\$/qcdx7280.cat" ] || fail="$fail \$WinPEDriver\$/qcdx7280.cat"
+[ -f "$TREE/\$WinPEDriver\$/qcdxkm7280.sys" ] || fail="$fail \$WinPEDriver\$/qcdxkm7280.sys"
 [ -z "$fail" ] || die "verification failed, missing:$fail"
 arch_all_arm64 "$TREE/sources/install.wim" "install.wim (post)"
 arch_all_arm64 "$TREE/sources/boot.wim"    "boot.wim (post)"
 n=$(wimlib-imagex dir "$TREE/sources/boot.wim" "$BOOTIDX" --path='/Drivers' 2>/dev/null | wc -l)
 echo "   boot.wim image $BOOTIDX /Drivers $((n - 1)) entries; install.wim $(stat -c%s "$TREE/sources/install.wim") B"
+echo "   \$WinPEDriver\$ $(find "$TREE/\$WinPEDriver\$" -type f | wc -l) file(s), $(du -sh "$TREE/\$WinPEDriver\$" | cut -f1) - Setup injects these into the installed image"
 echo "   total $(du -sh "$TREE" | cut -f1) in $TREE"
 
 # The FAT32 stick, built by the tool that already exists for it rather than by a
@@ -268,4 +333,11 @@ injected startnet.cmd loads the 112 platform drivers into WinPE, then runs
 Setup. Whether the internal UFS appears in Setup's disk list is the P3 gate. If
 it does not, the finding is about this project's ACPI - the medium's own driver
 path is complete - and the thing to capture is what Setup's disk list showed.
+
+P4 continues on the same medium. \$WinPEDriver\$ carries the Adreno display
+package, which Setup injects into the installed image, so a Windows installed
+from this stick has a display driver - the desktop gate. Its driver's own
+preconditions are its files, not the table: qcdx7280.inf names no ACPI value
+(no _HRV, _DSM, _ROM or SKUV), and the ungated models line selects the base
+firmware blob qcdxkmbase7280.bin, which is why GPU0 omits _HRV.
 EOF
