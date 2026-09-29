@@ -658,6 +658,169 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        //
+        // Step 4.250 - the next four nodes in the camera chain, and the boundary
+        // this step is really about is the one between a *cluster* node and an
+        // *engine* node.
+        //
+        // 4.249 measured that lisa's `VFE0` is the whole CAMSS/IFE cluster and
+        // that gauguin splits what lisa merges. The split is not a re-addressing:
+        // gauguin carries four `qcom,vfe170_150` blocks against lisa's one IFE
+        // inside `VFE0`, and the corpus's id `QCOM0A25` is claimed by
+        // `qccamisp7280.inf:44` as "%ISP.DeviceDesc%=CameraISP_Device,
+        // ACPI\QCOM0A25" and shipped by that cabinet as `qccamisp7280.sys`, one
+        // instance, with `CAMERA_ICP_AAAAAA.elf` as its own firmware. Four nodes
+        // carrying that id would be four claims on one driver compiled for one
+        // engine, so this file writes **one** `VFE0` and not four - the same
+        // reasoning that keeps `Device (MMU0)` singular where lisa has two
+        // SMMUs. A guess cannot exceed the driver's own singleton, while a
+        // re-addressing step can still split the node later if the driver turns
+        // out to be multi-instance. `qcdx7280.inf`'s `QCOM0A36` variants, which
+        // key on `&REV_`, are the counter-example and the reason this had to be
+        // argued rather than assumed.
+        //
+        // The address is gauguin's own `qcom,vfe0@acaf000` - `reg` 0x0ACAF000 +
+        // 0x4000, DT SPI 465 = 0x1F1, `interrupt-names = "ife0"` - and not
+        // lisa's 0x0AC00000 + 0x20000, which is `qcom,cam-a5`'s region here.
+        // Then the three CSIDs the corpus names, each `qcom,csid170_200` on this
+        // board, one window each and one GSI each:
+        //
+        //   CSID0  qcom,csid0@acb3000   0x0ACB3000 + 0x1000  DT 464 = 0x1D0
+        //   CSID1  qcom,csid1@acba000   0x0ACBA000 + 0x1000  DT 466 = 0x1D2
+        //   CSID2  qcom,csid2@acc1000   0x0ACC1000 + 0x1000  DT 717 = 0x2CD
+        //
+        // writing `_HID QCOM0AA2` on each, lisa's `CCID`. That id is the
+        // necessarily-arbitrary half of the step and is written with its reason
+        // in the open rather than as fact: 4.249 left "what `_UID`s the extra
+        // CSIDs take" undecided, and it is still undecided - the three write
+        // 0x21, 0x22 and 0x23, all three above the corpus's highest camera
+        // `_UID` (0x1E) and none of them a number this file or the corpus uses
+        // for anything else. Taking lisa's own 0x15 for the first was the
+        // obvious move and is wrong: 0x15 is lisa's `CAMS`, a different node.
+        // Consecutive values in a range nobody has claimed say "this is where
+        // the extras went" and do not borrow another node's identity to say it.
+        //
+        // The three are written with no `_STA`, which is lisa's own shape for
+        // `CCID` and is a decision rather than a copy: `qcccidbridge7280.sys` is
+        // a KMDF *bus* driver (Class System, `KmdfService = CCIDBridge`), so a
+        // node carrying this id enumerates children that this file does not
+        // describe. `_STA` returning 0x0F would report a functioning bridge with
+        // an empty bus; omitting `_STA` makes the device present and functional,
+        // which is what the OS defaults to in the absence of the method, and
+        // that is honest to what the node actually is.
+        //
+        // The two lite blocks are deliberately **not** written. `qcom,vfe-lite170`
+        // at 0x0ACC4000 and `qcom,csid-lite170` at 0x0ACC8000 are live `ok`
+        // blocks with their own interrupts (472 and 473 = 0x1F8 and 0x1F9), and
+        // four CSID-capable blocks against one id is the same one-instance
+        // problem as four VFEs against one `QCOM0A25`: the lite engine is a
+        // separate driver instance if it is anything, and there is no id for it
+        // in the set. Recorded as owed, not as skipped.
+        //
+        // `_DEP` is `CAMP` in every one of the four, which is the one dependency
+        // lisa's `VFE0` and `MPCS` both name that this file has. lisa's `VFE0`
+        // also names MMU0 and PEP0; MMU0 exists here and PEP0 exists here, but
+        // neither is a dependency this board's node demonstrably has, and the
+        // `_DEP` is advisory start ordering - so the chain is kept minimal and
+        // written only where the corpus is unambiguous about it.
+        //
+        Device (VFE0)
+        {
+            Name (_HID, "QCOM0A25")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x16)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CAMP
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0ACAF000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001F1,
+                    }
+                })
+                Return (RBUF) /* \_SB_.VFE0._CRS.RBUF */
+            }
+        }
+
+        Device (CSID)
+        {
+            Name (_HID, "QCOM0AA2")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x21)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CAMP
+            })
+            Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
+            {
+                Memory32Fixed (ReadWrite,
+                    0x0ACB3000,         // Address Base
+                    0x00001000,         // Address Length
+                    )
+                Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                {
+                    0x000001D0,
+                }
+            })
+        }
+
+        Device (CSI1)
+        {
+            Name (_HID, "QCOM0AA2")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x22)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CAMP
+            })
+            Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
+            {
+                Memory32Fixed (ReadWrite,
+                    0x0ACBA000,         // Address Base
+                    0x00001000,         // Address Length
+                    )
+                Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                {
+                    0x000001D2,
+                }
+            })
+        }
+
+        Device (CSI2)
+        {
+            Name (_HID, "QCOM0AA2")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x23)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CAMP
+            })
+            Name (_CRS, ResourceTemplate ()  // _CRS: Current Resource Settings
+            {
+                Memory32Fixed (ReadWrite,
+                    0x0ACC1000,         // Address Base
+                    0x00001000,         // Address Length
+                    )
+                Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                {
+                    0x000002CD,
+                }
+            })
+        }
+
         Name (DPP0, Buffer (One)
         {
              0x00                                             // .
