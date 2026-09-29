@@ -198,6 +198,179 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        //
+        // The two SDCC controllers, and the first nodes in this file whose id
+        // does not come from the platform's own driver set. That is a departure
+        // and it is written down here rather than in the changelog, because the
+        // reason is a property of the block rather than of this step.
+        //
+        // What the two are is measured from this device's own tree, and the two
+        // nodes are not interchangeable. sdhci@7c4000 calls itself sdhc1 in its
+        // qcom,msm-bus,name, carries qcom,nonremovable, runs an 8-bit bus at
+        // HS400/HS200/DDR_1p8v and has three register windows - hc_mem at
+        // 0x7C4000, cqhci_mem at 0x7C5000 and cqhci_ice at 0x7C8000 - the last
+        // of which is an inline crypto engine. Non-removable, 8-bit, HS400 and
+        // CQHCI-with-ICE is the internal eMMC shape and nothing else has it.
+        // sdhci@8804000 calls itself sdhc2, has a cd-gpios on TLMM pin 94
+        // (phandle 193 is pinctrl@f100000), runs a 4-bit bus at
+        // SDR12/SDR25/SDR50/DDR50/SDR104 and has one window, hc_mem at
+        // 0x8804000. A card-detect pin and SDR104 is the removable slot.
+        //
+        // The unit's own storage is the UFS: chosen/bootargs carries
+        // androidboot.bootdevice=1d84000.ufshc and androidboot.boot_devices
+        // naming the same node. So sdhc1 is not the boot device, and on a board
+        // whose boot storage is UFS an always-present eMMC controller is a
+        // part that may not be fitted at all. That decides SDC1's _STA below.
+        //
+        // The ids are measured twice over and both readings point the same way.
+        // renoir - the corpus's only same-generation Xiaomi tablet, and the
+        // board this file's UFS0 was already patterned on - declares its own
+        // SDCC pair as Device (SDC1) with _HID "QCOM24BF" at Memory32Fixed
+        // 0x007C4000 and Device (SDC2) with _HID "QCOM2466" at 0x08804000, and
+        // SDC1 carries a Device (EMMC) child while SDC2 carries the card-detect
+        // GpioInt on GIO0. Both base addresses are byte-identical to gauguin's
+        // 0x7C4000 and 0x8804000, and the remo/removable split matches the
+        // qcom,nonremovable and cd-gpios properties one for one. So the pairing
+        // SDC1=QCOM24BF and SDC2=QCOM2466 is read off a same-family table at the
+        // same addresses rather than guessed from the naming pattern, and it is
+        // a different thing from the family-byte derivation this header
+        // describes: the family byte patterns the PMIC and TLMM ids, and the
+        // storage class does not use it - 8974's QCOM2465, 8994's QCOM24BF and
+        // this SoC's QCOM24A5 for UFS are all in the same 24xx class.
+        //
+        // The driver is the inbox one, and that is why the check for these two
+        // ids was run against the OS image's driver store and not against
+        // inf-7280. The Kodiak set does not contain a single document that
+        // mentions SD at all: all 112 of its .inf files were searched for
+        // "sdcc", "sdhci" and "secure digital" in any encoding and none
+        // matches, and there is no qcsdcc7280.inf or qcsdcc0x7280.inf in it.
+        // What claims QCOM2466 and QCOM24BF is sdbus.inf in the install image's
+        // driver store, at
+        //
+        //   %ACPI\QCOM2466.DeviceDesc%=SDHostQualcomm8974Std, ACPI\QCOM2466
+        //   %ACPI\QCOM24BF.DeviceDesc%=SDHostQualcomm8994Std, ACPI\QCOM24BF
+        //
+        // with all three of its SDCC ids (QCOM2465, QCOM2466, QCOM24BF) also in
+        // its ExcludeFromSelect list. ExcludeFromSelect suppresses the id in the
+        // Update Driver list; it does not stop PnP from matching a models line,
+        // so these bind at first boot with no vendor package. tools/acpi-hid-census.py
+        // --drivers ~/work/woa-ref/infs-arm64/pro --bind QCOM24BF QCOM2466
+        // reports both claimed by sdbus.inf, where --drivers ~/work/woa-ref/inf-7280
+        // reports both unclaimed - and QCOM0A70, which a previous step recorded
+        // as the second SDCC id, is the DPL bridge: qcdplbridge7280.inf:36 is
+        // "%DPLBRG.DeviceDesc%=DPLBRG_Device, ACPI\QCOM0A70" and both lisa and
+        // a52sxq name that device DPLB. QCOM0A6F is claimed by nothing in any
+        // corpus on this host.
+        //
+        // This is not the file's first inbox id: UFS0 above is QCOM24A5, which
+        // the Kodiak set also does not claim and storufs.inf:82 does, and 4.240
+        // recorded it as such. The rule the header states - check the id against
+        // a driver set before writing the node - is met here by checking the set
+        // that will actually be present at runtime.
+        //
+        // The GSI convention is measured rather than assumed, from the four
+        // nodes already in this file: ACPI GSI = the device tree's SPI number +
+        // 32. UFS0's DT interrupt is 265 and its _CRS says 0x129 = 297; I2C8 is
+        // 354 -> 0x182 = 386; I2C9 is 355 -> 0x183 = 387; IC11 is 357 -> 0x185
+        // = 389. So SDC2's hc_irq at DT 204 is 236 = 0xEC, and SDC1's at DT 641
+        // is 673 = 0x2A1. Both devices declare a second interrupt, pwr_irq (DT
+        // 222 -> 254 and DT 644 -> 676), which is not declared here for the same
+        // reason it is not declared on UFS0 or on renoir's pair: the family's
+        // _CRS gives the data interrupt alone.
+        //
+        // SDC1's _STA returns Zero, and that is a decision rather than an
+        // omission. renoir does not decide its pair the same way - its SDC1
+        // returns 0x0F only when STOR == 0x02 - so presence there is a board
+        // variable that is set for the variant that has the eMMC. gauguin's
+        // tables carry no such variable, and this port cannot invent one: on a
+        // UFS unit an eMMC controller reporting present is exactly the
+        // device-that-does-not-start the header warns about, so the node is
+        // written inert and the one byte that turns it on is obvious to whoever
+        // finds a unit with the eMMC fitted. renoir itself does this to its own
+        // SDC2, whose _STA returns Zero unconditionally.
+        //
+        // Withheld, and this one is a diagnostic budget rather than a hardware
+        // question: both of renoir's nodes also carry an empty _DIS, which
+        // pairs with an _SRS their generator does not emit, and iasl answers
+        // each one with "Warning 3141 - Missing dependency (Device has a _DIS,
+        // missing a _SRS, required)". Adding the pair here would take this file
+        // from 26 warnings to 28 for two methods Windows does not need - _DIS
+        // is optional and the device can be stopped through PnP without it - so
+        // they are left out and the file's diagnostic profile is unchanged:
+        // the same 26 warnings and 93 remarks as before this step.
+        //
+        // Withheld: renoir's SDC2 also carries a second GpioIo on GIO0 pin 0x5C,
+        // which is a card-power pin. gauguin's sdhci@8804000 declares cd-gpios
+        // and nothing else, so no power pin is measured and none is invented;
+        // the pinctrl-0/pinctrl-1 states the node names are not pins, they are
+        // the TLMM's own register values, which ACPI does not carry.
+        //
+        Device (SDC2)
+        {
+            Name (_HID, "QCOM2466")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.GIO0
+            })
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x08804000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000EC,
+                    }
+                    GpioInt (Edge, ActiveBoth, SharedAndWake, PullUp, 0x1388,
+                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x005E
+                        }
+                })
+                Return (RBUF) /* \_SB_.SDC2._CRS.RBUF */
+            }
+        }
+
+        Device (SDC1)
+        {
+            Name (_HID, "QCOM24BF")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (Zero)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x007C4000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000002A1,
+                    }
+                })
+                Return (RBUF) /* \_SB_.SDC1._CRS.RBUF */
+            }
+        }
+
         Name (DPP0, Buffer (One)
         {
              0x00                                             // .

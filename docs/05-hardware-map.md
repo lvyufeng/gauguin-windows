@@ -66,6 +66,30 @@ ufsphy_mem@1d87000 compatible qcom,ufs-phy-qmp-v3     status ok
 
 Mainline equivalents: `qcom,sm6350-ufshc` and `qcom,sm6350-qmp-ufs-phy`.
 
+This is the boot device: `chosen/bootargs` carries
+`androidboot.bootdevice=1d84000.ufshc`.
+
+### The two SDCC controllers
+
+Both are `status ok` and both are wired to real hardware, but neither is the
+boot path:
+
+| | `sdhci@7c4000` | `sdhci@8804000` |
+|---|---|---|
+| DT name | `sdhc1` | `sdhc2` |
+| windows | `hc_mem 0x7C4000`, `cqhci_mem 0x7C5000`, `cqhci_ice 0x7C8000` | `hc_mem 0x8804000` |
+| bus | 8-bit, HS400/HS200/DDR_1p8v | 4-bit, SDR12…SDR104 |
+| removable | no (`qcom,nonremovable`) | **yes** (`cd-gpios = <193 94 0>`, TLMM pin 94) |
+| what it is | internal eMMC controller, with inline crypto | the microSD slot |
+| `hc_irq` / `pwr_irq` | DT SPI 641 / 644 | DT SPI 204 / 222 |
+
+The pairing is fixed by the same-generation reference: `renoir`'s DSDT declares
+`Device (SDC1)` with `_HID QCOM24BF` at `0x007C4000` and `Device (SDC2)` with
+`_HID QCOM2466` at `0x08804000` — the same two addresses, `SDC1` carrying a
+`Device (EMMC)` child and `SDC2` the card-detect `GpioInt`. Neither id is in the
+Kodiak driver set at all; both are claimed by the inbox `sdbus.inf` in the
+install image's driver store.
+
 ## Display
 
 The panel is an **IPS LCD**, not AMOLED — confirmed twice over: the phone's XBL
