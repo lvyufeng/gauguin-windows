@@ -61,14 +61,25 @@
 # image. `$WinPEDriver$` is copied onto the stick by `make-win-stick.sh`'s
 # byte-for-byte `cp -r "$SRC/."`, so a tree carrying it needs nothing else.
 #
-# Only the display package goes there, and only its ARM64 members. The other 111
-# CABs describe hardware this port does not drive yet, and the full 747 MiB of
-# extracted packages would put the tree over the FAT32 stick's headroom for no
-# gain. Within `qcdx7280` the x86 and CHPE binaries are dropped (they are the
-# members a *x64* Windows needs - this install is ARM64, and the ARM32 members
-# are kept because `qcdx7280.inf`'s `QCDX.Files.NTarm_13` lists them for WOW) and
-# `qcdxwsaum.img` is dropped (a 153 MiB Windows-Subsystem-for-Android image, not
-# a driver). What remains is ~185 MiB and is the whole of what the INF installs.
+# What goes there is the display package plus every other package the id census
+# says claims an id this table presents: `tools/acpi-hid-census.py --drivers
+# <staged> --bind --asl tools/acpi/gauguin.asl`, 58 INFs when the whole BSP is
+# staged. That set is the answer to "which packages does the installed OS need"
+# - PEP, SPMI, PMIC, SCM, GLINK, SMMU and the rest, not only the GPU - and it is
+# read from the table rather than guessed. Packages for hardware that is absent
+# are included and bind nothing, because a driver in the store only loads for a
+# device presenting its id; excluding an enabler this port happens to need is
+# the failure mode the space is spent to avoid.
+#
+# The display package is copied member by member, because only it is on the
+# critical path and its membership is `qcdx7280.inf`'s own file list. The other
+# 57 are copied as whole directories with only the x86/CHPE members and any
+# `.img` removed (the members a *x64* Windows would use - this install is ARM64,
+# and ARM32 members are kept because several of these INFs list them for WOW);
+# whole, because a family driver's catalog covers its whole package and dropping
+# a member an INF names makes the install fail as `unsigned`, which is worse
+# than the ~110 MiB the x86 members weigh. 434 MiB of 522 files, against the
+# tree's ~1.3 GiB of free FAT32 headroom.
 #
 # One further difference from `make-p3-stick.sh`, and it is a correctness one:
 # the injection targets the WIM's **boot index**, not image 1. This ISO's
@@ -243,10 +254,52 @@ if [ -d "$DISPLAY_SRC" ]; then
         [ -f "$DISPLAY_SRC/$f" ] || die "qcdx7280 is missing $f"
         cp -p "$DISPLAY_SRC/$f" "$WINPE_DRV/$f"
     done
+
+    # Every other package a census says claims an id gauguin's table presents.
+    # The display package above is copied exactly - it is the P4 gate and its
+    # catalog covers every member - but these are taken as WHOLE directories
+    # with only the members a x64 Windows would use removed. Whole, because a
+    # family driver's catalog covers its whole package and dropping a member an
+    # INF names makes the install fail as unsigned, which is worse than 200 MiB.
+    # The census is the selection: an id this table presents and a driver in
+    # this set claims. Packages for hardware that is absent are included and
+    # load nothing - a driver in the store only binds a device presenting its
+    # id - and excluding an enabler this port happens to need is the failure
+    # mode worth spending the space to avoid.
+    if command -v python3 >/dev/null && [ -f "$REPO/tools/acpi-hid-census.py" ]; then
+        mapfile -t CLAIMED < <(python3 "$REPO/tools/acpi-hid-census.py" \
+            --drivers "$DRV" --bind --asl "$REPO/tools/acpi/gauguin.asl" 2>/dev/null \
+            | sed -n 's/.*claimed by //p' | sed 's/ +[0-9]*$//' | tr ',' '\n' \
+            | sed 's/^ *//; s/ *$//' | grep -i '\.inf$' | sort -u)
+        echo "   census: ${#CLAIMED[@]} INF(s) claim an id this table presents"
+        add=0
+        # The census prints `dir/inf`, and `$DRV` was built one directory per
+        # CAB, so the directory is the path minus the file - no search needed.
+        for rel in "${CLAIMED[@]}"; do
+            d=${rel%/*}
+            [ "$d" = "$rel" ] && d=$rel      # a bare name: the dir is itself
+            [ "$d" = "qcdx7280" ] && continue  # copied exactly above
+            [ -d "$DRV/$d" ] || continue
+            [ -d "$WINPE_DRV/$d" ] && continue # already added by another id
+            cp -a "$DRV/$d" "$WINPE_DRV/"
+            find "$WINPE_DRV/$d" -type f \
+                \( -iname '*x86*' -o -iname '*chpe*' -o -iname '*.img' \) -delete
+            add=$((add + 1))
+        done
+        echo "   added $add further package(s) from the census"
+    fi
+
     # The x86/CHPE members and the WSA image are deliberately absent; assert it,
     # so a later edit that reintroduces one is a failure rather than 200 MiB.
     x=$(find "$WINPE_DRV" -type f \( -iname '*x86*' -o -iname '*chpe*' -o -iname '*.img' \) | wc -l)
     [ "$x" -eq 0 ] || die "\$WinPEDriver\$ holds $x x86/CHPE/image member(s)"
+    # Every directory must still hold the INF that named it, or the pruning
+    # removed something an install needs.
+    for d in "$WINPE_DRV"/*/; do
+        [ -d "$d" ] || continue
+        find "$d" -maxdepth 1 -iname '*.inf' -print -quit | grep -q . \
+            || die "$(basename "$d") lost its INF"
+    done
     n=$(find "$WINPE_DRV" -type f | wc -l)
     echo "   \$WinPEDriver\$: $n file(s), $(du -sh "$WINPE_DRV" | cut -f1)"
 else
@@ -334,9 +387,11 @@ Setup. Whether the internal UFS appears in Setup's disk list is the P3 gate. If
 it does not, the finding is about this project's ACPI - the medium's own driver
 path is complete - and the thing to capture is what Setup's disk list showed.
 
-P4 continues on the same medium. \$WinPEDriver\$ carries the Adreno display
-package, which Setup injects into the installed image, so a Windows installed
-from this stick has a display driver - the desktop gate. Its driver's own
+P4 continues on the same medium. \$WinPEDriver\$ carries the packages the id
+census says claim an id this table presents - the Adreno display driver and 57
+others (PEP, SPMI, PMIC, SCM, GLINK, SMMU, ...) - which Setup injects into the
+installed image, so a Windows installed from this stick has a driver for each
+block the table describes, not for the GPU alone. The display driver's own
 preconditions are its files, not the table: qcdx7280.inf names no ACPI value
 (no _HRV, _DSM, _ROM or SKUV), and the ungated models line selects the base
 firmware blob qcdxkmbase7280.bin, which is why GPU0 omits _HRV.
