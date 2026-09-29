@@ -441,18 +441,70 @@ def interrupts_by_brace_depth(text):
     return counts
 
 
+def device_spans(text):
+    """[(name, start, end)] for every `Device (X)`, at ANY nesting depth.
+
+    Brace- and comment-aware, and that is the point: the previous extractor
+    anchored on `^ {8}Device`, so it read top-level devices only. URS0's two
+    children carry eight interrupts between them - `USB0` six, `UFN0` two - and
+    every one is claimed by the vendor tree, yet no gate ever saw them because
+    they were never extracted at all (Step 4.284). The span is the whole
+    `Device (...) { ... }` block by brace matching, so a child declared before
+    its parent's `_CRS` cannot cut the parent's body away: that defect is
+    `own_scope()`'s, applied from the other side.
+
+    Validated against `interrupts_by_brace_depth()`'s independent ground truth -
+    163 `Interrupt` entries across 31 devices - with zero mismatches over all 89
+    devices on this table. That check is the reason this could be changed at
+    all: Step 4.284 tried an all-device sweep and mis-attributed `USB0` and
+    reported `GPU0` as three GSIs against a truth of two, so it was reverted
+    rather than committed.
+    """
+    spans, stack, pending = [], [], None
+    i, n = 0, len(text)
+    D = re.compile(r"Device \((\w+)\)")
+    while i < n:
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        m = D.match(text, i)
+        if m and (i == 0 or text[i - 1] in " \t\n{"):
+            pending = (m.group(1), i)
+            i = m.end()
+            continue
+        c = text[i]
+        if c == "{":
+            stack.append(pending)
+            pending = None
+        elif c == "}" and stack:
+            top = stack.pop()
+            if top is not None:
+                spans.append((top[0], top[1], i + 1))
+        i += 1
+    return spans
+
+
 def asl_devices(text):
-    """{name: (block, own-body)} for `Device (X)` at 8 spaces.
+    """{name: (block, own-body)} for every `Device (X)`, any depth.
 
     `own-body` is the block minus nested `Device` subtrees, so a child's
-    interrupts are never read as the parent's.
+    interrupts are never read as the parent's. A repeated name gets a `#n`
+    suffix so a second `RHUB` or `PRT1` cannot overwrite the first - a silent
+    overwrite is the same failure class as the dropped report this file already
+    carries scars from.
     """
-    ms = list(re.finditer(r"^ {8}Device \((\w+)\)", text, re.M))
-    out = {}
-    for i, m in enumerate(ms):
-        end = ms[i + 1].start() if i + 1 < len(ms) else len(text)
-        block = text[m.start():end]
-        out[m.group(1)] = (block, own_scope(block))
+    out, seen = {}, {}
+    for name, start, end in device_spans(text):
+        block = text[start:end]
+        k = seen.get(name, 0) + 1
+        seen[name] = k
+        key = name if k == 1 else "%s#%d" % (name, k)
+        out[key] = (block, own_scope(block))
     return out
 
 
@@ -770,13 +822,30 @@ def main():
     # indistinguishable from a device with no interrupts, because `named` and
     # `with_gsis` are both built after the drop.
     truth = interrupts_by_brace_depth(text)
-    hidden = []
+    hidden, misattributed = [], []
     for name, (_block, body) in asl_devices(text).items():
         if truth.get(name, 0) and not asl_resources(asl_crs(body))[1]:
             hidden.append(name)
 
+    # Soundness of the extractor itself, against the independent detector. This
+    # is the gate Step 4.284 lacked: an all-depth extractor can mis-attribute a
+    # child's interrupts to its parent, and a mismatch in either direction means
+    # a body was cut wrong. The previous attempt pulled `USB0` (six interrupts,
+    # no `_CRS`) and reported `GPU0` as three GSIs against a truth of two, and it
+    # was caught only by hand. The counts must agree device by device, and no
+    # device the detector names may be missing from the extractor's set.
+    for name, (_block, body) in asl_devices(text).items():
+        got = len(re.findall(r"Interrupt \(", body))
+        want = truth.get(name, 0)
+        if got != want:
+            misattributed.append((name, got, want))
+    seen = {n for n in asl_devices(text) if n in truth}
+    for name, cnt in truth.items():
+        if name not in seen:
+            misattributed.append((name, 0, cnt))
+
     dropped = [n for n in with_gsis if n not in named]
-    if dropped or hidden:
+    if dropped or hidden or misattributed:
         if dropped:
             print("%d device(s) with interrupts that NO report above names:" % len(dropped))
             for n in dropped:
@@ -788,16 +857,23 @@ def main():
             for n in hidden:
                 print("  %-6s `_CRS` cut away by the body extractor, so the "
                       "device was dropped before any report" % n)
-        print("  These are UNVERIFIED and unreported at once. A device here has "
-              "passed every gate by being invisible to all of them.")
+        if misattributed:
+            print("%d device(s) whose extracted interrupt count disagrees with "
+                  "the brace-depth detector:" % len(misattributed))
+            for n, got, want in misattributed:
+                print("  %-6s extractor %d, brace-depth truth %d" % (n, got, want))
+            print("  The extractor is unsound, so every count above is suspect - "
+                  "not just this device's. Fix the extractor, not the count.")
+        print("  The rest are UNVERIFIED and unreported at once. A device here "
+              "has passed every gate by being invisible to all of them.")
         print()
 
-    ok = (not slips and not dropped and not hidden
+    ok = (not slips and not dropped and not hidden and not misattributed
           and (not args.strict or not unaccounted))
     print("%d device(s) cross-checked; %d slip(s), %d unaccounted%s"
           % (checked, len(slips), len(unaccounted),
-             "" if not (dropped or hidden)
-             else ", %d hidden" % (len(dropped) + len(hidden))))
+             "" if not (dropped or hidden or misattributed)
+             else ", %d hidden" % (len(dropped) + len(hidden) + len(misattributed))))
     print("PASS" if ok else "FAIL")
     return 0 if ok else 2
 
