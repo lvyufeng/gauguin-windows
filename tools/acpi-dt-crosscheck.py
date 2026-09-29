@@ -533,6 +533,7 @@ def main():
     print()
 
     slips, unaccounted, checked, unmapped, triggers = [], [], 0, [], []
+    unamatchable = []  # interrupts no window can reach, whatever the base
     for name, (block, body) in sorted(asl_devices(text).items()):
         crs = asl_crs(body)
         windows, gsis, typed = asl_resources(crs)
@@ -560,6 +561,17 @@ def main():
                 triggers.append((name, g, trig, sorted(seen)))
 
         if not windows:
+            # Not always a harmless default. A device with NO window has no
+            # base to match on, so its interrupts are checked by nothing - and
+            # if none of them appears in any tree either, then not one line of
+            # its `_CRS` has been verified. GPU0 was in exactly that state
+            # through Steps 4.277-4.280: no slip, no unaccounted warning, and
+            # absent from both report lists, so its two GSIs (0x14C, 0x73)
+            # looked verified because they were never mentioned.
+            unmatchable = [g for g in gsis
+                           if not any(t.claims(g) for t in trees)]
+            if unmatchable:
+                unamatchable.append((name, unmatchable))
             unmapped.append((name, "no Memory32Fixed to match a node by"))
             continue
         if not best_nodes(trees, windows[0])[0]:
@@ -598,6 +610,16 @@ def main():
         print("%d device(s) with interrupts and no matchable window:" % len(unmapped))
         for name, why in unmapped:
             print("  %-6s %s" % (name, why))
+        print()
+    if unamatchable:
+        print("%d device(s) whose interrupts no window can reach AND no tree "
+              "claims:" % len(unamatchable))
+        for name, gs in unamatchable:
+            print("  %-6s %s" % (name, " ".join("0x%X" % g for g in gs)))
+        print("  These are UNVERIFIED, not wrong: the device has no window to "
+              "match on, so nothing anchors it, and the tree does not declare "
+              "the numbers either. A line here has passed every gate by being "
+              "invisible to all of them.")
         print()
     if unaccounted:
         print("%d GSI(s) not in their matched node's own set:" % len(unaccounted))
