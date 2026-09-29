@@ -213,7 +213,7 @@ class Tree:
             if any(c.startswith("arm,gic") for c in compat):
                 self.gic_phandle = one(n, "phandle", one(n, "linux,phandle"))
                 self.gic_cells = one(n, "#interrupt-cells", 3)
-            if "qcom,pdc" in compat:
+            if any("pdc" in c for c in compat):
                 self.pdc_phandle = one(n, "phandle", one(n, "linux,phandle"))
                 self.pdc_cells = one(n, "#interrupt-cells", 2)
         if self.pdc_phandle is not None:

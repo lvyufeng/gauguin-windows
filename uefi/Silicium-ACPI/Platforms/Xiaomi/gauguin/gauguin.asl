@@ -531,6 +531,79 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // ------------------------------------------------------------------
+        // ADSP - the audio/sensor DSP. This is the root of the whole
+        // SLIMbus/Bluetooth/audio tree, and the tree is NOT under it in ACPI.
+        //
+        // 4.255 measured that the chain is enumerated by the DSP rather than by
+        // ACPI: `qcslimbus7280.inf` binds `ADSP\QCOM0A0F`, not an `ACPI\` id.
+        // This node is therefore the *parent* that publisher needs, and the
+        // reason nothing below it is written yet is that this file has no
+        // `CHLD` publisher. Lisa's `ADCM` carries one -
+        // `Method (CHLD) { Return (Package () { "ADCM\\QCOM0A23" }) }`, and
+        // `AUDD` another publishing `AUDD\QCOM0A34`/`AUDD\QCOM0A29` - and lisa's
+        // whole DSDT contains **zero** occurrences of `QCOM0A0F`, so even the
+        // reference board resolves the SLIMbus id through a mechanism that is
+        // not visible as a device. Writing `CHLD` here would be writing an
+        // unexercised idiom for a subsystem the gate does not touch; the parent
+        // is written and the publishers are owed.
+        //
+        // The id is `qccsubsys7280.inf`'s plain line
+        // (`%ADSP.DeviceDesc%=SUBSYS_Device, ACPI\QCOM0A1B`, Class SYSTEM), so
+        // it binds whatever _SUB this board has; the `_ext` sibling's five
+        // `&SUBSYS_KODIAK` lines are the other half of that pair and are not
+        // what binds here. Lisa gives this node no `_UID` and no `_STA` and this
+        // file follows neither - every other device here carries both, and an
+        // absent `_STA` on a Windows-enumerated device is the thing 4.251
+        // checked for. The `_UID` is Zero because nothing in the corpus gives
+        // this node one and it is the only ADSP.
+        //
+        // The interrupt is the tree's: `qcom,lpass@3000000`'s
+        // `interrupts-extended` first entry is `<&pdc 6 4>`, and the PDC's
+        // `qcom,pdc-ranges` maps pin 6 to SPI 486, so the GSI is `0x206` and it
+        // is **level-high** - the tree's own cell, not a guess, and also lisa's
+        // exact value. `qcom,lpass@3000000` carries `reg = <0x3000000 0x100>`,
+        // which is the firmware-loading register block and not a resource this
+        // driver claims, so the node is interrupt-only, as `IPCC` and `PM01`
+        // already are.
+        //
+        // The `_DEP` is lisa's list minus the three names this file does not
+        // have (`SSDD`, `ARPC`, `PDSR`), which is the same trimming CAMP got: a
+        // `_DEP` naming a device that does not exist is a namespace violation.
+        // `PILC`, `GLNK`, `IPC0`, `RPEN` and `TFTP` are all here; `PEP0` is.
+        //
+        Device (ADSP)
+        {
+            Name (_HID, "QCOM0A1B")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x06)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.PILC,
+                \_SB.GLNK,
+                \_SB.IPC0,
+                \_SB.RPEN,
+                \_SB.TFTP
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000206,         // PDC pin 6, type 4: GSI 0x206
+                    }
+                })
+                Return (RBUF) /* \_SB_.ADSP._CRS.RBUF */
+            }
+        }
+
         //
         // The camera platform, and the first node of the camera chain. 4.246
         // measured the chain and scoped this node; this step writes it.
