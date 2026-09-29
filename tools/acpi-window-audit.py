@@ -131,6 +131,33 @@ def corpus_windows(paths):
     return counts
 
 
+def mainline_windows(paths):
+    """Base -> lengths from MAINLINE device-tree SOURCE (.dts/.dtsi).
+
+    A third reference, independent of both the vendor tree (decompiled from
+    the phone's DTB) and the Qualcomm ACPI corpus.  `reg` here is written with
+    an address-cells/size-cells pair, so `<0 0x03d40000 0 0x10000>` is four
+    cells rather than two; both forms are read.
+    """
+    out = collections.defaultdict(set)
+    for p in paths:
+        text = open(p, encoding="utf-8", errors="replace").read()
+        for m in re.finditer(r"reg\s*=\s*((?:<[^>]*>\s*,?\s*)+)", text):
+            for g in re.findall(r"<([^>]*)>", m.group(1)):
+                try:
+                    v = [int(x, 16) for x in g.split()]
+                except ValueError:
+                    continue
+                if len(v) >= 4 and v[0] == 0 and v[2] == 0:
+                    for i in range(0, len(v) - 3, 4):
+                        if v[i] == 0 and v[i + 2] == 0:
+                            out[v[i + 1]].add(v[i + 3])
+                elif len(v) >= 2:
+                    for i in range(0, len(v) - 1, 2):
+                        out[v[i]].add(v[i + 1])
+    return out
+
+
 def disassemble(aml_paths):
     """Return .dsl paths for the corpus, disassembling into a temp dir."""
     tmp = tempfile.mkdtemp(prefix="win-audit-")
@@ -159,10 +186,20 @@ def main(argv=None) -> int:
     ap.add_argument("--min-boards", type=int, default=3,
                     help="corpus boards that must agree before a convention "
                          "outranks the tree (default 3)")
+    ap.add_argument("--mainline", action="append", default=None,
+                    metavar="FILE.dts",
+                    help="a mainline DTS/DTSI to read as a THIRD reference; "
+                         "repeatable. The upstream sm6350.dtsi + sm7225.dtsi "
+                         "settle windows the vendor tree and the corpus "
+                         "disagree about.")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args(argv)
 
     tree, _dts = tree_windows(a.dtb)
+    L = mainline_windows(a.mainline or [])
+    if a.mainline and not a.quiet:
+        print(f"mainline: {len(L)} base address(es) from "
+              f"{len(a.mainline)} file(s)")
     counts = collections.Counter()
     if a.corpus:
         refs = sorted(glob.glob(os.path.join(a.corpus, "*.dsl")))
@@ -174,6 +211,7 @@ def main(argv=None) -> int:
 
     rows = []
     for dev, base, length in asl_windows(a.asl):
+        ml = sorted(L.get(base, ()))
         if base in tree:
             if length in tree[base]:
                 kind, why = "EXACT", "tree"
@@ -185,12 +223,15 @@ def main(argv=None) -> int:
             kind, why = None, ""
         if kind is None:
             n = counts.get((base, length), 0)
-            if n >= a.min_boards:
+            if length in ml:
+                kind, why = "MAINLINE", f"upstream writes it"
+            elif n >= a.min_boards:
                 kind, why = "CORPUS", f"{n} board(s) write it"
             else:
                 kind, why = "UNSUPPORTED", (
-                    f"tree has {[hex(x) for x in tree[base]] or 'no node'}, "
-                    f"corpus {n} board(s)")
+                    f"tree {[hex(x) for x in tree[base]] or 'no node'}, "
+                    f"corpus {n} board(s), mainline "
+                    f"{[hex(x) for x in ml] or 'no node'}")
         rows.append((kind, dev, base, length, why))
 
     if not a.quiet:
@@ -198,11 +239,22 @@ def main(argv=None) -> int:
         for kind, dev, base, length, why in rows:
             if kind != "EXACT":
                 print(f"  {kind:12s} {dev:6s} {base:#010x} +{length:#x}  {why}")
+        # A window where mainline names the same hardware and DISagrees is not
+        # a failure - the corpus is a product table and may round - but the
+        # three sources not agreeing is itself the finding, so it is printed.
+        dis = [(d, b, l) for _k, d, b, l, _w in rows
+               if L.get(b) and l not in L[b]]
+        if dis and a.mainline:
+            print(f"\n  mainline disagrees with {len(dis)} window(s) it names:")
+            for d, b, l in dis:
+                print(f"    {d:6s} {b:#010x}: file +{l:#x}, "
+                      f"upstream {[hex(x) for x in sorted(L[b])]}")
 
     c = collections.Counter(r[0] for r in rows)
     bad = [r for r in rows if r[0] == "UNSUPPORTED"]
     print("\n" + "  ".join(f"{k}={c[k]}" for k in
-                           ("EXACT", "UNION", "CORPUS", "UNSUPPORTED")))
+                           ("EXACT", "UNION", "MAINLINE", "CORPUS",
+                            "UNSUPPORTED")))
     if bad:
         print(f"\nFAIL: {len(bad)} window(s) neither the tree nor the corpus "
               f"supports:")
