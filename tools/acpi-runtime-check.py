@@ -76,7 +76,25 @@ BATCH_LIMIT = 980
 MEMORY32FIXED = 0x86
 EXTENDED_INTERRUPT = 0x89
 EXTENDED_GPIO = 0x8C
-I2C_SERIAL_BUS = 0x8E
+# The three serial-bus descriptors share this tag, distinguished by
+# the `SerialBusType` byte: 1 is I2C, 2 is SPI, 3 is UART. The walker below used
+# to test only the tag, so a `UartSerialBusV2` was counted as an I2C bus on the
+# evaluated side - and the source side counted only `I2cSerialBusV2`, so the two
+# agreed by sharing the same conflation and no node could expose it until one
+# carried a UART and no I2C.
+#
+# `SERIAL_BUS_TYPE_OFF` is **5 and not 4**, measured rather than read off the
+# spec: compiling one I2C, one SPI and one UART descriptor into a scratch table
+# and dumping the evaluated buffer gives `8E 19 00 02 00 01 02 ...`,
+# `8E 1C 00 02 00 02 02 ...` and `8E 1D 00 02 00 03 02 ...` - byte 3 is the
+# revision, 4 is `ResourceSourceIndex` and is zero in all three, and the type is
+# at 5. (The raw-`Buffer` form `ADC1` uses puts `0xC1` there and falls through
+# to the I2C branch below, which is where the old tag-only test also put it, so
+# this change cannot move that device.)
+SERIAL_BUS = 0x8E
+SERIAL_BUS_TYPE_OFF = 5
+SPI_SERIAL_BUS_TYPE = 2
+UART_SERIAL_BUS_TYPE = 3
 END_TAG = 0x79
 
 
@@ -202,7 +220,7 @@ def crs_scope(block):
 
 
 def source_resources(block):
-    """(windows, gsis, gpios, i2c) as declared in the device's `_CRS`."""
+    """(windows, gsis, gpios, i2c, uart, spi) as declared in `_CRS`."""
     block = crs_scope(block)
     windows = [(int(a, 16), int(b, 16)) for a, b in re.findall(
         r"Memory32Fixed \((?:ReadWrite|ReadOnly),\s*\n\s*0x([0-9A-Fa-f]+),"
@@ -211,23 +229,28 @@ def source_resources(block):
         r"Interrupt \(ResourceConsumer[^\n]*\n\s*\{\s*\n"
         r"\s*0x([0-9A-Fa-f]{8}),", block))
     gpios = len(re.findall(r"\bGpio(?:Int|Io) \(", block))
-    # An I2C descriptor can be written two ways and this table uses both: the
-    # `I2cSerialBusV2 (...)` macro, and a raw `Buffer` whose first bytes are the
-    # descriptor with the device path concatenated on at runtime. `ADC1` does
-    # the second - `0x8E, 0x13, ...` twice - so counting only the macro reports
-    # zero where the evaluated buffer holds two.
+    # A serial-bus descriptor can be written two ways and this table uses both:
+    # the macro, and a raw `Buffer` whose first bytes are the descriptor with
+    # the device path concatenated on at runtime. `ADC1` does the second -
+    # `0x8E, 0x13, ...` twice - so counting only the macro reports zero where
+    # the evaluated buffer holds two. The three macros share the descriptor and
+    # differ in the `Type` byte, so they are counted separately: before this the
+    # file had only I2C descriptors, and a `UartSerialBusV2` was reported as an
+    # I2C bus by the evaluated side.
     i2c = (len(re.findall(r"\bI2cSerialBusV2 \(", block))
            + len(re.findall(r"\b0x8E, 0x", block)))
-    return windows, gsis, gpios, i2c
+    uart = len(re.findall(r"\bUartSerialBusV2 \(", block))
+    spi = len(re.findall(r"\bSpiSerialBusV2 \(", block))
+    return windows, gsis, gpios, i2c, uart, spi
 
 
 def aml_resources(buffer_tail):
-    """(windows, gsis, gpios, i2c) decoded from an evaluated buffer."""
+    """(windows, gsis, gpios, i2c, uart, spi) decoded from an evaluated buffer."""
     hexs = []
     for m in re.finditer(r"([0-9A-F]{4}: (?:[0-9A-F]{2} )+)", buffer_tail):
         hexs += m.group(1).split()[1:]
     b = bytes(int(x, 16) for x in hexs)
-    windows, gsis, gpios, i2c = [], [], 0, 0
+    windows, gsis, gpios, i2c, uart, spi = [], [], 0, 0, 0, 0
     j = 0
     while j < len(b):
         op = b[j]
@@ -244,12 +267,18 @@ def aml_resources(buffer_tail):
         elif op == EXTENDED_GPIO:
             gpios += 1
             j += 3 + int.from_bytes(b[j + 1:j + 3], "little")
-        elif op == I2C_SERIAL_BUS:
-            i2c += 1
+        elif op == SERIAL_BUS:
+            t = b[j + SERIAL_BUS_TYPE_OFF]
+            if t == UART_SERIAL_BUS_TYPE:
+                uart += 1
+            elif t == SPI_SERIAL_BUS_TYPE:
+                spi += 1
+            else:
+                i2c += 1
             j += 3 + int.from_bytes(b[j + 1:j + 3], "little")
         else:
             j += 1
-    return windows, sorted(gsis), gpios, i2c
+    return windows, sorted(gsis), gpios, i2c, uart, spi
 
 
 def main():

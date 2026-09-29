@@ -4059,6 +4059,134 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // The board's Bluetooth, over the other of the module's two host
+        // interfaces, and the node the four-wire port above exists for.
+        //
+        // The port was written in Step 4.71 and left without a dependent: the
+        // board's Bluetooth is a SLIMbus device (`slim@3ac0000`, `wcn3990`
+        // with `compatible "qcom,btfmslim_slave"`, `status = "ok"`), so the
+        // tables' `BTH0` shape - "hide the port a Bluetooth claimant sits on" -
+        // did not apply and no node named `UAR2` in `_DEP`. That reasoning was
+        // about the *board* and it is still right. What it did not weigh is the
+        // *firmware's* tree: `bluetooth { compatible = "qcom,wcn3988-bt";
+        // max-speed = <0x30d400> }`, a child of `serial@884000`, and the id's
+        // own driver spells the engine out - `qcbtfmuart_hsp7280.inf`'s
+        // `BTUART.HW.AddReg` carries `"SerialPort", "\\_SB.UAR8"` and
+        // `"SerialPortPin", 0x55`. So the module this board carries is reachable
+        // over the interface this node describes, and the two transports are the
+        // same module and not two devices.
+        //
+        // **What changed the arithmetic is Step 4.264, and not this step's
+        // reading.** `QCOM0A6B` has no plain models line anywhere in the set:
+        // `qcbtfmuart_hsp7280.inf:37`-`:41` writes it five times and every one
+        // carries `&SUBSYS_` - QRD/MTP/CDP/**IDP**/CRD07280 - and
+        // `qcbtfmuart_ext7280.inf` adds `CRD07280` alone. Under this file's old
+        // `PSUB` of `MTP07225` the id bound nothing at all; under `IDP07280` the
+        // base binds and brings `qcbtfmuart_hsp7280.sys` with it. So the node
+        // that was unreachable in Step 4.71 became reachable one step before
+        // this one, which is why the census printed it as an absent id the
+        // moment the token moved.
+        //
+        // The shape is the corpus's, and the two tables that carry this id carry
+        // it identically: `lisa` and `a52sxq` are the **only** two of the 28
+        // decompiled tables whose `BTH0` is `QCOM0A6B` (the other thirteen carry
+        // their own generation's id, `QCOM0571`/`QCOM0871`/`QCOM1471`/`QCOM1A6B`/
+        // `QCOM096B`/`QCOM02B5`/`QCOM256B`), and they are also the only two whose
+        // `PSUB` is a `07280` token - the same two boards `_SUB` was chosen for.
+        // Their bodies are byte-identical: `_DEP {PEP0, PMIC, <their own UAR8>}`,
+        // `_PRW {Zero, Zero}`, `_S4W 0x02`, `_S0W 0x02`, `_STA 0x0F`, and a
+        // `_CRS` of `UartSerialBusV2 (0x0001C200, DataBitsEight, StopBitsOne,
+        // 0xC0, LittleEndian, ParityTypeNone, FlowControlHardware, 0x0020,
+        // 0x0020, "\\_SB.UAR8", ...)` plus one `GpioIo` pin, `0x0055`, on
+        // `\_SB.GIO0`.
+        //
+        // Six values come from gauguin's own tree and none is copied. The port
+        // is `\_SB.UAR2`, this board's four-wire engine, where lisa's is `UAR8`
+        // - the payload's tree hangs the `bluetooth` child on `serial@884000`
+        // and the vendor tree gives that address `qcom,msm-geni-serial-hs`,
+        // three `pinctrl-names` states and `qcom,wakeup-byte = <0xfd>`, the
+        // four-wire signature. So the `UartSerialBusV2` controller reference is
+        // `"\\_SB.UAR2"` and `_DEP`'s third entry is `\_SB.UAR2`. `PMIC` and
+        // `PEP0` land unchanged: all fifteen corpus `BTH0`s name their own
+        // table's `PEP0`, and twelve of the fifteen also name `PMIC` - lisa and
+        // a52sxq both do, which is the pair that matters here. The GPIO comes
+        // from the payload's own pin group: `pinctrl-0` is four phandles whose
+        // nodes are all muxed `function = "qup01"` on `gpio61`-`gpio64`, the
+        // four-wire set cts/rts/rx/tx of SE 1, and their parent is
+        // `pinctrl@f100000`, `compatible "qcom,sm6350-tlmm"` - the controller
+        // this file already writes as `GIO0`. The pin *number* is the one value
+        // that stays the corpus's, and the corpus is what settles that it is a
+        // board property rather than a convention: of the fifteen `BTH0`s,
+        // eight write a `GpioIo` pin list and it is `0x0055` on lisa and
+        // a52sxq, `0x0041` on lemonade, renoir and venus, and `0x0015` on
+        // alioth. So it varies by board, which is why copying it is a claim and
+        // not a default - and the two boards that agree with each other and
+        // with this one's generation are the two carrying this id. The DT says
+        // the port occupies gpio 61-64 on four wires, which is a controller
+        // range and not one pin, so it does not supply the number. The same is
+        // true of `0xC0` and of `qcom,wakeup-byte` - neither is a property this
+        // board's tree converts.
+        //
+        // The five standard properties are written because both tables carry
+        // them and they are what a Bluetooth-over-serial client reads: `_S0W`
+        // and `_S4W` of `0x02` (D2 - the module may be woken from any lower
+        // state), and `_PRW {Zero, Zero}`, which is a declared wake capability
+        // with no GPE behind it. `_STA` returns `0x0F`, which the corpus splits
+        // on across its fifteen `BTH0`s - thirteen return it, venus returns
+        // `Zero`, and alioth returns nothing (it is venus's table, not this
+        // shape, that the differing two are) - and the two tables carrying this
+        // id, which are the only two whose board is this board's generation,
+        // both return it.
+        //
+        // What the driver does with the description is not measured here and is
+        // not claimed: no `qcbtfmuart_hsp7280.sys` has run on this board, and
+        // `BTUART.HW.AddReg`'s `"SerialPort"` value is a registry string a
+        // reader can compare against `_DEP` but nothing here has. So the
+        // decision this node records is that the port has a dependent and that
+        // the dependent has a driver that binds. Whether Bluetooth comes up on
+        // the board is the P3 gate's question and not this step's.
+        Device (BTH0)
+        {
+            Name (_HID, "QCOM0A6B")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_DEP, Package (0x03)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.PMIC,
+                \_SB.UAR2
+            })
+            Name (_PRW, Package (0x02)  // _PRW: Power Resources for Wake
+            {
+                Zero,
+                Zero
+            })
+            Name (_S4W, 0x02)  // _S4W: S4 Device Wake State
+            Name (_S0W, 0x02)  // _S0W: S0 Device Wake State
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (PBUF, ResourceTemplate ()
+                {
+                    UartSerialBusV2 (0x0001C200, DataBitsEight, StopBitsOne,
+                        0xC0, LittleEndian, ParityTypeNone, FlowControlHardware,
+                        0x0020, 0x0020, "\\_SB.UAR2",
+                        0x00, ResourceConsumer, , Exclusive,
+                        )
+                    GpioIo (Exclusive, PullDown, 0x0000, 0x0000, IoRestrictionNone,
+                        "\\_SB.GIO0", 0x00, ResourceConsumer, ,
+                        )
+                        {   // Pin list
+                            0x0055
+                        }
+                })
+                Return (PBUF) /* \_SB_.BTH0._CRS.PBUF */
+            }
+
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
         // The QUP I2C engine the Type-C path and the charger cluster both hang
         // on - the node Step 4.68 named at the root of the Type-C chain and
         // left open. It left two questions running together and only one of
