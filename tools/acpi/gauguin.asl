@@ -8861,6 +8861,154 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 })
             }
         }
+        // -----------------------------------------------------------------
+        // The absent driver ids, read against the hardware (step 4.276)
+        // -----------------------------------------------------------------
+        // tools/acpi-hid-census.py reports 82 ids the 112-cab Kodiak set claims
+        // that this table does not present. They are not 82 separate omissions
+        // and they are not one category. Measured four ways - which INF owns
+        // each id, who else in the 32-table corpus declares it, whether the
+        // block it names exists in gauguin's own device tree, and whether its
+        // `_DEP` referents exist here - the 82 split cleanly, and only a small
+        // part of the split is this table's to fix.
+        //
+        // 46 of the 82 come from qcpep.wd7280.inf, whose models lines bind
+        // Pep_Device / TSENS. The first id it claims, QCOM0A17, *is* PEP0,
+        // which this table already writes at line 4920 - so the other 46 are
+        // not sibling ACPI nodes but the PEP driver's runtime children, the
+        // same class tools/driver-id-census.py already records for
+        // ADSP\QCOM0A0F. No corpus table declares any of the 46 as a node.
+        // Writing them would be writing an ACPI device where the corpus has a
+        // registry child list. Recorded, not written.
+        //
+        // Of the remaining 36, 40-odd (overlapping) name a block gauguin's
+        // device tree does not have at all, so no driver can bind whatever the
+        // table says:
+        //
+        //   qcmbrg7280      QCOM0A07  MBRG   - no mbrg/mhi in the tree
+        //   qcdplbridge7280 QCOM0A70  DPLB   - no dpl
+        //   qc5gnrcoexmgr   QCOM0AD6  NRCX   - 5G NR coexistence; no NR node
+        //   qcsyscache7280  QCOM0A83  LLC    - no system-cache/SVMJ node
+        //   qcdeepstandby   QCOM06CD  DSBY   - modem deep-standby; no node
+        //   QCDiagBridge    QCOM06DE  QCDB   - no diag
+        //   qcdiagcsi7280   QCOM0A12  QDCI   - no diag
+        //   qcremoteat7280  QCOM0A08  RMAT   - no remote-at / AT coprocessor
+        //   qchwnled7280    QCOM0A68  HWN0   - gated on \_SB.HWNL, absent
+        //
+        // QCOM0A6C (GNSS) is in this group and the sharpest case: gauguin's
+        // device tree has no gnss/gps node, so GNSS will not work on this
+        // board regardless of the table. That is a hardware fact, not a gap.
+        //
+        // Three more are blocked not on absent hardware but on absent ACPI
+        // *referents* - the blocks are there, the nodes this table would have
+        // to name in their `_DEP` are not:
+        //
+        //   QcTrEE.inf      QCOM04DE  TREE - _CRS reads \_SB.TCMA/\_SB.TCML,
+        //                                    neither of which this table declares
+        //   qcshutdownsvc   QCOM06DB  SSVC - _DEP names \_SB.QDIG, absent here
+        //   QcSOCPartition  QCOM06DD  SOCP - aliases \_SB.STOR, absent here
+        //
+        // What is left, and what this step writes, is the part both the
+        // hardware and the referents confirm: the three service/bridge nodes
+        // whose block is present and needs no address data, plus the IPA
+        // controller, which the live tree carries enabled at
+        // `qcom,ipa@1e00000` with real registers and interrupts:
+        //
+
+        Device (CDI)
+        {
+            Name (_HID, "QCOM0A2F")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.PILC,
+                \_SB.RPEN
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        // QcXhciFilter7280.inf binds this to \_SB.PEP0 and returns _STA Zero:
+        // it is the USB 3.0 xHCI filter, and gauguin runs USB 2.0 only - the
+        // board's `ssphy@88e8000` is `disabled` in its own device tree. A filter
+        // for hardware the board does not enable is written with the same
+        // _STA (Zero) the corpus gives it, so its driver still binds and the
+        // device presents honestly as not-started rather than absent.
+        Device (USB1)
+        {
+            Name (_HID, "QCOM0AA1")  // _HID: Hardware ID
+            Name (_CID, "PNP0D15")  // _CID: Compatible ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, One)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.PEP0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (Zero)
+            }
+        }
+
+        // The IPA controller. Unlike the three above it carries resources, and
+        // every one of them is gauguin's own, read out of the live tree's
+        // `qcom,ipa@1e00000` rather than copied from the corpus. Its reg is two
+        // cells, 0x01e00000+0x84000 (ipa) and 0x01e04000+0x23000 (gsi) - the
+        // second base is 0x01E04000 and not a rounded-up 0x01E84000. Its
+        // interrupts are ipa-irq at DT SPI 0x137 and gsi-irq at DSP SPI 0x1b0,
+        // so by the GSI rule this file follows (ACPI GSI = DT SPI + 32) they
+        // are written 0x157 and 0x1d0. The DT types both 4 = Level, and the
+        // corpus's a52sxq node writes Edge - the tree is this board's own, so
+        // Level is what is written here. The DT carries a third `ipa_smmu`
+        // interrupt the corpus node does not present; it is left out rather
+        // than invented. Five of the six `_DEP` referents exist in this table;
+        // TREE does not, and is omitted for the reason recorded above rather
+        // than named and left dangling.
+        Device (IPA)
+        {
+            Name (_HID, "QCOM0A6A")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)  // _SUB: Subsystem ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x05)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.RPEN,
+                \_SB.MMU0,
+                \_SB.GLNK,
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x01E00000,         // Address Base
+                        0x00084000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000157,
+                    }
+                    Memory32Fixed (ReadWrite,
+                        0x01E04000,         // Address Base
+                        0x00023000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001D0,
+                    }
+                })
+                Return (RBUF) /* \_SB_.IPA._CRS.RBUF */
+            }
+        }
 
     }
 }
