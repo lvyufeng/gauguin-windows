@@ -1116,17 +1116,41 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         // What is deliberately *not* written here, and why. lisa's CAMI
         // (QCOM0A99), CAMT (QCOM0ACE) and CAMU (QCOM0ACF) are gated on
-        // `\_SB.SKUV`: on the IDP variant `SKUV == One`, CAMI's `_STA`
-        // returns Zero and CAMT/CAMU's do too, so those three sensors are
-        // *disabled* on exactly the board this file's `PSUB` names
-        // ("IDP07280", 4.264). Writing them enabled would contradict that
-        // token, and writing them disabled would add namespace that drives
-        // nothing. gauguin's tree, however, carries more camera modules than
-        // the front sensor alone - `qcom,eeprom@0` through `@4` across both
-        // CCI buses and `qcom,flash_0/@1/@2` - so whether gauguin is really
-        // the IDP configuration lisa disables them for is an open question
-        // this file can state and cannot settle offline. It is recorded as
-        // owed rather than guessed at.
+        // `\_SB.SKUV`, and - this is the part a first reading gets wrong -
+        // **not in the same direction**. CAMI returns `Zero` when `SKUV ==
+        // One` and `0x0F` otherwise; CAMT and CAMU return `0x0F` when `SKUV ==
+        // One` and `Zero` otherwise. So `SKUV == One` disables CAMI and
+        // *enables* CAMT/CAMU, which is the mirror image of the second fix
+        // that was written into this comment. CAMT and CAMU have no INF in the
+        // 112-set, so their ids would bind nothing either way; CAMI's *base*
+        // driver exists (qccamauxsensor7280.inf) but its extension
+        // (qccamauxsensor_extension7280) is `CRD07280`-only, so on the token
+        // this file's `PSUB` returns it is the base alone.
+        //
+        // The gate itself is the real open question, and it is wider than the
+        // camera. `SKUV` is the board's soft-SKU, and in the reference tables
+        // it is **never written**: lisa has `Name (SKUV, 0xFFFFFFFF)` at
+        // `DSDT.dsl:239` and not one `Store` to it in the whole table, so when
+        // the DSDT is read on its own every `SKUV`-gated branch resolves to its
+        // *else* leg. The value arrives from outside the table - the boot
+        // firmware's soft-SKU, which is not in either device tree (gauguin's
+        // declares neither `qcom,softsku-id` nor `qcom,pmic-id`, and its
+        // `bootargs` carry no softsku) and is not in the corpus. This file does
+        // not define `SKUV` at all, so none of its gates fire. Writing the
+        // three sensors *enabled* would be a claim about a soft-SKU that no
+        // offline source carries; writing them *disabled* would add namespace
+        // that drives nothing. gauguin's tree does carry more than the front
+        // sensor - `qcom,eeprom@0` through `@4` across both CCI buses and three
+        // `qcom,camera-flash` nodes - which is evidence the board has more
+        // camera modules than `CAMF` alone, but it is not evidence about which
+        // soft-SKU it reports. It is recorded as owed rather than guessed at.
+        //
+        // The same gate governs the twelve thermal sensor ids of
+        // qcthermalmdm7280.inf (`QCOM04B4`-`QCOM04BC`, `04BE`, `04BF`, `06D4`)
+        // that a census still reports absent: in lisa every one is
+        // `_DEP {IPC0}`, `_SUB = PSUB`, windowless, and `_STA` `Zero` when
+        // `SKUV` is 4, 6 or 7 and `0x0F` otherwise (`DSDT.dsl:21212` onward).
+        // They are not written for the same reason.
         //
         Device (CAMF)
         {
