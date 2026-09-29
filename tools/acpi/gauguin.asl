@@ -7811,6 +7811,30 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * `_DEP` this node cannot yet write, and the I2C addresses PML0 would
          * need all wait on one node, and docs/08's Step 4.68 has the
          * measurements for each of the three.
+         *
+         * Step 4.281 resolved that question the other way, and the block
+         * above is kept because it records what was expected, not what was
+         * found. Three readings say gauguin has no UCSI endpoint to write:
+         *
+         *  - `USBC000`/`UCSI` are declared by NO family-0A board. lisa and
+         *    a52sxq, gauguin's 0A siblings and the pair that settled this
+         *    node's own id, both carry `PMGK` (`QCOM0A8E`) and neither
+         *    declares `USBC000`, `UCSI` or `UBTC` at all. Only the 1A boards
+         *    (lemonade, venus) have them.
+         *  - gauguin's own vendor tree and mainline both have **no** `ucsi`
+         *    and **no** `pmic-glink` node. Mainline enables
+         *    `&pm7250b_typec` (`qcom,pm7250b-typec`, `qcom,pm8150b-typec`),
+         *    which is the **kernel `typec` class driver** - Linux's own
+         *    stack, reached through the PMIC's interrupt chain rather than a
+         *    mailbox. There is no ACPI description of it on this board.
+         *  - no driver in either INF tree claims `QCOM0A8E`, `USBC000`,
+         *    `PNP0CA0` or a UCSI/glink id.
+         *
+         * So `UBTC` is not "blocked on a missing referent" - it has no
+         * hardware to describe here and no driver that would bind it. The
+         * Type-C port's role switch and PD *do* work on gauguin, through
+         * in-box `urssynopsys.inf` on `URS0`'s `PNP0CA1` (Step 4.278) and
+         * the PMIC path, not through this node. This comment is the record.
          */
         Device (UCS0)
         {
