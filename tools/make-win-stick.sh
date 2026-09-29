@@ -98,12 +98,20 @@ trap - EXIT
 # Checked after the fact with an independent reader (`fsck.vfat` is not this
 # script's own code), because a stick that mounts here and is unreadable to the
 # firmware on the other side is the failure this whole file exists to avoid. The
-# offset is the point: on the whole image sector 0 is the MBR, and a filesystem
+# partition is the point: on the whole image sector 0 is the MBR, and a filesystem
 # checker handed an MBR reads the partition table's first entry as a BPB and
 # reports nonsense -- `only 1 or 2 FATs are supported, not 251`, from the LBA
-# field. `--offset` counts 512-byte sectors, so the 1 MiB start is 2048.
+# field.
+#
+# How to hand it the partition and not the MBR is not a free choice here: this
+# host's `fsck.fat 4.2-deepin1` has no `--offset` at all -- `fsck.vfat -n
+# --offset=2048 <img>` prints its usage text and exits 2, so that form of the
+# check reported nothing while looking like a check. A second loop device
+# publishing `${LOOP}p1` is the form this checker does accept.
 echo "=== fsck.vfat on the partition, not on the MBR ==="
-fsck.vfat -n --offset=2048 "$IMG" 2>&1 | tail -4
+CHK=$(losetup -fP --show "$IMG")
+fsck.vfat -n "${CHK}p1" 2>&1 | tail -4
+losetup -d "$CHK"
 echo "=== image ==="
 ls -la "$IMG"
 

@@ -45134,3 +45134,131 @@ reboot to the bootloader, and the screen photograph `先读屏，再刷下一次
 `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and
 `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.230 — the six USB host-stack drivers are absent from the whole stock boot chain and not only from `xbl.img`: `xbl_extract.py` run over all sixteen distinct ELF partitions yields 118 nested FFS files from that one image and none at all from any other, and inside that volume the five device-mode USB names each occur exactly once (the positive control) while all six host names and every TPM name occur zero times, so the P3 gate's USB transport exists nowhere but in this project's own payload
+
+**The open row from 4.229 closes, and it closes by extraction rather than by strings.** 4.229 could say
+that the six host-stack drivers are absent from the stock `xbl.img`'s FFS and could not say whether they
+are absent from the whole boot chain, because `device/dxe-inventory.txt` describes one volume in one
+partition. The instrument that decides it is the extractor, not a name scan: `tools/xbl_extract.py` writes
+nested FFS files out of an ELF-wrapped, gzip-compressed FV, and running it over every distinct ELF image in
+the backup — `abl`, `aop`, `cmnlib`, `cmnlib64`, `devcfg`, `featenabler`, `hyp`, `imagefv`, `keymaster`,
+`qupfw`, `secdata`, `storsec`, `tz`, `uefisecapp`, `xbl`, `xbl_config`, sixteen names with `bak` mirrors
+beside most of them — gives **118 nested FFS files from `xbl` and zero from the other fifteen**; two of those
+fifteen, `abl` and `imagefv`, write a single `fv-outer.bin` (196,608 B and 524,288 B) and no FFS section at
+all, and the rest write nothing. So there is exactly one stock DXE volume in the whole backup and it is the
+one 4.229 already described; there is no second stock driver set for the host six to be hiding in.
+
+**Inside that one volume the instrument passes its own control and then returns a clean negative.** The same
+UTF-16 name search that found nothing in 4.229's raw partition scan finds, in the extracted `xbl` files, all
+five device-mode USB drivers exactly once each — `UsbConfigDxe`, `UsbDeviceDxe`, `UsbMsdDxe`,
+`UsbPwrCtrlDxe`, `UsbfnDwc3Dxe`, one occurrence per `.ffs` name section — and finds `XhciPciEmulationDxe`,
+`XhciDxe`, `UsbInitDxe`, `UsbBusDxe`, `UsbKbDxe` and `UsbMassStorageDxe` **zero times**. That pair of
+results is what makes the negative a measurement rather than a null: the same code, on the same files, in
+the same encoding, finds the names that are there. The repository's own `device/dxe/` holds the identical
+118 `.ffs` (plus 86 bare `.efi`) and reproduces both halves of the control, so the conclusion does not rest
+on the extraction having been faithful.
+
+**Why this is load-bearing rather than bookkeeping.** The P3 gate is "a Windows 11 ARM64 installer boots off
+a USB stick and sees the internal UFS", and a USB stick is read through a host controller, a bus driver and a
+mass-storage driver. The measurement says the stock firmware has none of the three: every USB driver it
+carries is device-mode, which is the phone presenting itself to a PC, not the phone reading a stick. Nothing
+about the stick path can therefore be tested against stock, and P3 item 3's payload is not an optimisation
+of something the firmware already does — it is the only USB transport this phone will ever have. The same
+extraction also settles the security half of the same question in the negative: no `Tpm`, `TPM` or `Tcg`
+string occurs anywhere in the 118 files, none occurs in `device/dxe-inventory.txt`, `DXE.inc`,
+`APRIORI.inc` or `gauguin.dsc`, the only security-flavoured name in the volume is `SecureBoot` once inside
+`QcomBds.ffs`, and `SecurityStubDxe` — the driver that would consult a TPM — is present on both sides,
+stock at `device/dxe-inventory.txt:11` with `size=0x0000d048` (53,248 B) and build at `DXE.inc:37` and
+`APRIORI.inc:73`. Together with `part-uefivarstore.img`'s 524,288 bytes of zero, that means Windows Setup
+will run its TPM check on a phone whose firmware has no TPM to offer and whose captured variable store does
+not even record the Secure-Boot state.
+
+**So the experiment is what Setup does next, and the pair of runs is a matched control.** The media build is
+`26100.1_PROFESSIONAL_ARM64_EN-US` and the stick is copied verbatim by `tools/make-win-stick.sh:84`, so
+nothing in the tree bypasses anything; the repair is one file. `work/win11/stick/notpm-control.img` is the
+stick itself, `notpm-control.img` and `win11arm64-stick.img` both measuring
+`sha256 9de61c33d881fc9de4832c0d41f7045d9fc7f95a57b96ebe1e6090ccee04e177` at 6,442,450,944 B, and
+`work/win11/stick/notpm-bypass.img` is the same image plus one root-level `\autounattend.xml` — 1,743 B, md5
+`5f0ac2953bca0ba6fe1d5ed6bc4fc53b`, an arm64 `windowsPE` / `Microsoft-Windows-Setup` answer file whose four
+`RunSynchronous` commands write `HKLM\SYSTEM\Setup\LabConfig`'s `BypassTPMCheck`,
+`BypassSecureBootCheck`, `BypassCPUCheck` and `BypassStorageCheck`. Its digest is
+`sha256 874e0ec29d02f0ec65eeda0ffa11350581188ca1bdd81c28713521c6dedd192e`, md5
+`d52b52e27281e088a6d321154f4a4f3d`, and the two runs differ in the bypass image only, both launched with
+`--no-tpm` so that the TPM emulator is not a variable in either arm.
+
+**The injection is accounted for to the byte, which is what makes the comparison a controlled one.** `cmp
+-l` over the two 6,442,450,944-byte images reports **1,821 differing bytes in 27 runs**, and every one is
+explainable: the FSInfo sector's `free_count` low byte at `part+1000` (235 → 234) and `nxt_free` low byte at
+`part+1004` (144 → 145); four bytes at `part+4,180,372`, the FAT entry for cluster 1,040,997, going from
+`00 00 00 00` to the end-of-chain marker `ff ff ff 0f`, and the same four bytes again at `part+10,459,540`,
+which is that entry in the second FAT (the tables being 6,279,168 B = 12,264 sectors apart, as the BPB says);
+**78 bytes in 22 runs at `part+12,575,200..12,575,293`**, which is root-directory offsets 480..573 and is the
+two long-file-name entries (`seq 0x42` holding `xml`, `seq 0x01` holding `autounattend.`) plus the short entry
+`AUTOUN~1.XML`, attribute `0x20`, size 1,743, first cluster 1,040,997; and **one run of exactly 1,743 bytes
+at `part+4,276,490,240`**, which is cluster 1,040,997 itself, whose first bytes read
+`<?xml version="1.0" encoding="ut` in the bypass image and 32 zero bytes in the control. The independent
+reader agrees with the arithmetic: `fsck.fat 4.2` on `${LOOP}p1` says **1035 files, 1,040,995 of 1,569,536
+clusters** for the control and **1036 files, 1,040,996** for the bypass — one file, one cluster — and the
+FSInfo's own counters say the same thing from the other end, free falling 528,541 → 528,540.
+
+**Seventeen minutes in, no arm has diverged, and the test says so with the record's own page.** The frames
+are compared by a page signature rather than by md5, because the page animates: the signature is the
+fraction of sampled pixels that are exactly the field colour `(24,0,82)`. The TPM arm's own timeline over
+93 frames is `001 = 0.000` (the firmware's screen), `002 = 1.000` (the screen cleared at hand-off),
+`003..028 = 0.159` — the `Windows Setup` window page the record read at 4.x from the probe run — then
+`029..031 = 0.871`, `032 = 0.000` and `033..093 = 0.341`, the `Activate Windows` product-key page, which it
+has now held for two hours. Both new arms reproduce that sequence with a one-frame offset: control
+`001 = 0.000, 002..003 = 1.000, 004..010 = 0.159` and bypass `001..002 = 0.000, 003 = 1.000, 004..010 =
+0.159`. And the page they are on is the page the record already read, not a new one: the title bar's gradient
+measures `(152,180,208)` at its first row to `(185,209,234)` at its last, exactly the record's endpoints; the
+white body is 361,755 px of 480,000 = **75.37%**, against the record's 75.4%; and the four-pane Windows logo
+at `x94..108 y524..538` measures `(242,80,34)`, `(127,186,0)`, `(0,164,239)` and `(255,185,0)`, 36 pixels
+each, **byte-identical in all three arms**. So the TPM has not been consulted anywhere in the boot chain up
+to the Setup window, and the no-TPM divergence, if there is one, lies at the transition the timeline dates
+to about 56 and 64 minutes.
+
+**One harness regression, found by reading the checker instead of trusting it.**
+`tools/make-win-stick.sh`'s closing "independent reader" step ran `fsck.vfat -n --offset=2048 "$IMG"`, and
+this host's `fsck.fat 4.2-deepin1` has no `--offset` option at all: the command prints its usage text and
+exits 2, so the check whose entire purpose is to catch a stick the firmware cannot read had been reporting
+nothing while looking like it reported something. Upstream dosfstools 4.2 does take `--offset`, so this is a
+distro difference and not a mistake in the original script — but `docs/08:43837` already records that this
+`fsck.fat` lacks the option, so the record knew and the script was left in the broken form regardless. It is
+repaired to attach a second loop device and check `${LOOP}p1`, which is the form this checker does accept,
+and verified on the control image.
+
+**decides**: that the six host-stack drivers are absent from the entire stock boot chain, because exactly one
+stock partition (`xbl`) carries a nested FFS volume and the other fifteen ELF partitions carry none, and
+inside that volume a search that finds all five device-mode USB names exactly once finds none of the six
+host names; that no TPM or TCG driver exists on either side of this port, `SecurityStubDxe` being the only
+security driver and present in both, and that the only `SecureBoot` string in 118 stock files is one
+occurrence inside `QcomBds.ffs`; that the P3 gate's USB transport is therefore supplied only by P3 item 3's
+payload; that the bypass image differs from the stick in 1,821 bytes in 27 runs, every site of which is
+identified, the payload being one 1,743-byte file in cluster 1,040,997 with its two FAT entries, the FSInfo
+counters and its two directory entries accounting for the other 78; and that at 17 minutes all three arms
+are on the same `Windows Setup` window page, whose gradient endpoints, 75.37% white body and four pane
+colours match the page the record read from the probe run. **does not decide**: what Windows Setup does when
+its TPM check runs on this firmware, the runs being 17 minutes into a 3-hour window and the divergence the
+timeline dates to 56 and 64 minutes; whether Setup reads a root-level `autounattend.xml` off a FAT32 stick at
+all, which the bypass run tests and has not yet answered; whether the four `LabConfig` values would be
+honoured at the version the media carries; whether the phone will need a firmware-side TPM rather than a
+media-side bypass; and whether the ~19 stock/build name pairs are the same binaries built twice, names and
+sizes having been compared and not bytes. **Not an action**: `xbl_extract.py` run over sixteen backup
+partitions with output written to `/tmp/xlf/`, `cmp`, `fsck.vfat`, `losetup`, `mount` and byte reads over the
+two new images, plus frame reads over the three live runs — all read-only with respect to the backup, the
+device and the repository except this step's own text and the `tools/make-win-stick.sh` repair; no build was
+run, no device was touched, and the four preserved directories under `work/out/` were not written.
+**Working state**: three runs live. The TPM arm is launcher pid 954750, qemu pid 954767, `SECS=14400` from
+08:09:25, killing it at about **12:09**, 93 frames written through `shot-093` at 11:13:52 and sitting on the
+product-key page since `shot-033`. The control is launcher pid 1386271, qemu pid 1386277, launched 10:57:20
+on `notpm-control.img` for 10,800 s, and the bypass is launcher pid 1389510, qemu pid 1389516, launched
+10:58:18 on `notpm-bypass.img`, both due to stop at about **13:57** and **13:58**; each has 10 frames, and
+each has a 68,719,476,736-byte `disk.img` and a 370-byte `serial.log` whose mtime is the launch second, so
+neither has begun an installation or a reboot. **device state**: unchanged — `adb devices`,
+`fastboot devices`, both tty globs, `lsusb` and `lsblk` are as 4.228 records them, with **no USB stick
+attached to this host**, which the P3 gate itself needs, so the three physical actions (a reset of the phone,
+the reboot to the bootloader, and the screen photograph `先读屏，再刷下一次` requires) remain outstanding.
+`userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and
+`device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
