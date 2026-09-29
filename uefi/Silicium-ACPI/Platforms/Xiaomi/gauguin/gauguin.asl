@@ -371,6 +371,145 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        //
+        // WPSS, the wireless subsystem, and the node that closes a hole this
+        // file has carried since the PEP0 block landed: `\_SB.WPSS` is declared
+        // External at the top of the file and its `_STA` is read at PEP0's
+        // `_DSM` revision-7 branch, which returns **Zero** while the node does
+        // not exist, because the CondRefOf test fails before the call. Zero
+        // there means "this board has no wireless subsystem". It does: the
+        // device tree carries `soc/qcom,icnss@18800000` as a live `ok` node
+        // with twelve interrupts, `soc/bt_wcn3990` for the Bluetooth half, and
+        // the Android properties say `vendor.qcom.bluetooth.soc = cherokee`,
+        // which docs/05 already records. So the node is written and that
+        // function starts answering `0x0F`.
+        //
+        // The id is a plain claim in the set and needs no family-byte
+        // derivation: qcsubsys7280.inf:52 is
+        //
+        //   %WPSS.DeviceDesc%=SUBSYS_Device, ACPI\QCOM0AE2
+        //
+        // with no `&SUBSYS_` qualifier, and the two extension INFs that also
+        // name QCOM0AE2 - qcsubsys_ext_wpss7280.inf and qcwlan_ext_wpss7280.inf
+        // - qualify theirs with CRD07280, IDPS7280 and IDP07280, which this
+        // board's `_SUB` is not. The plain claim is the one that binds, and
+        // --bind QCOM0AE2 / --drivers ~/work/woa-ref/inf-7280 reports all three
+        // files. This is also the id 4.242 recovered from the long spelling,
+        // which is why it is written here as the short one.
+        //
+        // The resources are the device tree's, taken as they are. reg is
+        // (0x18800000, 0x800000) and (0xB0000000, 0x10000) under reg-names
+        // "membase" and "smmu_iova_ipa"; only the first is a window this
+        // processor touches, the second being the SMMU's I/O virtual address
+        // pool, which is a translation the firmware describes elsewhere. The
+        // twelve interrupts are device tree SPIs 414 through 425 in order, all
+        // level-high - and 414 + 32 = 446 = 0x1BE, which is the first GSI
+        // below, so this node obeys the same number -> GIC-SPI rule the SDCC
+        // pair just confirmed on four other nodes.
+        //
+        // Withheld, and this one is the interesting half. The corpus's WPSS
+        // nodes carry a `Device (QWLN)` child - renoir and lisa both, at
+        // 0x17A10040 with a 12 MB window at 0x80C00000 and thirty-two GSIs
+        // from 0x320. None of that is measurable on gauguin: 0x17A10040 is not
+        // an ITS page here, it falls inside this board's own GIC frame
+        // (`soc/interrupt-controller@17a00000`, reg 0x17A00000 + 0x10000 and
+        // 0x17A60000 + 0x100000), and gauguin's icnss declares 12 interrupts
+        // where lisa's QWLN declares 32. So QWLN is not written, and the reason
+        // that costs nothing is worth recording: **lisa's QWLN carries no
+        // `_HID` at all** - it is `_ADR Zero`, a `_DEP` of PEP0/MMU0/IPC0,
+        // `_PRW`, `_S0W`/`_S4W`, a `_PRR` pointing at its own `WRST` power
+        // resource, and the `_CRS` above, and nothing else. What actually binds
+        // the wireless device is not an ACPI node: qcsubsys_ext_wpss7280.inf's
+        // `[WPSS_Children]` section tells the qcsubsys driver to create the
+        // child itself,
+        //
+        //   HKR,Desktop\0,"DeviceObjectName",%REG_SZ%,"QWLN"
+        //   HKR,Desktop\0,"_HID",%REG_SZ%,"QCOM0A28"
+        //
+        // which is why qcwlan7280.inf:32 binds `WPSS\VEN_QCOM&DEV_0A28` and why
+        // no INF in the set claims an `ACPI\` id for WLAN anywhere. The child's
+        // `_HID` is a driver registry value, so a firmware node cannot supply
+        // it and must not try; what the firmware owes the pair is the parent,
+        // its window and its interrupts. If the P3 gate shows the child absent,
+        // QWLN is the structure to add and the open question is which of its
+        // resources are really gauguin's.
+        //
+        Device (WPSS)
+        {
+            Name (_HID, "QCOM0AE2")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.PILC
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x18800000,         // Address Base
+                        0x00800000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001BE,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001BF,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C0,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C1,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C2,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C3,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C4,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C5,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C6,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C7,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C8,
+                    }
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001C9,
+                    }
+                })
+                Return (RBUF) /* \_SB_.WPSS._CRS.RBUF */
+            }
+        }
+
         Name (DPP0, Buffer (One)
         {
              0x00                                             // .

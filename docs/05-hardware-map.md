@@ -217,6 +217,25 @@ this as `usb_1` / `usb_1_dwc3` with `qcom,sm6350-dwc3`.
 same combo chip FP4 uses, which is why FP4's `&wifi` regulator block is a usable
 starting point.
 
+The wireless subsystem node is `soc/qcom,icnss@18800000`: `status ok`, twelve
+interrupts (DT SPI 414–425, level-high), `reg-names` `membase` /
+`smmu_iova_ipa`, and five supply rails. The ACPI device for it is `WPSS`
+(`_HID QCOM0AE2`, a plain claim in `qcsubsys7280.inf:52`).
+
+Two consequences that are easy to get wrong, both measured:
+
+- The Bluetooth firmware is named **`wcn3990`**, which is the *chip*; the
+  Bluetooth host part on this SoC is `QCOM0A6B` on the `BTH0` node, and that id
+  is in the same board-gated family as the WLAN thermal device (`QCOM0AD5`) and
+  the Coexistence Service (`QCOM0AC3`). A node for any of them only binds a
+  board whose `_SUB` is one of the set's three tokens, and `docs/08` Step 4.241
+  measured that this board's is not.
+- The WLAN child is **not an ACPI node**. `qcwlan7280.inf:32` binds
+  `WPSS\VEN_QCOM&DEV_0A28`, and `qcsubsys_ext_wpss7280.inf`'s `[WPSS_Children]`
+  creates it with `DeviceObjectName "QWLN"` / `_HID "QCOM0A28"` as driver
+  registry values. The firmware owes the driver the parent WPSS node, its
+  window and its interrupts; it cannot supply the child's id.
+
 ## Runtime PM / interconnect
 
 The device tree also carries `ad-hoc-bus`, `apps-smmu@15000000`,
