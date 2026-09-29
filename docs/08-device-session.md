@@ -44870,3 +44870,167 @@ boots. There is still **no removable USB stick attached to this host** — `lsbl
 and `nvme0n1` (953.9 G, RM=0) and nothing removable — which the P3 gate itself needs. `userdata` (107 GB,
 unbacked), the partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is
 still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.228 — the page's text is read whole: the body paragraph is the 56-word `w32uires.dll.mui` string at byte offset 48550 wrapped 18/17/18/3 into 514/504/474/97 px at a 12.2-px em, the seven-segment band above it is `The product key looks like this: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX` and *not* the `I don't have a product key` sentence this record had put there, that sentence stands in the two bands at `y248..272`, and the em this fixes retires both the 3-px gap law and the wrap-at-500 calibration
+
+**What this step was opened to do, and what it closed instead.** The window before this one rendered
+`pg224.ppm` and read it, but wrote none of its findings into this record, so three of its claims were live
+and unbacked: that the pure-Python renderer worked, that the heading is `Activate Windows`, and that the
+body paragraph wraps at a 500-px width into lines ending `or on a`. All three are settled here — the first
+two in the affirmative, the third **against**. The instrument that settles them is a font-advance model
+whose single free scale is pinned by fitting the paragraph's four measured line extents at once, and once
+that scale is pinned the same word-width matcher that could not decide anything a window ago decides every
+band on this page by margins of 8 to 12 px.
+
+**The renderer is verified, and two renderers this record has cited are retired.** `/tmp/pngchk.py`, a
+pure-Python PNG decoder written for this step because this host's Python has no PIL, decodes
+`/tmp/png_head.png` — the crop `/tmp/png2.py` produced from `pg224.ppm`, which this step located by exact
+block match against the frame at **`x120..660 y80..105`, scale 3**, the match being the single candidate
+for its most-inked row anywhere in 800×600 — to `1623x78 bpp=1 min=68 max=255 mean=250.1
+dark(<170)=3456 of 126594 (2.73%)`, and prints an ASCII preview in which the heading's seven glyph runs are
+visible as glyph rows. `/tmp/png2.py` therefore renders this frame correctly and every crop made with it is
+trustworthy. `/tmp/png.py` and `/tmp/vis.py`, which
+earlier windows cited, render this frame blank or near-uniform white — the first through a
+self-contradicting contrast branch, the second through a `vis()` that whitens pale ink — and both are
+retired here so that no later window re-uses them.
+
+**The em is calibrated and it is 12.2 px.** The body paragraph is not a guess: the four bands
+`y132..143`, `y147..158`, `y162..173`, `y177..185` measure, at `thr<720` and `gap=3`, **12 / 13 / 14 / 3
+segments** spanning `x128..641`, `x128..631`, `x128..601`, `x128..224` — extents of **514, 504, 474 and 97
+px**. Wrapping the 309-character paragraph that `w32uires.dll.mui` holds at byte offset 48550 with a Segoe
+UI advance table and a single free scale, the line-word signature is **18 / 17 / 18 / 3** for every em from
+11.5 to 14.5 at some width, and among those the line *extents* pick out one em:
+
+| line | words | model extent | measured extent | |
+|---|---|---|---|---|
+| L1 `y132..143` | 18 | 518 px | **514 px** | If this is the first time you're installing Windows on this PC (or you're installing a different edition), |
+| L2 `y147..158` | 17 | 501 px | **504 px** | you need to enter a valid Windows product key. Your product key should be in the confirmation |
+| L3 `y162..173` | 18 | 475 px | **474 px** | email you received after buying a digital copy of Windows or on a label inside the box that |
+| L4 `y177..185` | 3 | 95 px | **97 px** | Windows came in. |
+
+at **em 12.2 px, word space 3.66 px, wrap width 518 px**, mean absolute error **2.4 px** over the four
+lines. The fit is well conditioned: the best error at the neighbouring ems is **3.21 px at 12.1** and
+**3.83 px at 12.3**, and beyond them it rises monotonically — 6.47 px at 12.0, 9.81 at 12.5, 26.10 at 13.0
+and 42.38 at 13.5 — so 12.2 px is the unique minimum over 11.8..13.5 and the paragraph's own four extents,
+and nothing but the paragraph, determined it. The four lines are 18
++ 17 + 18 + 3 = **56 words**, and the paragraph at byte offset 48550 is **56 words** — the whole string,
+first word to last, with nothing left over and nothing missing. L1's 20 segments at `gap=1` are those 18
+words with `you're` split twice at its apostrophe and `(or` left intact; band A's 18 segments are likewise
+17 words with one `you're` split. Both were checked segment by segment at fixed em: **rms 1.40 px over 20
+segments** for L1 and **rms 1.34 px over 18** for band A, the largest single disagreement 3 px.
+
+**The seven-segment band above the paragraph is a different string than this record had put there.** Band
+`y211..222` measures, at `gap=1`, **20 / 42 / 18 / 28 / 18 / 22 / 195 px** in `x128..488`. Against the MUI
+string `The product key looks like this: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX` — the string at byte offset
+**44802** — the seven model widths are `19.6 39.9 17.9 27.1 18.1 22.6 191.1`, **rms 1.75 px**, with the
+last segment being the placeholder `XXXXX-XXXXX-XXXXX-XXXXX-XXXXX` itself and not a word. The previous
+window had read this band by ASCII art as `Select I don't have a product key.`; the widths refuse it —
+`Select` is 31.6 px at this em against a measured first segment of 20, and `The` is 19.6 — so that reading
+is **withdrawn** here, and the band is the placeholder hint. The band's own descender, at `y220..222`, sits
+under the `y` of `key` and under nothing else, which the placeholder hypothesis also predicts.
+
+**That sentence stands, two bands lower.** Bands `y248..259` (18 segments at `gap=1`) and `y263..272` (3
+segments) are one wrapped line pair: `If you're reinstalling Windows, select I don't have a product key.
+Your copy of Windows will be` — **rms 1.34 px over 18 segments**, the 3-px `I` and the 6-px `a` and the
+28-px `don't` all landing on their measured widths — and `automatically activated later.` — **rms 1.31 px
+over 3**. Both halves are the MUI string at byte offset **6108** and nothing else; the `I don't have a
+product key` phrase this record has been looking for is here, in the body text, not in the hint band and
+not only in the link row at `y462..483`. So the page's visible text is now accounted for band by band:
+
+| band | segments (`gap=1`) | text | source |
+|---|---|---|---|
+| `y89..100` | 7 | `Activate Windows` | heading, by the two `i`-signatures of 4.225 |
+| `y132..143` | 20 | If this is the first time you're installing Windows on this PC (or you're installing a different edition), | MUI 48550, line 1 |
+| `y147..158` | 17 | you need to enter a valid Windows product key. Your product key should be in the confirmation | MUI 48550, line 2 |
+| `y162..173` | 18 | email you received after buying a digital copy of Windows or on a label inside the box that | MUI 48550, line 3 |
+| `y177..185` | 3 | Windows came in. | MUI 48550, line 4 |
+| `y211..222` | 7 | The product key looks like this: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX | MUI 44802 |
+| `y248..259` | 18 | If you're reinstalling Windows, select I don't have a product key. Your copy of Windows will be | MUI 6108, line 1 |
+| `y263..272` | 3 | automatically activated later. | MUI 6108, line 2 |
+
+**The calibration retires two instruments and confirms a third.** The reading of L4 as `or on a` is
+**withdrawn** — at a 500-px wrap the model's own fourth line is `or on a label inside the box that Windows
+came in.` and the frame's is `Windows came in.`, so the model and the frame agreed only because the model
+had been read at a width the frame does not use. The **wrap-at-500 calibration is withdrawn**: at em 12.2 a
+500-px width gives a 19-word first line, and the frame's is 18. And the **3-px inter-word gap "law" is
+withdrawn**: re-censusing every band at `gap=1`, `2` and `3` moves the segment counts — L1 20 / 18 / 12,
+band A 18 / 17 / 16, L2 and L3 17 / 17 / 13 and 18 / 18 / 14 — so there is no invariant gap to have a law
+about; the count is a function of the threshold parameter, and the only number that carried information
+was the one measured at `gap=1` with the widths kept. What the calibration *confirms* is 4.226's header
+title: the band `x144..224 y40..51` is **81 px** wide and carries **12 runs** at `gap=1`, while `Product
+key` has **10 letters** and cannot produce 12 runs under the run-count law 4.225 used on the heading — so
+the title is `Windows Setup`, exactly as 4.226 read it, and the width 81 px is that string at the body's
+own em 12.2 rather than at the 16-px em a guess would have used. The apparent contradiction between the
+width metric and 4.226 is an artefact of that guess and is not a contradiction.
+
+**Three negative results bound what this frame can yield.** (a) **Intra-word ink on this frame is
+contiguous** — at `gap=1` every long word is a single run, `different` 48 px, `installing` 49 px, `Windows`
+48 px, `product` 42 px, `key.` 69 px — so **per-letter segmentation is impossible on `pg224.ppm`**, and the
+`glyphs=`/`gw=` letter lists earlier windows reported were anti-aliasing edge pixels and not glyph
+separations. The letter-by-letter programme of the last several windows is not executable on this page;
+the string identification done here needs no letter identity at all, only widths. (b) The **"8bpp,
+800-wide" reinterpretation of the PPM stream fails**: reading one byte per pixel at width 800 renders rows
+`y20..70 x78..200` as solid dark, contradicting the `(174,173,174)` frame and the `(217,217,217)` header
+band this record has measured; the stream is 3 bytes per pixel. Recorded so no later window retries it.
+(c) The **free-scale word-width matcher is not an instrument** — allowed to fit its own scale it matched
+L4's `[49,29,13]` to `computer might be`, `Windows came in.` and `computer won't be` at rms ≈ 2 px each, and
+band A's 18 widths to 247 different resource strings. Pinning the scale with the four-line fit is what makes
+it decisive, and pinning it that way is a measurement of the paragraph, not of the matcher.
+
+**L4 is decided by its paragraph and not by its own three widths.** At a fixed em the closest rival to
+`Windows came in.` is `Windows Setup to`, 1.8 px away on the same three numbers, and only the identity of
+the other three lines excludes it. L4 is the tail of a 56-word paragraph whose first 53 words the three
+bands above it spell out word for word, so the tail is the paragraph's tail; the coincidence that three
+words of the wizard's own button label fit the same three widths is reported so that a later window does
+not read L4's signature as independent evidence.
+
+**The colour bytes stay withdrawn, on a third kind of evidence.** The L1 band holds **51 distinct RGB
+triples**, from `(255,255,255)` n=3568 and `(255,255,182)` n=480 and `(144,219,255)` n=454 down to
+`(102,0,58)` n=406, `(0,0,0)` n=204 and `(182,102,0)` n=39. Rendering the R channel alone, the G channel
+alone and the B channel alone over the same band produces the **same glyph shapes**, differing only in
+intensity — R darkest, G lightest, B intermediate — so the frame is structurally grey and its colour bytes
+sample one antialiased edge three times at three depths. A magenta `(102,0,58)` cannot coexist with a
+grey-rendered dialog, so the `(102,0,58)` / `(182,102,0)` / `(219,255,255)` colour claims of earlier
+windows remain withdrawn, now for a positive reason rather than for want of verification.
+
+**decides**: that the body paragraph on `pg224.ppm` is the whole 56-word string at `w32uires.dll.mui` byte
+offset 48550, wrapped **18 / 17 / 18 / 3** words into extents of **514 / 504 / 474 / 97 px** at **em 12.2
+px** with word space 3.66 px and a wrap width of about 518 px, the fit being a mean absolute error of 2.4
+px over the four lines and the only em in 11.8..13.5 that fits all four at once; that the band `y211..222`
+is `The product key looks like this: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX`, the string at byte offset 44802, at
+rms 1.75 px over its seven segments, so the previous window's art reading of that band as `Select I don't
+have a product key.` is withdrawn; that the two bands `y248..259` and `y263..272` are the string at byte
+offset 6108 split as `If you're reinstalling Windows, select I don't have a product key. Your copy of
+Windows will be` / `automatically activated later.`, at rms 1.34 px over 18 segments and 1.31 px over 3;
+that the four bands of 4.225's paragraph are one paragraph read in full, L1 ending at `different
+edition),` and not at `edition`; that the `or on a` reading of L4, the wrap-at-500 calibration and the 3-px
+inter-word gap "law" are all three withdrawn as artefacts of a parameter rather than measurements; that
+4.226's header title `Windows Setup` stands against the run-count law, since 12 measured runs cannot come
+from `Product key`'s 10 letters; and that the renderer `/tmp/png2.py` is verified by `/tmp/pngchk.py`,
+while `/tmp/png.py` and `/tmp/vis.py` are retired. **does not decide**: whether this page is the same
+wizard screen as the `Install now` page of 4.222, the text being consistent with the product-key step and
+this step having read no control; what the `y62..65` neutral rule, the caret band `y302..321` whose only
+ink is at `x134`, the solid bar `y322..323 x128..369`, the filled block `y462..483 x624..694`, the annulus
+`x86..114 y32..59` and the blue block `x123..138 y43..55` are — all measured, none interpreted; what the
+2-px division at `x208..209` crossing the marquee track divides; whether the wrap width is 518 px or
+anywhere in the 513..565 px band that yields the same word counts at em 12.6, the extents fixing the em
+more tightly than the width; and whether the guest is waiting for input on this page, this step having sent
+it none. **Not an action**: byte reads and `md5sum` over `work/win11/qemu-probe/pg224.ppm` (read only), the
+resource file `/tmp/setupres/sources/en-us/w32uires.dll.mui` opened read-only, and every analysis artifact
+and PNG written under `/tmp` only — no `sendkey`, `mouse_move`, `mouse_button`, `stop` or `quit` sent to
+the monitor, no device command issued. No file inside the repository changed except this step's own text.
+**Working state**: the run is live and unchanged — launcher pid 954750 running
+`tools/qemu-boot-win11-iso.sh work/win11/stick/win11arm64-stick.img work/win11/qemu-stick2 14400` from
+08:09:25, now ELAPSED 02:36:58, qemu pid 954767 at 46.3 % of a core, `SECS=14400` killing it at about
+**12:09**; it has written **79** frames (172 MB) through `shot-079` at 10:45, `disk.img` still
+68,719,476,736 B at mtime **08:09:38** and `serial.log` still **370 B** at **08:09:32**, so no installation
+has begun and no reboot has happened in it. The probe directory still holds **158** frames in 218 MB, read
+and not written, and no frame in either directory was rewritten by this step. **device state**: unchanged —
+`adb devices` and `fastboot devices` are empty, both tty globs (`/dev/ttyUSB*`, `/dev/ttyACM*`) are empty,
+`lsusb` shows only root hubs and a wired Huawei mouse and no mass-storage device, and `lsblk` lists `sda`
+(476.9 G, RM=0) and `nvme0n1` (953.9 G, RM=0) with **nothing removable** attached — which the P3 gate
+itself needs. The three physical actions remain outstanding: a reset of the phone, the reboot to the
+bootloader the P3 `fastboot boot` workflow needs, and the screen photograph that `先读屏，再刷下一次` requires
+before any payload boots. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
+untouched, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
