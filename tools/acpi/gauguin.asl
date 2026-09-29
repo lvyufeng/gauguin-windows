@@ -1076,6 +1076,99 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         }
 
         //
+        // The front camera sensor and the flash: the two nodes of the camera
+        // chain that bind unconditionally and are still unwritten. The chain
+        // around them is complete in this file - CAMP, JPGE, VFE0, CPHY (the
+        // corpus's MPCS), CSID/CSI1/CSI2 - and these two are what a census
+        // still reports as gauguin ids with a plain driver and no node.
+        //
+        // Both ids are plain models lines in their INFs, with no `SUBSYS` and
+        // no `REV_`, so each binds whatever `_SUB` this board carries:
+        // qccamfrontsensor7280.inf:61 is
+        // "%CameraFrontSensor.DeviceDesc% = CameraFrontSensor_Device,
+        // ACPI\QCOM0A06" and qccamflash7280.inf:38 is
+        // "%Flash.DeviceDesc% = CameraFlash_Device, ACPI\QCOM0A27". The
+        // front-sensor id also has an extension INF
+        // (qccamfrontsensor_extension7280) that carries no `CRD07280` line, so
+        // nothing here is contingent on the token the way QCOM0A99 is.
+        //
+        // Neither has a window, and neither is given one. This is the RFS0
+        // decision of 4.267 applied again: lisa's CAMF and FLSH carry no
+        // `_CRS` at all - FLSH's is a two-byte `Buffer (0x02) { 0x79, 0x00 }`,
+        // which is the ACPI END_TAG and therefore an *empty* resource
+        // template, the corpus writing a `_CRS` that resolves to nothing
+        // rather than omitting the method. gauguin's own tree agrees that
+        // there is nothing to carry: `qcom,camera-flash@0/@5/@6` have no
+        // `reg`, and the front sensor is enumerated over the CCI bus the
+        // eeprom nodes share (`qcom,eeprom@0/@1/@4` on cci0), not over a
+        // memory window of its own. A window invented here would hand the
+        // driver an address belonging to something else, so none is written,
+        // and FLSH keeps lisa's empty buffer so the method the driver may
+        // probe for is present and resolves to no resources.
+        //
+        // `_DEP` is on the platform node, not on the sibling sensors: CAMF
+        // depends on CPHY (the MIPI-CSI PHY the sensors' data path runs
+        // through) and FLSH on CAMP, which is lisa's own shape. The `_UID`
+        // values are lisa's - 0x1A for CAMF, 0x19 for FLSH - and they are
+        // distinct from CAMP/JPGE/VFE0/CPHY/CSID/CSI1/CSI2's, which is the
+        // property that matters: a `_UID` that collides silently renames a
+        // device.
+        //
+        // What is deliberately *not* written here, and why. lisa's CAMI
+        // (QCOM0A99), CAMT (QCOM0ACE) and CAMU (QCOM0ACF) are gated on
+        // `\_SB.SKUV`: on the IDP variant `SKUV == One`, CAMI's `_STA`
+        // returns Zero and CAMT/CAMU's do too, so those three sensors are
+        // *disabled* on exactly the board this file's `PSUB` names
+        // ("IDP07280", 4.264). Writing them enabled would contradict that
+        // token, and writing them disabled would add namespace that drives
+        // nothing. gauguin's tree, however, carries more camera modules than
+        // the front sensor alone - `qcom,eeprom@0` through `@4` across both
+        // CCI buses and `qcom,flash_0/@1/@2` - so whether gauguin is really
+        // the IDP configuration lisa disables them for is an open question
+        // this file can state and cannot settle offline. It is recorded as
+        // owed rather than guessed at.
+        //
+        Device (CAMF)
+        {
+            Name (_HID, "QCOM0A06")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x1A)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CPHY
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (FLSH)
+        {
+            Name (_HID, "QCOM0A27")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x19)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CAMP
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                // lisa's own: an END_TAG and nothing else.
+                Name (RBUF, Buffer (0x02)
+                {
+                     0x79, 0x00                                       // y.
+                })
+                Return (RBUF) /* \_SB_.FLSH._CRS.RBUF */
+            }
+        }
+
+        //
         // The JPEG engine, and the one node in the chain that transfers from
         // the corpus byte for byte. lisa's JPGE is `_HID QCOM0A33`, `_UID 0x17`,
         // `_DEP` of CAMP and MMU0, and two windows with two interrupts:
