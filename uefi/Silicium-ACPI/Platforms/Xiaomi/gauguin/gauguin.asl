@@ -8178,5 +8178,635 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                 Return (Local0)
             }
         }
+        // ------------------------------------------------------------------
+        // The thermal family. qcthermalmdm7280.inf declares 27 ids and they are
+        // two halves that only work together: twelve sensor endpoints
+        // (QCOM04B4-04BF and QCOM06D4) and fifteen ThermalZone objects
+        // (QCOM04C0-04CE). A zone's _TZD names the endpoint it reads, so a zone
+        // with no endpoint behind it reports nothing and an endpoint with no
+        // zone over it is never sampled.
+        //
+        // They were left unwritten for twelve steps because in lisa the twelve
+        // endpoints are _STA-gated on \_SB.SKUV - they return Zero when SKUV is
+        // 4, 6 or 7 and 0x0F otherwise. But SKUV is a soft-SKU the firmware
+        // supplies, and the standing rule is that this file does not write a
+        // node whose enablement it cannot know. Two facts settle it:
+        //
+        //   1. The gate decides a question gauguin answers in hardware. The 4/6/7
+        //      branches are the SKUs whose modem thermal channels are absent. A
+        //      read of the running device says gauguin's are present: its live
+        //      thermal-zones carry 4G_pa_therm, 5G_pa_therm, modem-ambient-usr,
+        //      modem-lte-sub6-pa1/2, the modem-mmw* set and modem-skin-usr, and a
+        //      PMIC set of pm6150l-tz, pm7250b-tz and their bcl/ibat/vbat/vph
+        //      levels. A board with no modem sensors does not enumerate them.
+        //   2. On lisa the gate's else leg is the one that always runs: SKUV is
+        //      declared 0xFFFFFFFF and never written (4.272), so the comparison
+        //      is false on every read and the endpoints resolve to 0x0F there
+        //      too. renoir, a production Xiaomi board of this family, does not
+        //      gate them at all - its MPA returns 0x0F unconditionally - as do
+        //      cedros, lemonade and lahaina. So enabling them is the corpus's own
+        //      answer and not an invention.
+        //
+        // The ids stop at QCOM04C8 (nine zones), which is what renoir carries and
+        // one more than lemonade. lisa's _TZD set names nine of the twelve
+        // endpoints; MSKN, MJCT and MBCL are read by the zone family this board
+        // does not present (lisa's TZ10, TZ16 and TZ13 carry different _HIDs), so
+        // this file writes the nine zones renoir writes and no TZ51-TZ53 analog
+        // for the three endpoints it leaves unzoned - an endpoint with no zone
+        // would drive nothing. ACPI 6.5 leaves _TZD optional; the corpus writes
+        // it, so it is written here too.
+        //
+
+        Device (MPA)
+        {
+            Name (_HID, "QCOM04B4")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MPA1)
+        {
+            Name (_HID, "QCOM04B5")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBJ0)
+        {
+            Name (_HID, "QCOM04B6")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBJ1)
+        {
+            Name (_HID, "QCOM04B7")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBJ2)
+        {
+            Name (_HID, "QCOM04B8")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBJ3)
+        {
+            Name (_HID, "QCOM04B9")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBS0)
+        {
+            Name (_HID, "QCOM04BA")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBS1)
+        {
+            Name (_HID, "QCOM04BB")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBS2)
+        {
+            Name (_HID, "QCOM04BC")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MSKN)
+        {
+            Name (_HID, "QCOM04BE")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MJCT)
+        {
+            Name (_HID, "QCOM04BF")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (MBCL)
+        {
+            Name (_HID, "QCOM06D4")  // _HID: Hardware ID
+            Alias (\_SB.PSUB, _SUB)
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        ThermalZone (TZ51)
+        {
+            Name (_HID, "QCOM04C0")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MPA
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ51.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ51.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ51.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ51.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ51.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MPA
+                })
+            }
+        }
+
+        ThermalZone (TZ52)
+        {
+            Name (_HID, "QCOM04C1")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MPA1
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ52.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ52.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ52.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ52.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ52.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MPA1
+                })
+            }
+        }
+
+        ThermalZone (TZ53)
+        {
+            Name (_HID, "QCOM04C2")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBJ0
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ53.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ53.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ53.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ53.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ53.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBJ0
+                })
+            }
+        }
+
+        ThermalZone (TZ54)
+        {
+            Name (_HID, "QCOM04C3")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBJ1
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ54.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ54.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ54.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ54.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ54.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBJ1
+                })
+            }
+        }
+
+        ThermalZone (TZ55)
+        {
+            Name (_HID, "QCOM04C4")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBJ2
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ55.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ55.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ55.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ55.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ55.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBJ2
+                })
+            }
+        }
+
+        ThermalZone (TZ56)
+        {
+            Name (_HID, "QCOM04C5")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBJ3
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ56.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ56.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ56.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ56.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ56.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBJ3
+                })
+            }
+        }
+
+        ThermalZone (TZ57)
+        {
+            Name (_HID, "QCOM04C6")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBS0
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ57.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ57.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ57.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ57.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ57.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBS0
+                })
+            }
+        }
+
+        ThermalZone (TZ58)
+        {
+            Name (_HID, "QCOM04C7")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBS1
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ58.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ58.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ58.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ58.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ58.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBS1
+                })
+            }
+        }
+
+        ThermalZone (TZ59)
+        {
+            Name (_HID, "QCOM04C8")  // _HID: Hardware ID
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_TZD, Package (0x01)  // _TZD: Thermal Zone Devices
+            {
+                \_SB.MBS2
+            })
+            Name (TPSV, 0x0E60)
+            Method (_PSV, 0, NotSerialized)  // _PSV: Passive Temperature
+            {
+                Return (\_SB.TZ59.TPSV)
+            }
+
+            Name (TCRT, 0x0F5A)
+            Method (_CRT, 0, NotSerialized)  // _CRT: Critical Temperature
+            {
+                Return (\_SB.TZ59.TCRT)
+            }
+
+            Name (TTC1, One)
+            Method (_TC1, 0, NotSerialized)  // _TC1: Thermal Constant 1
+            {
+                Return (\_SB.TZ59.TTC1)
+            }
+
+            Name (TTC2, 0x02)
+            Method (_TC2, 0, NotSerialized)  // _TC2: Thermal Constant 2
+            {
+                Return (\_SB.TZ59.TTC2)
+            }
+
+            Name (TTSP, 0x0A)
+            Method (_TSP, 0, NotSerialized)  // _TSP: Thermal Sampling Period
+            {
+                Return (\_SB.TZ59.TTSP)
+            }
+
+            Method (_DEP, 0, NotSerialized)  // _DEP: Dependencies
+            {
+                Return (Package (0x01)
+                {
+                    \_SB.MBS2
+                })
+            }
+        }
+
     }
 }
