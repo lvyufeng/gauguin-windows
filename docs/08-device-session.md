@@ -44587,3 +44587,115 @@ workflow needs, and the screen photograph that `先读屏，再刷下一次` req
 There is still **no removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the
 partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.223 — the stall is input: the live guest answers `tab`, `space` and the arrow keys and is walked onto the seventh page of 4.222's census, while the monitor's mouse reaches nothing
+
+**What 4.222 left open.** 4.222 counted the old run's frames and named the digests, and it said in
+so many words that the census **bounds the freeze and says nothing about its cause**. 4.218 had asked
+the same question of the boot — *stuck or merely slow* — and answered it for the phase where a core
+sat at 86%. Neither answered it for the wizard pages, which is where both runs have spent their time:
+twenty-four written frames on the old run's first page and twelve on its last. This step asks the
+live continuation run, through its monitor, and the answer is not a hang.
+
+**The page the live run sat on is 4.222's fifth page.** `screendump` at 08:56:59 returned
+`801353dd` / md5 `daf6284e` — byte-identical to the frame the old census lists fifth of its seven
+pages, twelve of its eighty-six frames. The live run reached it at about 08:52 with `sendkey alt-n`
+and had not moved by 08:57:05, six minutes later. Two runs, two independent boots of the same stick,
+the same page held in both.
+
+**And it is waiting for input, not hung.** With that page on screen: `sendkey ret` wrote
+`screendump` `801353dd` again — **no pixel changed**. `sendkey tab` three times changed **452 pixels
+over 38 rows in exactly two rectangles**, `x 285..410 y 195..216` (146 px) and `x 186..231
+y 523..538` (306 px) — a focus ring erased in one place and drawn in another, nothing else on the
+page touched. `sendkey spc` then changed **72,591 pixels over 562 rows**, `y 19..580 x 42..757`
+— the whole content area, a different page (`17e3832c`). On that page `ret` changed **72,591 pixels
+back** to `5505d5dd`, and `spc` again changed **72,837** forward to `17e3832c`. Eight further `space`
+presses cycled those two digests four times with no third state; twelve `tab` presses on `17e3832c`
+changed **nothing at all**. Three focus states of the same content are on the record —
+`801353dd`, `d93a21fa` (206 px from it, the same two rectangles) and `5505d5dd` (452 px from it) —
+so the page has at least three focus positions, and one of its controls moves the wizard to
+`17e3832c` and back. A guest that renders a focus ring, repaints a page and comes back on the next
+keystroke is not stuck; it is waiting for a key that the injections this record has been using do not
+supply.
+
+**The wizard was then walked onto `6f34a8b4` — the seventh page of 4.222's census, held by the old
+run for twelve frames to 08:05:02.** From the page above, in order and with the pixel count of each
+change: `up` 210 px (`ac1362b9`), `up` 524 px (`7b197fb6`), `ret` 0, `spc` 2,417 px (`d82d0425`),
+`tab` 772 px (`f06bb8e4`), `ret` 14,655 px (`1676e480`), `alt-n` 402,376 px (`24733c04`), `alt-i`
+60,795 px (**`6f34a8b4`**). Three of those are focus moves and three are page-sized changes, and one
+of them — `24733c04` — is **byte-identical to the second frame this run itself wrote**, at 08:11,
+and to the old run's `shot-002`. The obvious reading of that identity is a reboot, and the serial log
+refuses it: `work/win11/qemu-stick2/serial.log` is still **370 bytes** with mtime 08:09:32, one
+firmware banner and one pair of `BdsDxe` lines for `Boot0001`. Nothing re-entered the firmware. So
+the frame is one the guest *renders*, not one it boots through — a screen the Setup draws both two
+minutes into a cold boot and eight hundred seconds later, and the one it drew between `1676e480` and
+the seventh page.
+
+**On that seventh page, `tab` cycles four focus states inside one panel.** `tab` from `6f34a8b4`
+gave `a6561879` (**9,928 px, `x 325..616 y 276..327`**), then `cee2cbcf` (9,928 px, `x 325..616
+y 311..363`), then `ce6e5f61` (5,660 px, `x 325..696 y 347..478`), then `6f34a8b4` again (5,660 px,
+`x 325..696 y 276..478`) — and the four repeat exactly on the next four presses. Every difference
+lies inside one rectangle, `x 325..696 y 276..478`; the rest of the page is untouched by any of them.
+From the first of those states the arrow and navigation keys move a *selection* rather than a focus
+ring: `down` 470 px (`1e9fd9d7`), `down` 316 px (`a900b3e8`), `down` 307 px (`106472d9`), each
+confined to `x 371..443 y 315..325` and each shortening the changed run's right edge — while `spc`
+and `ret` on that state change **nothing**, `pgdn`/`pgup` move 785 px in `x 326..424 y 315..359`,
+and `home`/`end` 591 and 544 px in `x 326..404 y 315..326`. The page sits at `2088b9ae` (md5
+`56891f20`) as of 09:08:37. Four `screendump`s 0.3 seconds apart are byte-identical, so whatever the
+selection is, it does not blink: this is not a text caret being watched, it is a highlight moved by
+arrow keys and left where it was put.
+
+**The monitor's keyboard reaches the guest; its mouse does not.** `info mice` answers
+`* Mouse #2: QEMU HID Tablet (absolute)` and the device is on the guest's bus — `info usb` lists
+`Device 0.2, Port 1, ... QEMU USB Keyboard`, `Device 0.3, Port 2, ... QEMU USB Tablet`, and two MSDs
+(`0.1`, Port 3, 5000 Mb/s and `0.5`, Port 4.1, 12 Mb/s behind a hub at `0.4`) — which is the
+emulated controller's own view and not a report of any guest driver. Against that: with the tablet
+selected as the current mouse, `mouse_move` clamped to the origin and then moved to an absolute
+position, followed by `mouse_button 1` and `mouse_button 0`, changed **0 pixels** at `(347, 205)`
+and **0 pixels** at `(208, 530)` — the two coordinates where this step had just proven a control
+exists, because `tab` in the *same* page state changed 9,928 pixels. Same page, same second, two
+keys: one visible, one invisible. The mouse path is not usable as an input instrument for this
+guest, and the positive control says so rather than the silence.
+
+**decides**: that the guest of the live continuation run answers injected keys — `tab` moving a focus
+ring by 200–450 px, `space` repainting 72,591–72,837 px between two page states, `ret` returning the
+72,591 px it had left, arrows and `home`/`end`/`pgdn`/`pgup` moving a 300–785 px selection — so the
+pages both runs have sat on are **waiting for input, not hung**, which is the answer 4.222 could not
+give to its own census and 4.218 gave only for the boot phase with a core at 86%; that the page the
+live run reached at about 08:52 and held through 08:56:59 is byte-identical (`801353dd` / md5
+`daf6284e`) to the fifth of the old census's seven pages, and that the live run has since been walked
+onto `6f34a8b4`, the **seventh and last** of those seven, held by the old run for twelve frames to
+08:05:02; that the frame between the two (`24733c04`) is byte-identical to this run's own `shot-002`
+**without a reboot**, the serial log standing unchanged at 370 bytes since 08:09:32 with one firmware
+banner; that the seventh page carries four keyboard-reachable focus states inside `x 325..696
+y 276..478` and a selection moved by the arrow keys in `x 326..443 y 315..359` that does not blink;
+and that the QEMU monitor's `mouse_move`/`mouse_button` deliver nothing observable to this guest while
+its `sendkey` demonstrably does, the control being 9,928 changed pixels for one `tab` in the same
+state in which two clicks changed zero. **does not decide**: what any of these pages say — this step
+transcribes no glyph, and the record has still read exactly one page of the two runs; whether the
+`801353dd` ⇄ `17e3832c` cycle through `space` is the wizard advancing and stepping back or one
+control opening and closing, the two being indistinguishable at this resolution because both repaint
+the whole content area; whether the seventh page's four focus states are four controls or one
+control's four states; whether the sub-minute freeze these runs exhibit and the old run's fifty
+minutes and four seconds on its first page share a cause, beyond both being pages that answer to a
+key; and whether the mouse silence is a guest without a pointer driver, a monitor whose relative
+deltas never reach an absolute device, or a pointer drawn outside the framebuffer `screendump`
+captures. **Not an action**: `sendkey`, `screendump`, `mouse_set`, `mouse_move`, `mouse_button`,
+`info mice` and `info usb` against the live monitor socket; `sha256sum`/`md5sum` and pixel reads on
+files under `work/`, which is gitignored. **Working state**: the run under test is the one 4.222
+named — launcher pid 954750 from 08:09:25, qemu pid 954767 at 61–68% of a core, `SECS=14400` killing
+it at about 12:09 — and it had written **twenty-eight** harness frames through `shot-029` at
+09:05:42, one frame number skipped. This step wrote its own `screendump`s to a new directory,
+`work/win11/qemu-probe/`, and verified each file's size before sending the key that would follow it,
+which is the fix for 4.222's lost frames: four `alt-n` presses were injected there while `screendump`
+was failing, and none of those presses can be accounted for. The two dry-run processes 4.222 recorded
+(pids 468162 and 471324, from 04:56:52 and 04:58:08) are still alive and were still not reaped. The
+guest has written nothing to `work/win11/qemu-stick2/disk.img` — its mtime is still 08:09:38, its
+creation — so no installation has begun on either run, and the pages this step drove through carry no
+disk I/O. **device state**: unchanged — `adb devices`, `fastboot devices`, `lsusb` and both tty
+globs are empty, so the three physical actions remain outstanding: a reset of the phone, the reboot to
+the bootloader the P3 `fastboot boot` workflow needs, and the screen photograph that `先读屏，再刷下一次`
+requires before any payload boots. There is still **no removable USB stick attached to this host**,
+which the P3 gate itself needs. `userdata` (107 GB, unbacked), the partition table and the firmware
+LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
