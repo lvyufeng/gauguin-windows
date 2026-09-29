@@ -34,9 +34,9 @@ FDT structure block, reading `#address-cells`/`#size-cells` from each parent so
 `reg` decodes correctly, finding the GIC and the PDC by `compatible` and
 phandle, and turning every node's `interrupts` and `interrupts-extended` into
 two sets: the GSIs it declares, and the GSIs it would declare if its SPI field
-had been written raw. Then, for each top-level `Device (X)` in the ASL, it
-matches the node overlapping the device's `_CRS` window most and classifies each
-GSI:
+had been written raw. Then, for each top-level `Device (X)` in the ASL and each
+of that device's `_CRS` windows, it matches the node overlapping the window most
+and classifies each GSI against the node of the block it belongs to:
 
     ok            in the node's GSI set
     SLIP          in the node's *raw SPI* set, and value + 32 is in its GSI set
@@ -53,11 +53,15 @@ that fails on those stops being read. `--strict` promotes it to a failure.
 address overlap, so a window on the wrong address is checked against whatever it
 landed on and can come back `ok`. It also cannot see a missing interrupt, only a
 wrong one, and it only knows the two encodings above - a GSI from a firmware
-table or a GPIO controller would read as `unaccounted`. Nor is there any check
-of which tree is authoritative: pass the tree the node was derived from, or the
-result is about the wrong file. `Resources/DTBs/gauguin.dtb` is the firmware's
-own 56-node tree and does not carry the camera nodes at all; the vendor tree
-pulled from the running phone's `/sys/firmware/fdt` (451 `/soc` children) does.
+table or a GPIO controller would read as `unaccounted`. It checks each line
+against *some* window's block, not against the window it was written next to, so
+a node that swapped two of its own lines would still pass; the pairing between
+`Memory32Fixed` and `Interrupt ()` within a `_CRS` is an ordering convention no
+tree records. Nor is there any check of which tree is authoritative: pass the
+tree the node was derived from, or the result is about the wrong file.
+`Resources/DTBs/gauguin.dtb` is the firmware's own 56-node tree and does not
+carry the camera nodes at all; the vendor tree pulled from the running phone's
+`/sys/firmware/fdt` (451 `/soc` children) does.
 
 Usage:
     tools/acpi-dt-crosscheck.py --dtb work/uefi/Mu-Silicium/Resources/DTBs/gauguin.dtb
@@ -389,6 +393,37 @@ def best_nodes(trees, window):
     return (with_int or hits), best
 
 
+def node_label(hits):
+    """The `tree path` label one node set is reported under."""
+    return " & ".join(sorted("%s %s" % (t.label, t.path[id(n)]) for t, n in hits))
+
+
+def window_sets(trees, windows):
+    """(nodes, gsi_set, raw_set) for each `_CRS` window, in source order.
+
+    One tuple per window, not one for the whole device. A device whose `_CRS`
+    carries N blocks declares N interrupts - one per block - and checking all of
+    them against `windows[0]`'s node asks the wrong block about N-1 of them. The
+    cost was visible from 4.253: `JPGE` is one driver over two blocks
+    (`jpegenc@ac4e000`, `jpegdma@ac52000`) and its second line, `0x1FB`, came
+    back `unaccounted` because only the first block was consulted. It was read
+    as a legitimate warning and resolved by hand; the tool should not have made
+    it a reader's job. A CSIPHY node aggregating four PHYs would have had three
+    of its four lines unverifiable, which is the failure class this tool exists
+    to name.
+    """
+    out = []
+    for w in windows:
+        nodes = best_nodes(trees, w)[0]
+        gs, rs = set(), set()
+        for tree, node in nodes:
+            g, r = tree.interrupts(node)
+            gs |= g
+            rs |= r
+        out.append((nodes, gs, rs))
+    return out
+
+
 def load(argv_dtb):
     """One Tree per --dtb, compiling a .dts through dtc when needed."""
     trees = []
@@ -454,30 +489,34 @@ def main():
         if not windows:
             unmapped.append((name, "no Memory32Fixed to match a node by"))
             continue
-        hits, _n = best_nodes(trees, windows[0])
-        if not hits:
+        if not best_nodes(trees, windows[0])[0]:
             unmapped.append((name, "no node overlaps 0x%X+0x%X"
                              % windows[0]))
             continue
-        gsi_set, raw_set = set(), set()
-        for tree, node in hits:
-            g, r = tree.interrupts(node)
-            gsi_set |= g
-            raw_set |= r
-        label = " & ".join(sorted("%s %s" % (t.label, t.path[id(n)])
-                                 for t, n in hits))
+        per_window = window_sets(trees, windows)
+        label = node_label(per_window[0][0])
+        extra = sum(1 for nodes, _g, _r in per_window[1:] if nodes)
+        if extra:
+            label += " +%d block(s)" % extra
         checked += 1
         ok_n = 0
         for g in gsis:
-            if g in gsi_set:
+            # Accounted, then a slip, then unaccounted - in that order and over
+            # every window before moving on. Deciding per window as it is
+            # scanned would call a line a slip because block 1 writes it raw
+            # while block 2 declares it correctly.
+            if any(g in gs for _n, gs, _r in per_window):
                 ok_n += 1
-            elif g in raw_set and (g + SPI_BASE) in gsi_set:
-                slips.append((name, g, g + SPI_BASE, label))
-            else:
-                elsewhere = []
-                for tree in trees:
-                    elsewhere += tree.claims(g)
-                unaccounted.append((name, g, label, elsewhere))
+                continue
+            slip = next(((nodes, gs) for nodes, gs, rs in per_window
+                         if g in rs and (g + SPI_BASE) in gs), None)
+            if slip:
+                slips.append((name, g, g + SPI_BASE, node_label(slip[0])))
+                continue
+            elsewhere = []
+            for tree in trees:
+                elsewhere += tree.claims(g)
+            unaccounted.append((name, g, label, elsewhere))
         print("  %-6s %-58s %2d/%2d GSI(s) accounted"
               % (name, label, ok_n, len(gsis)))
 
@@ -496,10 +535,10 @@ def main():
                       % (path, "  [as a raw SPI, not a GSI]" if is_raw else ""))
             if not elsewhere:
                 print("           no node in any tree declares it")
-        print("  These are warnings: an aggregate device carrying a second "
-              "block's line, a nested device's interrupt, or a line one tree "
-              "carries and another does not. Step 4.250's JPGE is the first - "
-              "one driver, two blocks, SPI 474 and 475.")
+        print("  These are warnings: a nested device's interrupt, a `_CRS` "
+              "that is a deliberate sub-window, or a line one tree carries and "
+              "another does not. A device's *own* second block is no longer "
+              "among them: it is checked against that block.")
         print()
     if slips:
         print("%d GSI(s) written as the raw device-tree SPI:" % len(slips))

@@ -781,6 +781,96 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // ------------------------------------------------------------------
+        // CPHY - the MIPI CSI PHYs: one node over four blocks.
+        //
+        // The driver is qccammipicsi7280.inf, `Class = Camera`, whose only
+        // models line is `%CameraMipiCsi.DeviceDesc%=CameraMipiCsi_Device,
+        // ACPI\QCOM0A98` - the plain spelling, so it binds whatever _SUB this
+        // board has - and whose cabinet ships one .sys. One driver instance is
+        // one node, which is VFE0's shape and not the CSIDs'.
+        //
+        // The layout is the corpus's, not this file's taste. lisa writes the
+        // same id as `MPCS`, `_UID 0x18`, `_DEP` of CAMP, and gives that one
+        // node FIVE 8 KB windows (0x0ACE0000..0x0ACE8000) and FIVE interrupts -
+        // so the PHYs are grouped in one node there and are grouped here. Its
+        // first three lines are 0x1FD, 0x1FE and 0x1FF, which are exactly this
+        // board's csiphy0/1/2 SPIs 477/478/479 turned into GSIs by +32. Two
+        // independent routes - lisa's DSDT and this board's device tree - reach
+        // the same three numbers, which is the strongest confirmation the +32
+        // rule has had outside this file.
+        //
+        // Windows are the tree's own in cell-index order, each +0x1000. Lines
+        // are the same order with SPI + 32, and csiphy3's SPI is 461 (0x1CD)
+        // rather than the 480 its neighbours' sequence would suggest, so its
+        // GSI is 0x1ED and not contiguous with the other three - the tree's
+        // numbering, not a slip. Each of the four SPIs is claimed by exactly
+        // one node, its own block.
+        //
+        // `_UID 0x18` is lisa's for this same node and this same id: it is a
+        // number a driver or platform package can key on, and unlike lisa's
+        // CAMS `0x15` it is not another node's identity. Nothing in this file
+        // claimed it. `_DEP` is CAMP alone, which is MPCS's whole list.
+        //
+        // Still owed: `qcom,vfe-lite@acc4000` and `qcom,csid-lite@acc8000`,
+        // live `ok` blocks with their own lines and no id of their own in the
+        // driver set.
+        //
+        Device (CPHY)
+        {
+            Name (_HID, "QCOM0A98")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x18)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CAMP
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0AC65000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Memory32Fixed (ReadWrite,
+                        0x0AC66000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Memory32Fixed (ReadWrite,
+                        0x0AC67000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Memory32Fixed (ReadWrite,
+                        0x0AC68000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001FD,         // csiphy0: dts SPI 477 (0x1DD) + 32
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001FE,         // csiphy1: dts SPI 478 (0x1DE) + 32
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001FF,         // csiphy2: dts SPI 479 (0x1DF) + 32
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001ED,         // csiphy3: dts SPI 461 (0x1CD) + 32
+                    }
+                })
+                Return (RBUF) /* \_SB_.CPHY._CRS.RBUF */
+            }
+        }
+
         Device (CSID)
         {
             Name (_HID, "QCOM0AA2")  // _HID: Hardware ID
