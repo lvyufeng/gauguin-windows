@@ -62,7 +62,28 @@ def _load_census():
     return mod
 
 
+def _load_blocks():
+    """Import acpi-hid-census.py for BLOCKS, the block table's one definition.
+
+    The two censuses are separate tools with separate scopes - this one sweeps
+    INFs, that one reads the ASL and the reference corpus - and BLOCKS lives
+    in the second.  Re-typing the twelve rows here would be a second copy of a
+    measured table, which is exactly the kind of drift the matrix is meant to
+    catch; so the block list is imported, not repeated.
+    """
+    import importlib.util
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "acpi_hid_census", os.path.join(here, "acpi-hid-census.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.BLOCKS
+
+
 C = _load_census()
+BLOCKS = _load_blocks()
 
 # An id no INF on disk claims, with the reason it is nonetheless correct.
 # Every entry here is a claim this port makes about the hardware, so each one
@@ -125,6 +146,116 @@ def acpi_claims(trees: list[str]) -> tuple[dict, dict]:
     return qcom, other, len(files)
 
 
+def peripheral_matrix(src, qcom, other):
+    """One row per addressable peripheral: is hardware, node, driver, binding.
+
+    The QCOM-HID sweep answers "is every id the table presents claimed".  It
+    cannot answer "is every piece of hardware addressable", because an id that
+    is *absent* is invisible to it.  So the matrix also carries the blocks the
+    device tree has and the table does not - discovered here by looking for a
+    node whose `_CRS` window *contains* the block base, the same containment
+    test `acpi-hid-census.py --census` uses, rather than an equality an ACPI
+    `_CRS` (often much coarser than the block it declares) would fail.
+    """
+    # Own-body per device (block minus nested Device subtrees), and the
+    # attributes the matrix reads: _HID, _CID, _STA-presence, the first window.
+    spans, stack, pend = [], [], None
+    i, n = 0, len(src)
+    D = re.compile(r"Device \((\w+)\)")
+    while i < n:
+        m = D.match(src, i)
+        if m and (i == 0 or src[i - 1] in " \t\n{"):
+            pend = (m.group(1), i)
+            i = m.end()
+            continue
+        c = src[i]
+        if c == "{":
+            stack.append(pend)
+            pend = None
+        elif c == "}" and stack:
+            top = stack.pop()
+            if top:
+                spans.append((top[0], top[1], i + 1))
+        i += 1
+
+    nodes = []  # (node, hid, cid, sta, base, length)
+    seen = collections.Counter()
+    for name, s, e in spans:
+        blk = src[s:e]
+        second = blk.find("Device (", 1)
+        head = blk if second < 0 else blk[:second]
+        hid = re.search(r'_HID,\s*"([^"]+)"', head)
+        cid = re.search(r'_CID,\s*"([^"]+)"', head)
+        sta = bool(re.search(r"\b(?:Name|Method) \(_STA\b", head))
+        win = re.search(r"Memory32Fixed \(ReadWrite,\s*(0x[0-9A-Fa-f]+),"
+                        r"\s*(0x[0-9A-Fa-f]+)", head)
+        seen[name] += 1
+        key = name if seen[name] == 1 else f"{name}#{seen[name]}"
+        nodes.append((key, hid.group(1).upper() if hid else None,
+                      cid.group(1).upper() if cid else None, sta,
+                      int(win.group(1), 16) if win else None,
+                      int(win.group(2), 16) if win else None))
+
+    def covers(base):
+        """The node whose window contains `base`, preferring the tightest."""
+        best = None
+        for node, hid, cid, sta, b, ln in nodes:
+            if b is None or ln is None:
+                continue
+            if b <= base < b + max(ln, 1):
+                if best is None or ln < best[5]:
+                    best = (node, hid, cid, sta, b, ln)
+        return best
+
+    rows = []
+    for label, base, _len, _dt, _why in BLOCKS:
+        hit = covers(base)
+        if hit is None:
+            rows.append((label, base, None, None, "-", "-", "NO NODE"))
+            continue
+        node, hid, cid, sta, b, ln = hit
+        why = "exact" if b == base else f"within 0x{b:08X}+0x{ln:X}"
+        # driver status, reusing the same three outcomes the sweep produces
+        if hid and hid in qcom:
+            bind = "BOUND"
+        elif cid and cid in other:
+            bind = "CLASS"
+        elif hid and hid in KNOWN_GAPS:
+            bind = "KNOWN-GAP"
+        elif hid:
+            bind = "UNEXPLAINED"
+        else:
+            bind = "NO _HID"
+        rows.append((label, base, node, hid, cid or "-", why, bind))
+    return rows
+
+
+# What each device-tree block's absence of an ACPI *Device node* means.
+#
+# `acpi-hid-census.py --blocks` lists the tree's blocks with a one-line
+# rationale each, and read as a work list it over-states the gaps: two of the
+# twelve describe hardware ACPI does not address with a `Device ()` at all, and
+# two more name a bus the tree itself disables.  The matrix has to say which
+# absence is a defect and which is the shape of the thing, or every run reads
+# as six failures.  Each entry below is a claim about the hardware, so each
+# carries the reason it is not a gap.
+ABSENCE_OK = {
+    "TSENS0": (
+        "no Device node by design - the on-die sensors are the ACPI "
+        "`ThermalZone (TZ0..TZ10)` objects (gauguin.asl:6252+), and "
+        "`qcthermalmdm7280.inf`'s 27 ids bind those, not a `_CRS` node. The "
+        "block itself is not Windows-addressable and has no driver."
+    ),
+    "TSENS1": (
+        "the second sensing block; same as TSENS0, encoded in the same "
+        "`ThermalZone` objects. See the tree: `tsens@c263000` and "
+        "`tsens@c265000` (phandles 0x39/0x3a) both feed the `soc` zone."
+    ),
+    "SE1": "the tree disables this bus (`i2c@888000 status = \"disabled\"`) - no slave, nothing to bind.",
+    "SE2": "the tree disables this bus (`i2c@980000 status = \"disabled\"`) - no slave, nothing to bind.",
+}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--infs", action="append", required=True, metavar="DIR",
@@ -132,6 +263,10 @@ def main(argv=None) -> int:
                          "with every tree you have or the answer is wrong")
     ap.add_argument("--asl", default="tools/acpi/gauguin.asl")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--matrix", action="store_true",
+                    help="print the per-peripheral drivability matrix: every "
+                         "device-tree block against the node that describes "
+                         "it and the driver that claims that node's id")
     a = ap.parse_args(argv)
 
     asl = open(a.asl, encoding="utf-8", errors="replace").read()
@@ -155,6 +290,41 @@ def main(argv=None) -> int:
     hid_ids = {x for x in node_of if re.fullmatch(r"QCOM[0-9A-F]{4}", x)}
 
     qcom, other, nfiles = acpi_claims(a.infs)
+
+    if a.matrix:
+        print(f"gauguin's device-tree blocks against the ACPI node that "
+              f"describes each,\nand the driver that claims that node "
+              f"({nfiles} INF(s) swept):\n")
+        w = max(len(l) for l, *_ in BLOCKS)
+        print(f"  {'block':<{w}}  {'node':<8} {'_HID':<12} {'_CID':<10} "
+              f"{'bind':<11} window")
+        bad = []
+        for label, base, node, hid, cid, why, bind in peripheral_matrix(
+                src, qcom, other):
+            note = ""
+            if bind == "NO NODE" and label in ABSENCE_OK:
+                bind = "NO NODE*"
+                note = ABSENCE_OK[label].split(" - ")[0].split(";")[0]
+            print(f"  {label:<{w}}  {str(node):<8} {str(hid or '-'):<12} "
+                  f"{cid:<10} {bind:<11} {why}")
+            if bind in ("NO NODE", "UNEXPLAINED"):
+                bad.append(label)
+        print()
+        print("  NO NODE      - the block has hardware and no ACPI node, so "
+              "Windows has no device to bind and nothing in Device Manager.")
+        print("  NO NODE*     - the absence is the shape of the hardware, not "
+              "a gap:")
+        for label, _b, node, *_rest in peripheral_matrix(src, qcom, other):
+            if node is None and label in ABSENCE_OK:
+                print(f"                   {label}: {ABSENCE_OK[label]}")
+        print("  UNEXPLAINED  - a node exists and no swept INF claims its id.")
+        if bad:
+            print(f"\nFAIL: {len(bad)} block(s) undrivable as tabled: "
+                  + ", ".join(bad))
+            return 1
+        print("\nPASS: every block either has a bound node, or its absence is "
+              "recorded with a reason.")
+        return 0
 
     rows = []
     for i in sorted(hid_ids):

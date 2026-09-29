@@ -254,3 +254,15 @@ addresses, and the full register map from `uefiplat.cfg`.
 The two things still missing for a complete P2 are the **GPIO pin assignments
 per peripheral** and the **ACPI table contents** — both of which P1's boot will
 let us verify empirically rather than guess.
+
+## Windows driver readiness — the static half
+
+This map is measured from the device and is mostly Linux/mainline-shaped. Which
+of these peripherals Windows can actually bind is a separate, measured question,
+answered per block by `tools/presented-id-coverage.py --matrix` (Step 4.291): it
+joins each of the twelve device-tree blocks to the ACPI node that describes it
+and the INF that claims that node's id — 6 bound, 4 absent by design with a
+recorded reason, and 2 gaps (SE0/`spi@880000` touchscreen, SE6/`spi@98c000` IR
+blaster), both SPI engines with no host driver. "Bound" is the *static* half
+only: a driver claiming the node is not a driver started on the phone, which is
+P2's to demonstrate.
