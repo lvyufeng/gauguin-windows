@@ -218,6 +218,62 @@ NAME_CID = re.compile(r'Name \(_CID, "(?:EisaId \(")?([^"]+)"')
 # answering to the id. `inf_claim_shapes` sorts the positions apart; nothing
 # should use this regex to decide that a set claims an id.
 INF_ACPI = re.compile(r"ACPI\\\s*([A-Za-z0-9_]{3,16})", re.I)
+# `INF_ACPI` stops at `&`, and the second spelling of a hardware id in this
+# corpus puts the vendor token before it: `ACPI\VEN_QCOM&DEV_0A36` is the same
+# id as `ACPI\QCOM0A36`, written the long way. Read with `INF_ACPI` alone that
+# line yields `VEN_QCOM` - a token that is not an id, and one every long-form
+# line in the file collapses into, so a whole spelling of the id disappears
+# into a single pseudo-name.
+#
+# Measured 2026-09-29 against `~/work/woa-ref/inf-7280`, over models lines and
+# `ExcludeFromSelect` only: the canonical reading is **160** ids where
+# `INF_ACPI` alone reads **154** real ids plus the pseudo-id `VEN_QCOM`, which
+# the report printed as "155 distinct `ACPI\` ids claimed" - a number that was
+# right by the accident of 154 + 1. The six ids only the long spelling names
+# are `QCOM0693`, `QCOM0694`, `QCOM0A36`, `QCOM0A6B`, `QCOM0AC3` and
+# `QCOM0AD5`, and **one of them binds with no qualifier at all** -
+# `qcdx7280.inf`'s `%QC_Device% = QCDX_Inst_Base, ACPI\VEN_QCOM&DEV_0A36` is a
+# plain hardware id, not a compatible, not an `ExcludeFromSelect` - so this is
+# not the harmless shape the note below used to call it. A driver that binds an
+# id nothing reported cannot be found by reading the report.
+#
+# The optional tail is kept because it decides whether the claim can bind *this*
+# board: `ACPI\VEN_QCOM&DEV_0A6B&SUBSYS_MTP07280` matches a device whose `_SUB`
+# is `MTP07280` and not one whose `_SUB` is anything else. Five ids in that set
+# are reachable only behind such a tail.
+INF_ACPI_LONG = re.compile(r"ACPI\\\s*VEN_([A-Za-z0-9_]{2,8})&DEV_"
+                           r"([A-Za-z0-9_]{3,16})((?:&[A-Za-z0-9_]+)*)", re.I)
+INF_SUBSYS = re.compile(r"&SUBSYS_([A-Za-z0-9_]+)", re.I)
+
+
+def canon_claims(text):
+    """`[(id, subsystem-or-None)]` for every `ACPI\\` id written in `text`.
+
+    Both spellings, canonicalised to the short one: `VEN_QCOM&DEV_0A36` and
+    `QCOM0A36` are the same id and arrive here as the same string, which is what
+    makes the two halves of a driver set comparable against one table. The
+    vendor token keeps its letters and the DEV code its hex digits, so the rule
+    is not QCOM-specific - `VEN_INT&DEV_33BA` becomes `INT33BA`, the form
+    Windows' own `ufxsynopsys`/`ARMH0180` ids are already written in.
+    """
+    out, seen = [], set()
+    for m in INF_ACPI_LONG.finditer(text):
+        sub = INF_SUBSYS.search(m.group(3) or "")
+        key = (m.group(1).upper() + m.group(2).upper(),
+               sub.group(1).upper() if sub else None)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    for m in INF_ACPI.finditer(text):
+        name = m.group(1).upper()
+        # anything the long form already read, including its own vendor token
+        if name.startswith("VEN_"):
+            continue
+        if (name, None) not in seen:
+            seen.add((name, None))
+            out.append((name, None))
+    return out
+
 # A third net, and it does not answer `INF_ACPI`'s question. An .inf names ids it
 # does not bind: `URS\QCOM0A8B&HOST` is a *child* of the ACPI node QCOM0A8B,
 # created by whoever binds the node, and a quoted `_HID` default written by an
@@ -241,22 +297,28 @@ INF_ACPI = re.compile(r"ACPI\\\s*([A-Za-z0-9_]{3,16})", re.I)
 # names, 20-hex-char `Mappings\TFTP\Default\<hash>` fragments, and hex literals
 # (`DEFAULT` 468, `X04` 47, `MCFG` 28, `AUTOLOGGER` 20, plus `PARAMETERS`,
 # `MAPPINGS`, `PROFILES`, `SOFTWARE`, `CONTROL`, `CURRENTCONTROLSET`,
-# `DRIVERSTORE`, country and carrier names, `0X00`-`0X37`). Two side effects of
-# the shape, both visible in that tally: the `&`-split below folds the five
+# `DRIVERSTORE`, country and carrier names, `0X00`-`0X37`). One side effect of
+# the shape is visible in that tally: the `&`-split below folds the five
 # `VEN_QCOM&DEV_*` forms (`&DEV_0A22`, `&DEV_0A28`, `&DEV_0A29`, `&DEV_0AC1`,
 # `&DEV_QCListenSoundModel`) into the single id `VEN_QCOM`, and
-# `UEFI\RES_{guid}` is filed as the id `RES_`.
+# `UEFI\RES_{guid}` is filed as the id `RES_`. This net answers "how else does
+# the set *name* an id", not "which ids does it claim", so the fold costs it
+# nothing - `inf_claim_shapes` is the reader that decides a claim, and it reads
+# both spellings in full. Until 2026-09-29 the comment here read "None of that
+# reaches a verdict this tree depends on", which `inf_claim_shapes`'s own note
+# now measures to be false: one of the six ids only the long spelling carries is
+# a plain hardware bind.
 #
-# None of that reaches a verdict this tree depends on: of the 42 ids in
-# `tools/acpi/gauguin.asl`, exactly one carries a bus note - `QCOM0A8B`, as
-# `URS\QCOM0A8B&FUNCTION` and `URS\QCOM0A8B&HOST`, both real. But an id whose
-# spelling collides with a registry key would print under `NOT CLAIMED` as
-# "named by this set on another bus" when the set had named nothing, which is
-# the same failure direction Step 4.151 removed from the claim column. Working
-# out what separates "names a device id" from "contains a path of that shape"
-# is left open rather than guessed at: every candidate rule (a bus whitelist, a
-# per-section scan, a path-shape test) can go stale without saying so, which is
-# what Step 4.149 was about.
+# What that net is *for* still has a gap worth reading: an id whose spelling
+# collides with a registry key would print under `NOT CLAIMED` as "named by this
+# set on another bus" when the set had named nothing, which is the same failure
+# direction Step 4.151 removed from the claim column. Deciding what separates
+# "names a device id" from "contains a path of that shape" is left open rather
+# than guessed at: every candidate rule (a bus whitelist, a per-section scan, a
+# path-shape test) can go stale without saying so, which is what Step 4.149 was
+# about. Of the 42 ids in `tools/acpi/gauguin.asl`, exactly one carries a bus
+# note - `QCOM0A8B`, as `URS\QCOM0A8B&FUNCTION` and `URS\QCOM0A8B&HOST`, both
+# real - so the gap has not yet cost this tree a verdict.
 INF_BUS = re.compile(r"([A-Za-z][A-Za-z0-9_]{1,11})\\\s*"
                      r"([A-Za-z0-9_]{3,20}(?:&[A-Za-z0-9_]+)?)")
 
@@ -286,8 +348,8 @@ def strip_inf_comments(text):
 
     An `.inf` comments with `;` to end of line, and the comments in a driver
     package are not decoration: they are the disabled half. Measured
-    2026-09-27 against `~/work/woa-ref/inf-7280`, three of its 158 `ACPI\\` ids
-    are claimed *only* by text a compiler never reads -
+    2026-09-27 against `~/work/woa-ref/inf-7280`, three of its `ACPI\\` ids are
+    claimed *only* by text a compiler never reads -
 
         QCOM0200   qciommu.inf, qciommuext7280.inf, qcsmmu7280.inf,
                    qcsyscache7280.inf, all four as the installer note
@@ -298,7 +360,11 @@ def strip_inf_comments(text):
         QCOM0190   qcslimbus7280.inf, the same installer note
 
     so `--bind` reported them claimed by files that bind nothing, and the set's
-    coverage was three ids larger than the set is. The failure direction is the
+    coverage was three ids larger than the set is. (The `158` that stood here
+    until 2026-09-29 came from reading with `INF_ACPI` alone; that reader's own
+    defect is the one `INF_ACPI_LONG` describes, and the count it gives is not
+    the count. The three ids are the finding and they did not change.) The
+    failure direction is the
     dangerous one and it is the same one `inf_claim_shapes` describes below: the
     answer says a driver answers to the id when no driver does, so a node written
     on the strength of it is absent from Device Manager with nothing to say why.
@@ -323,18 +389,30 @@ def strip_inf_comments(text):
 
 
 def inf_claim_shapes(text):
-    """(hardware, compatible, exclude-only, key-only) - where an `.inf` writes ids.
+    """Where an `.inf` writes ids: `{hw, compat, exclude, keyonly, subsys, plain}`.
 
     `INF_ACPI` answers "does this set contain the string `ACPI\\<HID>`", which is
     not the same question as "does a driver in this set bind it", and the gap
-    between the two is measured rather than hypothetical. Counting the three
-    positions apart, 2026-09-27:
+    between the two is measured rather than hypothetical. Counting the positions
+    apart, re-measured 2026-09-29 after `canon_claims` replaced `INF_ACPI` in
+    this function:
 
-        ~/work/woa-ref/inf-7280   155 ids   155 hardware, 0 elsewhere
-        boot.wim index 1           85 ids    76 hardware, 1 compatible,
-                                            3 ExcludeFromSelect, 5 key names
-        install.wim index 1       116 ids   105 hardware, 3 compatible,
-                                            3 ExcludeFromSelect, 5 key names
+        ~/work/woa-ref/inf-7280   160 ids   160 hardware, 0 elsewhere
+        boot.wim index 1           78 ids    65 hardware, 6 compatible,
+                                            3 ExcludeFromSelect, 4 key names
+        install.wim index 1       115 ids   105 hardware, 3 compatible,
+                                            3 ExcludeFromSelect, 4 key names
+
+    Every figure in that table moved when the reader changed, and the direction
+    is the reason to keep the reading rather than the number. The Kodiak set's
+    155 became 160 - the six ids written only as `ACPI\\VEN_QCOM&DEV_xxxx` were
+    invisible and the pseudo-id `VEN_QCOM` took their place. The two OS images
+    moved the other way, because a long-form claim now lands on its canonical id
+    instead of on the vendor token: `sdbus.inf`'s `ACPI\\VEN_INT&DEV_33BA&REV_0001`
+    is `INT33BA`, which the old reading filed as `VEN_INT` and therefore as a
+    different id from the `ACPI\\INT33BA.DeviceDesc` key it sits beside. The
+    earlier table read "155 ids 155 hardware" for this set and is preserved only
+    in `INF_ACPI_LONG`'s note, where it explains what it was measuring.
 
     A models line is `%description% = InstallSection, ACPI\\HARDWARE[,  ACPI\\COMPATIBLE...]`.
     The hardware id is the field that follows the install section; anything after
@@ -349,16 +427,17 @@ def inf_claim_shapes(text):
     The fifth shape is the one that made this a parser rather than a tally. A
     `[Strings]` entry is `ACPI\\Foo.DeviceDesc = "..."`, and its *key name* holds
     an `ACPI\\` token that `INF_ACPI` reads as an id the set claims. Three of the
-    five are keys for devices whose real ids are words:
+    four surviving keys are for devices whose real ids are words:
 
-        %ACPI\\DockDevice_Desc%   = NO_DRV,    ACPI\\DockDevice
-        %ACPI\\FixedButton_Desc%  = NO_DRV,    ACPI\\FixedButton
-        %ACPI\\ThermalZone_Desc%  = NO_DRV,    ACPI\\ThermalZone
+        ACPI\\DockDevice_Desc    = "Docking Station"
+        ACPI\\FixedButton_Desc   = "ACPI Fixed Feature Button"
+        ACPI\\ThermalZone_Desc   = "ACPI Thermal Zone"
 
-    so `INF_ACPI` reports `DOCKDEVICE_DESC` as an id. The other two are worse,
-    because the key is named after a *different* id that the file does not bind:
+    so `INF_ACPI` reports `DOCKDEVICE_DESC`, `FIXEDBUTTON_DESC` and
+    `THERMALZONE_DESC` as ids. The fourth is worse, because the key is named
+    after a *different* id from the one the models line binds:
 
-        %ACPI\\INT33BA.DeviceDesc%  = SDHostIntelEMMC, ACPI\\VEN_INT&DEV_33BA&REV_0001
+        ACPI\\ARMH_PL180.DeviceDesc = "ARM Holdings PL180 Secure Digital ..."
         %ACPI\\ARMH_PL180.DeviceDesc%= SDHostARMHPL180, ACPI\\ARMH0180
 
     `ARMH_PL180` is the ARM PrimeCell PL180, `ARMH0180` the id the models line
@@ -366,24 +445,47 @@ def inf_claim_shapes(text):
     was in use by a file that binds `ARMH0180`. That is the same species as the
     comment-only claims above and it fails in the same direction.
 
-    Returned as four sets, and the caller is expected to treat `key-only` as *not*
-    a claim: that bucket is what an id looks like when nothing claims it.
+    Until 2026-09-29 this listed `INT33BA` as a second instance of the "worse"
+    shape, on the strength of
+
+        %ACPI\\INT33BA.DeviceDesc%  = SDHostIntelEMMC, ACPI\\VEN_INT&DEV_33BA&REV_0001
+
+    which reads as a key named for one id over a models line binding another
+    only if `VEN_INT` and `INT33BA` are different ids. They are the same id - one
+    spelled `ACPI\\<HID>` and one spelled `ACPI\\VEN_<vendor>&DEV_<device>` - so
+    that entry was an artifact of the reader, not a finding about the file, and
+    `INT33BA` is now simply a hardware claim. The contrast is the whole reason
+    `canon_claims` exists: a reader that stops at `&` cannot tell a misfiled key
+    from a correctly spelled one.
+
+    Returned as a dict of six sets, and the caller is expected to treat
+    `keyonly` as *not* a claim: that bucket is what an id looks like when
+    nothing claims it. `subsys` is `{id: {SUBSYS token}}` for hardware claims
+    that carry one, and `plain` is the ids that have a hardware claim *without*
+    one. The two are needed together, because a qualifier's presence is not the
+    question - whether it is the *only* way the id is reached is. Three of this
+    file's ids look gated by the first reading and are not: `QCOM0A17` has a
+    qualifier on `qcpep.wd7280.inf`'s twelve `&SUBSYS_&REV_` lines and its
+    plain claim at line 33. So the reader who wants "reachable on this board
+    without a matching `_SUB`" subtracts `plain` from `subsys` across the whole
+    set, which is what `load_driver_set` does.
     """
     hw, compat, exclude, keyonly = set(), set(), set(), set()
+    subsys, plain = {}, set()
     for line in text.splitlines():
         if "=" not in line or "ACPI\\" not in line.upper():
             continue
         left, right = line.split("=", 1)
         head = left.strip().upper()
         if head.startswith("EXCLUDEFROMSELECT"):
-            exclude |= {m.group(1).upper() for m in INF_ACPI.finditer(right)}
+            exclude |= {i for i, _ in canon_claims(right)}
             continue
         if "%" not in left:
             # A `[Strings]` key, referred to elsewhere as `%<key>%`. The id in
             # the key's name is decoration unless a models line binds the same
             # id, which is exactly what the three-way split above measured.
             if head.startswith("ACPI\\"):
-                keyonly |= {m.group(1).upper() for m in INF_ACPI.finditer(left)}
+                keyonly |= {i for i, _ in canon_claims(left)}
             continue
         fields = right.split(",")
         if len(fields) < 2:
@@ -392,9 +494,16 @@ def inf_claim_shapes(text):
         # rather than dropped, so the id is not lost to a section-less line.
         body = fields if "ACPI\\" in fields[0].upper() else fields[1:]
         for i, field in enumerate(body):
-            for m in INF_ACPI.finditer(field):
-                (hw if i == 0 else compat).add(m.group(1).upper())
-    return hw, compat, exclude, keyonly
+            for hid, sub in canon_claims(field):
+                (hw if i == 0 else compat).add(hid)
+                if i:
+                    continue
+                if sub:
+                    subsys.setdefault(hid, set()).add(sub)
+                else:
+                    plain.add(hid)
+    return {"hw": hw, "compat": compat, "exclude": exclude,
+            "keyonly": keyonly, "subsys": subsys, "plain": plain}
 
 
 def load_driver_set(directory):
@@ -406,7 +515,12 @@ def load_driver_set(directory):
 
     `notes` is the second reader: how the set *names* an id besides claiming it,
     as `{"bus": {id: {form: file}}, "text": {file: uppercased text},
-    "shape": {id: {shape}}, "keyonly": {id: {file}}}`. It is what
+    "shape": {id: {shape}}, "keyonly": {id: {file}},
+    "subsys": {id: {SUBSYS token}}, "plain": {id}}`. The last two are the
+    `_SUB` question: `subsys` is every hardware claim carrying a
+    `&SUBSYS_<token>` and `plain` is every hardware claim without one, unioned
+    across the set, because whether an id is gated is `subsys - plain` and
+    neither set answers it alone. See `inf_claim_shapes`. It is what
     separates two absences that the `ACPI\\` column reports identically -
     `QCOM0A8B`, which two INFs in this set name as the parent of the children
     they bind, and `QCOM24A5`, which this set does not name at all. Kept in one
@@ -418,15 +532,16 @@ def load_driver_set(directory):
     An id reaches the `hids` bucket from a models line or an `ExcludeFromSelect`
     and from nowhere else, because those are the two places a driver says which
     ids it answers to. A `[Strings]` key name wearing an `ACPI\\` token is not
-    one of them: see `inf_claim_shapes` for the five ids in a Windows image that
-    were counted as claims on that basis alone.
+    one of them: see `inf_claim_shapes` for the four name strings in a Windows
+    image that were counted as claims on that basis alone.
     """
     inffiles = []
     for root, _dirs, names in os.walk(directory):
         inffiles += [os.path.join(root, n)
                      for n in names if n.lower().endswith(".inf")]
     hids, encodings = {}, {}
-    notes = {"bus": {}, "text": {}, "shape": {}, "keyonly": {}}
+    notes = {"bus": {}, "text": {}, "shape": {}, "keyonly": {}, "subsys": {},
+             "plain": set()}
     for inf in inffiles:
         try:
             raw = open(inf, "rb").read()
@@ -447,7 +562,12 @@ def load_driver_set(directory):
         text = strip_inf_comments(read_win_text(inf))
         rel = os.path.relpath(inf, directory)
         notes["text"][rel] = text.upper()
-        hw, compat, exclude, keyonly = inf_claim_shapes(text)
+        shapes = inf_claim_shapes(text)
+        for hid, toks in shapes["subsys"].items():
+            notes["subsys"].setdefault(hid, set()).update(toks)
+        notes["plain"] |= shapes["plain"]
+        hw, compat, exclude, keyonly = (shapes["hw"], shapes["compat"],
+                                        shapes["exclude"], shapes["keyonly"])
         for hid in hw | compat | exclude:
             # Once per *file*, not once per mention: an `.inf` names the id it
             # binds in `[Manufacturer]`, in `[ControlFlags]`'s
@@ -556,13 +676,18 @@ def print_set_header(inffiles, hids, encodings, notes):
     """One driver set's size, its encodings, and where its ids were written.
 
     The second line exists because "distinct `ACPI\\` ids" was counting three
-    different things and the count changed meaning without changing value. Of
-    boot.wim's 85 ids, 76 are the hardware id of a models line, 1 (`WACF006`)
-    is a compatible id, 3 (`NVDA0112`, `NVDA0212`, `TXNW0073`) are named only
-    by `ExcludeFromSelect`, and 5 are `[Strings]` key names that name no
-    device at all. Read as one number, the count answers a question nobody
-    asked: whether the *string* is present, rather than whether a driver
-    answers to the id.
+    different things and the count changed meaning without changing value.
+    Re-measured 2026-09-29 against `~/work/woa-ref/infs-arm64`: of boot.wim's
+    74 claimed ids, 65 are the hardware id of a models line, 6 (`PNP0CA0`,
+    `PNP0CA1`, `QCOMFFE1`, `QCOMFFEA`, `QCOMFFEB`, `QCOMFFEC`) are compatible
+    ids, and 3 (`NVDA0112`, `NVDA0212`, `TXNW0073`) are named only by
+    `ExcludeFromSelect`; 4 more name strings are `[Strings]` keys that name no
+    device at all and are reported in the line below rather than counted here.
+    (The figures that stood here until 2026-09-29 - 85, 76, 1, 3, 5 - were read
+    before `canon_claims`; the compatible count in particular moved because a
+    long-form compatible id now lands on its canonical id.) Read as one number,
+    the count answers a question nobody asked: whether the *string* is present,
+    rather than whether a driver answers to the id.
     """
     print(f"{len(inffiles)} .inf files, {len(hids)} distinct `ACPI\\` ids claimed")
     print(f"  encodings: {', '.join(f'{v} {k}' for k, v in sorted(encodings.items()))}")
@@ -618,12 +743,17 @@ def cmd_bind(args):
     One set is not the system, and which set is being read changes the answer.
     A vendor package answers for the blocks *its* board has; the OS answers for
     the ones Microsoft ships a driver for. Measured 2026-09-27: of the 34 ids
-    written in `gauguin.asl`, `~/work/woa-ref/inf-7280` claims 32 and leaves
-    `QCOM0A8B`/`QCOM24A5`, while a Windows 25H2 x64 `boot.wim`'s DriverStore
-    (339 INFs, 80 ids, via `tools/os-driver-store.sh`) claims exactly one of
-    them - `QCOM24A5`, in `storufs.inf` - and 33 the vendor set does. Neither
-    number is the coverage; the union is, and running one and reporting it as
-    the other is the same defect as the encoding bug above.
+    written in `gauguin.asl`, `~/work/woa-ref/inf-7280` claims 32 (re-measured
+    2026-09-29 with `canon_claims`, unchanged) and leaves `QCOM0A8B`/`QCOM24A5`,
+    while a Windows 25H2 x64 `boot.wim`'s DriverStore (339 INFs, via
+    `tools/os-driver-store.sh`) claims exactly one of them - `QCOM24A5`, in
+    `storufs.inf` - and 33 the vendor set does. The x64 store's id count read 80
+    under the pre-2026-09-29 reader and has not been re-read, because that
+    extraction is not on this host; the one claim it was cited for is a short
+    spelling (`ACPI\\QCOM24A5`) and so is unaffected.
+
+    Neither number is the coverage; the union is, and running one and reporting
+    it as the other is the same defect as the encoding bug above.
 
     The counts in the header are claims and not string occurrences: `--bind`
     prints the position each id was found in, because a compatible id is bound
@@ -684,6 +814,27 @@ def mention_lines(hid, notes):
                 f"{', '.join(seen[:3])}" + (f" +{len(seen) - 3}" if len(seen) > 3 else "")]
     return ["named nowhere in this set: no bus prefix, no quoted _HID default, "
             "no token at all"]
+
+
+ASL_SUB = re.compile(r'Name \(\s*PSUB\s*,\s*"([^"]+)"\s*\)')
+
+
+def read_psub(lines):
+    """The board's subsystem id, as the file presents it, or None.
+
+    Every device in this corpus writes `Alias (^PSUB, _SUB)` or a `_SUB` method
+    returning the same name, and `PSUB` is one `Name` at `Scope (_SB)` level -
+    so one read answers for the whole table. `\\.` -prefixed spellings and a
+    `_SUB` method returning a literal are both in the corpus; this reads the
+    `Name` form because that is the one this file uses, and returns None rather
+    than guessing when it is absent, so a missing token cannot be read as a
+    board that matches everything.
+    """
+    for line in lines:
+        m = ASL_SUB.search(line)
+        if m:
+            return m.group(1)
+    return None
 
 
 def bind_asl(args, hids, notes):
@@ -787,6 +938,37 @@ def bind_asl(args, hids, notes):
             for line in mention_lines(hid, notes):
                 print(f"                 {line}")
     print()
+
+    # An id claimed only behind `&SUBSYS_<token>` is claimed *for a board*, and
+    # the board is decided by its `_SUB`. Reported separately from `unclaimed`
+    # because the two need different fixes: an unclaimed id needs a driver, and
+    # this needs either a `_SUB` the `.inf` accepts or a models line for ours.
+    # The board's token is read out of the file rather than passed in, so the
+    # answer cannot be computed for a board other than the one in hand; `--sub`
+    # overrides it for asking about a different one.
+    subsys = notes.get("subsys") or {}
+    if subsys:
+        psub = args.sub or read_psub(lines)
+        gated = {h: t for h, t in subsys.items() if h not in notes["plain"]}
+        print(f"  {len(gated)} of this set's {len(subsys)} subsystem-qualified ids "
+              f"have no unqualified models line, so they bind only a board whose")
+        print(f"  _SUB is one of their tokens; this board's _SUB is {psub!r}")
+        here = sorted(h for h in used if h in gated)
+        if here:
+            for hid in here:
+                toks = sorted(gated[hid])
+                ok = "MATCHES" if psub in toks else "does not match"
+                print(f"    {hid:<12} needs _SUB in {', '.join(toks)}  "
+                      f"({ok} this board)")
+        else:
+            print("  None of them is in this file, so no id here is gated on the")
+            print("  subsystem id - it is the constraint on the nodes this file")
+            print("  does not have yet, not on the ones it has.")
+        print()
+        if psub is None:
+            print("  (No `_SUB` found in the file and none passed with `--sub`.)")
+    elif used:
+        print(f"  No id in this set is claimed behind a `&SUBSYS_` qualifier.\n")
 
     if unclaimed:
         print(f"  {len(unclaimed)} QCOM id(s) no driver in this set claims: "
@@ -1482,6 +1664,11 @@ def main():
                     help="with --drivers --bind: every _HID/_CID in this ASL file "
                          "against the set, and for each id nothing claims, how "
                          "else the set names it (default tools/acpi/gauguin.asl)")
+    ap.add_argument("--sub", metavar="TOKEN",
+                    help="with --drivers --bind: the board's ACPI subsystem id, "
+                         "overriding the one read from `Name (PSUB, ...)` in the "
+                         "ASL file - an id claimed only behind `&SUBSYS_<token>` "
+                         "binds a board whose _SUB is that token and no other")
     args = ap.parse_args()
     if args.blocks:
         cmd_blocks()
