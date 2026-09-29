@@ -347,21 +347,112 @@ class Tree:
 # The ASL side
 # --------------------------------------------------------------------------
 
+def own_scope(block):
+    """The device's own body with every nested `Device (...)` subtree removed.
+
+    Removing subtrees rather than cutting at an offset is what makes this right
+    in both cases at once. Cutting at the first nested `Device (` (the original
+    form) loses the parent's `_CRS` when a child is declared ahead of it - GPU0
+    declares MON0 at offset 350 of its block while its `_CRS` begins at 1007.
+    Cutting at the first nested device *after* `_CRS` instead keeps a child that
+    sits *before* `_CRS`, so URS0's MON0-shaped children stayed in its body and
+    made it look as though it declared interrupts, which it does not. Subtracting
+    the subtrees has neither failure: the parent keeps its own `_CRS` wherever
+    the child was written, and inherits nothing from it.
+
+    Nested interrupts must not read as the parent's - that is the mistake 4.252
+    documents for URS0 nesting USB0 and for PEP0 and ADC1 nesting children.
+    """
+    src = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+    src = re.sub(r"//[^\n]*", "", src)
+    out, i, n, depth = [], 0, len(src), 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            out.append(c)
+            i += 1
+            continue
+        if c == "}":
+            depth -= 1
+            out.append(c)
+            i += 1
+            continue
+        if depth == 1:
+            m = re.match(r"\s*Device \(\w+\)\s*", src[i:])
+            if m:
+                j = src.find("{", i + m.end())
+                if j != -1:
+                    d, k = 0, j
+                    while k < n:
+                        if src[k] == "{":
+                            d += 1
+                        elif src[k] == "}":
+                            d -= 1
+                            if d == 0:
+                                k += 1
+                                break
+                        k += 1
+                    i = k
+                    continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def interrupts_by_brace_depth(text):
+    """{device: count} for `Interrupt (` tokens, attributed by BRACE DEPTH.
+
+    Deliberately independent of `own_scope()` and `asl_crs()`, which it exists
+    to audit. Those two derive a device's own text from the source; this one
+    walks the source once and attributes each interrupt to whichever `Device`
+    is open at its brace depth, so a bug in either extractor cannot hide behind
+    the other. `tools/acpi-window-audit.py` uses the same technique for windows
+    and attributes GPU0's ten windows correctly, which is why it is trusted
+    here.
+    """
+    src = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    src = re.sub(r"//[^\n]*", "", src)
+    counts = {}
+    stack, pending = [], None
+    i, n = 0, len(src)
+    while i < n:
+        m = re.compile(r"Device \((\w+)\)").match(src, i)
+        if m and (i == 0 or src[i - 1] in " \t\n{"):
+            pending = m.group(1)
+            i = m.end()
+            continue
+        m = re.compile(r"Interrupt \(").match(src, i)
+        if m:
+            if stack:
+                counts[stack[-1]] = counts.get(stack[-1], 0) + 1
+            i = m.end()
+            continue
+        c = src[i]
+        if c == "{":
+            if pending is not None:
+                stack.append(pending)
+                pending = None
+            else:
+                stack.append(stack[-1] if stack else "?")
+        elif c == "}" and stack:
+            stack.pop()
+        i += 1
+    return counts
+
+
 def asl_devices(text):
     """{name: (block, own-body)} for `Device (X)` at 8 spaces.
 
-    The body is cut at the first nested `Device (` , which sits deeper than 8
-    spaces. Scanning a whole block instead is the mistake 4.252 documents: URS0
-    nests USB0, PEP0 and ADC1 nest children, and a whole-block scan reads a
-    child's interrupts as the parent's.
+    `own-body` is the block minus nested `Device` subtrees, so a child's
+    interrupts are never read as the parent's.
     """
     ms = list(re.finditer(r"^ {8}Device \((\w+)\)", text, re.M))
     out = {}
     for i, m in enumerate(ms):
         end = ms[i + 1].start() if i + 1 < len(ms) else len(text)
         block = text[m.start():end]
-        nested = re.search(r"^ {12,}Device \(", block, re.M)
-        out[m.group(1)] = (block, block[:nested.start()] if nested else block)
+        out[m.group(1)] = (block, own_scope(block))
     return out
 
 
@@ -534,11 +625,17 @@ def main():
 
     slips, unaccounted, checked, unmapped, triggers = [], [], 0, [], []
     unamatchable = []  # interrupts no window can reach, whatever the base
+    # Every device that declares an interrupt, and every device this run names
+    # in a report. The difference is the silent-drop class: a device the tool
+    # read but never reported on, because some branch `continue`d before the
+    # print. GPU0 was there for six steps.
+    with_gsis, named = [], []
     for name, (block, body) in sorted(asl_devices(text).items()):
         crs = asl_crs(body)
         windows, gsis, typed = asl_resources(crs)
         if not gsis:
             continue
+        with_gsis.append(name)
 
         # Trigger check first, before any window can `continue` past it. A device
         # with no matchable window is exactly the device whose trigger nobody
@@ -561,22 +658,32 @@ def main():
                 triggers.append((name, g, trig, sorted(seen)))
 
         if not windows:
-            # Not always a harmless default. A device with NO window has no
-            # base to match on, so its interrupts are checked by nothing - and
-            # if none of them appears in any tree either, then not one line of
-            # its `_CRS` has been verified. GPU0 was in exactly that state
-            # through Steps 4.277-4.280: no slip, no unaccounted warning, and
-            # absent from both report lists, so its two GSIs (0x14C, 0x73)
-            # looked verified because they were never mentioned.
+            # A device that really has no `Memory32Fixed` has no base to match a
+            # node on, so its interrupts are checked by nothing - and if none of
+            # them appears in any tree either, then not one line of its `_CRS`
+            # has been verified. ADSP, AMSS, IPCC, NSP0, PEP0 and PM01 are the
+            # six here.
+            #
+            # This is NOT the class GPU0 was in, and the report must not be read
+            # as covering that one. GPU0 was dropped one branch earlier, at
+            # `if not gsis: continue`, because `asl_devices()` truncated its own
+            # body before its `_CRS` (a child declared ahead of the resources);
+            # through Steps 4.277-4.282 its two GSIs were read by no gate and
+            # named by no list. Step 4.283 fixed the extractor, and the lesson is
+            # the one below: a branch that `continue`s before the report hides
+            # its own input, so any device missing from BOTH lists has to be
+            # accounted for, not assumed checked.
             unmatchable = [g for g in gsis
                            if not any(t.claims(g) for t in trees)]
             if unmatchable:
                 unamatchable.append((name, unmatchable))
             unmapped.append((name, "no Memory32Fixed to match a node by"))
+            named.append(name)
             continue
         if not best_nodes(trees, windows[0])[0]:
             unmapped.append((name, "no node overlaps 0x%X+0x%X"
                              % windows[0]))
+            named.append(name)
             continue
         per_window = window_sets(trees, windows)
         label = node_label(per_window[0][0])
@@ -584,6 +691,7 @@ def main():
         if extra:
             label += " +%d block(s)" % extra
         checked += 1
+        named.append(name)
         ok_n = 0
         for g in gsis:
             # Accounted, then a slip, then unaccounted - in that order and over
@@ -654,9 +762,42 @@ def main():
         print("  both, because the tree does not settle it.")
         print()
 
-    ok = not slips and (not args.strict or not unaccounted)
-    print("%d device(s) cross-checked; %d slip(s), %d unaccounted"
-          % (checked, len(slips), len(unaccounted)))
+    # The GPU0 class, detected where it actually lives, and detected WITHOUT the
+    # extractor's own logic. A device whose source carries an `Interrupt` at its
+    # own brace depth while `asl_devices` + `asl_crs` find no interrupt in its
+    # own body has had its body cut away, so it was dropped at
+    # `if not gsis: continue` - and from inside the loop that is
+    # indistinguishable from a device with no interrupts, because `named` and
+    # `with_gsis` are both built after the drop.
+    truth = interrupts_by_brace_depth(text)
+    hidden = []
+    for name, (_block, body) in asl_devices(text).items():
+        if truth.get(name, 0) and not asl_resources(asl_crs(body))[1]:
+            hidden.append(name)
+
+    dropped = [n for n in with_gsis if n not in named]
+    if dropped or hidden:
+        if dropped:
+            print("%d device(s) with interrupts that NO report above names:" % len(dropped))
+            for n in dropped:
+                print("  %-6s read, then dropped by a branch that continues "
+                      "before the reports" % n)
+        if hidden:
+            print("%d device(s) whose full block declares interrupts but whose "
+                  "own body does not:" % len(hidden))
+            for n in hidden:
+                print("  %-6s `_CRS` cut away by the body extractor, so the "
+                      "device was dropped before any report" % n)
+        print("  These are UNVERIFIED and unreported at once. A device here has "
+              "passed every gate by being invisible to all of them.")
+        print()
+
+    ok = (not slips and not dropped and not hidden
+          and (not args.strict or not unaccounted))
+    print("%d device(s) cross-checked; %d slip(s), %d unaccounted%s"
+          % (checked, len(slips), len(unaccounted),
+             "" if not (dropped or hidden)
+             else ", %d hidden" % (len(dropped) + len(hidden))))
     print("PASS" if ok else "FAIL")
     return 0 if ok else 2
 
