@@ -648,31 +648,36 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // driver claims, so the node is interrupt-only, as `IPCC` and `PM01`
         // already are.
         //
-        // The `_DEP` is lisa's nine minus three (`:14913`): `PEP0`, `PILC`,
-        // `GLNK`, `IPC0`, `RPEN` and `TFTP` are all here, and `SSDD`, `ARPC`
-        // and `PDSR` are the three names this file does not have - the same
-        // trimming CAMP got, for the same reason: a `_DEP` naming a device that
-        // does not exist is a namespace violation, not a dangling reference.
-        // 4.263 checked whether the trim is still owed as a pair and it is:
-        // `qcsubsys7280.inf:49` claims `ACPI\QCOM0A20` (SSDD) plainly and
-        // `:45`-`:52` is one models block, so all four of `ADSP`, `QSM`, `SSDD`
-        // and `AMSS` bind *together* on any `_SUB` or not at all. Writing one
-        // of them alone buys nothing and is not a half-step, and writing all
-        // four is the step that follows.
+        // The `_DEP` is lisa's nine (`:14913`) and **is now complete**. From
+        // this step's own point it read lisa's nine minus three: `PEP0`,
+        // `PILC`, `GLNK`, `IPC0`, `RPEN` and `TFTP` were here, and `SSDD`,
+        // `ARPC` and `PDSR` were the three names this file did not have - the
+        // same trimming CAMP got, for the same reason: a `_DEP` naming a device
+        // that does not exist is a namespace violation, not a dangling
+        // reference. 4.263 checked whether the trim was still owed as a pair
+        // and it was: `qcsubsys7280.inf:49` claims `ACPI\QCOM0A20` (SSDD)
+        // plainly and `:45`-`:52` is one models block, so all four of `ADSP`,
+        // `QSM`, `SSDD` and `AMSS` bind *together* on any `_SUB` or not at all.
+        // The DSP package step below writes all four plus `ARPC`, `ARPD` and
+        // `PDSR`, so the three names are restored in lisa's own order and this
+        // node's list is lisa's list rather than a subset of it.
         //
         Device (ADSP)
         {
             Name (_HID, "QCOM0A1B")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, Zero)  // _UID: Unique ID
-            Name (_DEP, Package (0x06)  // _DEP: Dependencies
+            Name (_DEP, Package (0x09)  // _DEP: Dependencies
             {
                 \_SB.PEP0,
                 \_SB.PILC,
                 \_SB.GLNK,
                 \_SB.IPC0,
                 \_SB.RPEN,
-                \_SB.TFTP
+                \_SB.SSDD,
+                \_SB.ARPC,
+                \_SB.TFTP,
+                \_SB.PDSR
             })
             Method (_STA, 0, NotSerialized)  // _STA: Status
             {
@@ -692,6 +697,240 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        // ------------------------------------------------------------------
+        // The DSP package - AMSS, NSP0, QSM, SSDD, ARPC, ARPD, RFS0, IMM0,
+        // IMM1 - written as one step because they bind as one.
+        //
+        // The binding is the reason and it is measured, not assumed.
+        // `qcsubsys7280.inf` carries `ADSP`, `QSM`, `SSDD` and `AMSS` in a
+        // single models block (`:45`-`:52`), all four plain
+        // (`%AMSS.DeviceDesc%=SUBSYS_Device, ACPI\QCOM0A1C` and so on, no
+        // `&SUBSYS_` on any of them), so the four are either all present in the
+        // namespace or the package's own child list is half-satisfied; and
+        // `ARPC`/`ARPD` are the ADSP's RPC endpoints, which is what their `_DEP`
+        // says outright. This was owed since 4.246 named ARPC and NSP0 as
+        // missing CAMP dependencies and 4.263 named the quartet as one.
+        //
+        // **The ids and the dependency shape are lisa's; every interrupt is
+        // this board's.** That split is not a convenience, it is the lesson the
+        // ADSP node already records twice over: gauguin and lisa do not share a
+        // PCIe/SPI block layout, so lisa's SPI numbers are not this board's SPI
+        // numbers even when a device is the same device. lisa's `AMSS` asks for
+        // `0x128`; gauguin's modem `remoteproc@4080000` declares
+        // `interrupts-extended = <&gic 0 0x88 4 ...>` with
+        // `interrupt-names = "wdog"` first, so the wdog SPI is `0x88` and the
+        // GSI is `0x88 + 32 = 0xA8`. lisa's `NSP0` asks for `0x262`; gauguin's
+        // cdsp `remoteproc@8300000` declares `<&gic 0 0x242 4 ...>`, so the GSI
+        // is `0x242 + 32 = 0x262` - **the same number, and that is a
+        // coincidence of two different SPIs one block apart, not a
+        // correspondence.** Both wdog lines carry type `0x01`, which is Edge in
+        // the DT's 4-value TYPE_TRIGGER encoding, so the corpus's `Edge`
+        // descriptor is right for both here rather than merely inherited.
+        //
+        // `QSM` is inert and carries it: `qcsubsys7280.inf`'s
+        // `%SERVICEMANAGER.DeviceDesc%` claims `QCOM0A1E`, so the node binds,
+        // but this board's firmware has no OSM/QMI service node at all - the
+        // DT has no `qcom,glink` for it and `remoteproc@4080000`'s only
+        // `glink-edge` is the modem's - so the service manager is
+        // enumerated-and-idle, the same status `SCSS` and `SPSS` were given in
+        // 4.263 and for the same stated reason. It is written rather than
+        // skipped because the four-node block binds together.
+        //
+        // `RFS0` is deliberately **not** copied from lisa. lisa's `_CRS` is
+        // three `Memory32Fixed` windows whose addresses are `RMTB`, `RMTX`,
+        // `RFMB`, `RFMS`, `RFAB`, `RFAS`, and those six names at
+        // `DSDT.dsl:229`-`:234` are the literals `0xAAAAAAAA`, `0xBBBBBBBB`,
+        // `0xCCCCCCCC`, `0xDDDDDDDD`, `0xEEEEEEEE`, `0x77777777`. A resource
+        // body that evaluates to six placeholders is not a resource body; it is
+        // an unwritten stub, and copying it would hand the remote-filesystem
+        // driver three windows that overlap nothing. The node is written with
+        // the id, the `_SUB` and the `_DEP` (lisa's one entry, `IPC0`, which
+        // exists here) and no `_CRS`, exactly as `ARPC`, `ARPD`, `PDSR` and
+        // `QSM` are written. The alternative - finding this board's real remote
+        // windows - has no source: the modem firmware image is not in the
+        // corpus and the DT describes the remoteproc's memory regions as
+        // reserved-memory nodes, which are firmware load addresses and not what
+        // this driver binds.
+        //
+        // `IMM0`/`IMM1` are one id twice with two `_UID`s, and the idiom is the
+        // corpus's whole: lisa, a52sxq and renoir write byte-identical bodies,
+        // `IMM0` with no `_STA` and `IMM1` returning `0x0F`. That is not
+        // asymmetry to fix - it is the same shape this file already uses where
+        // a driver wants the first instance's status probed and the second
+        // present; it is copied rather than normalised.
+        //
+        // `_DEP` names only devices this file has. That trimming is the same
+        // one ADSP and CAMP got, and for the same reason (a `_DEP` naming a
+        // device that does not exist is a namespace violation, not a dangling
+        // reference) - with one improvement: `SSDD`, `ARPC` and `PDSR` were the
+        // three names ADSP had to drop, and all three exist by the end of this
+        // step, so ADSP's own `_DEP` is completed here rather than left short.
+        //
+        Device (AMSS)
+        {
+            Name (_HID, "QCOM0A1C")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_CCA, Zero)  // _CCA: Cache Coherency Attribute
+            Name (_DEP, Package (0x09)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.GLNK,
+                \_SB.PILC,
+                \_SB.RFS0,
+                \_SB.RPEN,
+                \_SB.SSDD,
+                \_SB.IPC0,
+                \_SB.TFTP,
+                \_SB.PDSR
+            })
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000000A8,
+                    }
+                })
+                Return (RBUF) /* \_SB_.AMSS._CRS.RBUF */
+            }
+        }
+
+        Device (NSP0)
+        {
+            Name (_HID, "QCOM0AB0")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x08)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.PILC,
+                \_SB.GLNK,
+                \_SB.IPC0,
+                \_SB.RPEN,
+                \_SB.SSDD,
+                \_SB.ARPC,
+                \_SB.PDSR
+            })
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x00000262,
+                    }
+                })
+                Return (RBUF) /* \_SB_.NSP0._CRS.RBUF */
+            }
+        }
+
+        Device (QSM)
+        {
+            Name (_HID, "QCOM0A1E")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x04)  // _DEP: Dependencies
+            {
+                \_SB.GLNK,
+                \_SB.IPC0,
+                \_SB.PILC,
+                \_SB.RPEN
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (SSDD)
+        {
+            Name (_HID, "QCOM0A20")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.GLNK
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (PDSR)
+        {
+            Name (_HID, "QCOM06DF")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x03)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.GLNK,
+                \_SB.IPC0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        Device (ARPC)
+        {
+            Name (_HID, "QCOM0A5C")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x04)  // _DEP: Dependencies
+            {
+                \_SB.MMU0,
+                \_SB.GLNK,
+                \_SB.SCM0,
+                \_SB.IMM0
+            })
+        }
+
+        Device (ARPD)
+        {
+            Name (_HID, "QCOM0A82")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.ADSP,
+                \_SB.ARPC
+            })
+        }
+
+        Device (RFS0)
+        {
+            Name (_HID, "QCOM0A15")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.IPC0
+            })
+        }
+
+        Device (IMM0)
+        {
+            Name (_HID, "QCOM068F")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, Zero)  // _UID: Unique ID
+        }
+
+        Device (IMM1)
+        {
+            Name (_HID, "QCOM068F")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, One)  // _UID: Unique ID
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
         //
         // The camera platform, and the first node of the camera chain. 4.246
         // measured the chain and scoped this node; this step writes it.
@@ -705,16 +944,26 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // one interrupt, so the node here is lisa's id and dependency shape with
         // gauguin's resources.
         //
-        // Three of lisa's five dependencies exist in this file already, which is
-        // why the _DEP can be written rather than trimmed. PMIC and PML0 are
-        // here with the ids lisa gives them (`QCOM0A2B` at :751, `QCOM0AD3` at
-        // :940); PEP0 is here. The other two - ARPC and NSP0 - are not, and the
-        // step 4.246 addendum recorded all three of QCOM0A5C, QCOM0A82 and
-        // QCOM0AB0 as bindable in the set. They are left out of the _DEP for the
-        // reason the JPGE node is not written yet: a _DEP naming a device that
-        // does not exist is a namespace violation, not a dangling reference.
-        // `SKUV` is a name this file has and lisa's CAMP also reads; it is not
-        // in lisa's _DEP list and is not a device.
+        // All five of lisa's dependencies are now written, which is why the _DEP
+        // is lisa's five rather than a trimmed three. PMIC and PML0 are here
+        // with the ids lisa gives them (`QCOM0A2B`, `QCOM0AD3`); PEP0 is here;
+        // and ARPC and NSP0 - which this comment used to say were absent, and
+        // which the 4.246 addendum recorded as bindable in the set - are
+        // written by the DSP package step above. They were left out until then
+        // for the reason the JPGE node is still unwritten: a _DEP naming a
+        // device that does not exist is a namespace violation, not a dangling
+        // reference.
+        //
+        // lisa's CAMP carries `Method (_SUB)` returning `"IDP07280"` when
+        // `SKUV == One` and `"IDP17280"` otherwise (`DSDT.dsl:752`-`:760`).
+        // That is an independent confirmation of the token 4.264 chose - the
+        // reference board for this PEP0 family names `IDP07280` in the table
+        // itself and not only in its INF set - and it is the second board, with
+        // a52sxq, to do so. This file keeps the plain `Alias (^PSUB, _SUB)`:
+        // `SKUV` is a name it has and lisa's CAMP reads it, but nothing on
+        // gauguin says which of the two tokens a board in this position
+        // reports, and `PSUB` already returns `IDP07280`, so the method would
+        // have exactly one reachable branch.
         //
         // The id is a plain claim - qccamplatform7280.inf:44 is
         // "%CameraPlatform.DeviceDesc%=CameraPlatform_Device, ACPI\QCOM0A32" -
@@ -740,11 +989,13 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             Name (_HID, "QCOM0A32")  // _HID: Hardware ID
             Alias (^PSUB, _SUB)
             Name (_UID, 0x1B)  // _UID: Unique ID
-            Name (_DEP, Package (0x03)  // _DEP: Dependencies
+            Name (_DEP, Package (0x05)  // _DEP: Dependencies
             {
                 \_SB.PEP0,
                 \_SB.PMIC,
-                \_SB.PML0
+                \_SB.PML0,
+                \_SB.ARPC,
+                \_SB.NSP0
             })
             Method (_STA, 0, NotSerialized)  // _STA: Status
             {
