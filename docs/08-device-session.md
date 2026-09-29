@@ -44745,3 +44745,128 @@ LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
 **The animated marquee is outside the window, and so is the text below it.** The window's frame ends at `y502`, and `y504`, `y520`, `y548`, `y560` and `y598` are all `(24,0,82)` across the **full 0..799** — so the dark field is not a desktop behind a floating window; below the window there is nothing but the same dark fill the window sits on. Inside that field, at `y534..544`, is a grey band `(188,188,188)` spanning `x0..799` with the green segment 4.224 timed at `x1..46` on its middle row `y538` — that is the marquee this record has been watching for three steps, and it is drawn on the dark field *below* the window, 32 px clear of it. The band carries one further mark no reading has mentioned: a **2-px dark vertical at `x208..209` crossing all three of its rows** (`y534`, `y538`, `y544` each break at `x208..209`), which is a division inside the band and not a glyph. Below the band, the bottom-left text strip at `y561..588` also sits directly on the dark field (`y575`: dark `x0..16`, ink `x17..18`, dark `x22..210`, ink `x211..214`, dark `x215..799`), not on any panel.
 
 **decides**: that `pg224.ppm` holds a window at `x78..714 y25..501` — 1-px `(174,173,174)` frame, `(217,217,217)` header band `y25..61` and footer band `y494..501` with 6-px side columns `x78..83` and `x709..714`, and a pure-white content area `x84..708 y62..493` — so the heading at `y89..100` and every text line this record has read sit inside `x84..708 y62..493` and the window-button cluster is the rounded shape at `x658..707 y24..58`; that the header band's blue label at `x144..224 y40..51` is a title-bar label of at least 7 + 5 glyphs whose measured run widths `10 2 6 6 6 8 4` / `5 5 3 6 6` and whose single left-sided descender at `x218..221 y49..51` fit `Windows Setup` and fit no three-word alternative; and that the grey band `y534..544` carrying the 1.70-second green marquee lies **outside** the window on the same `(24,0,82)` field as the bottom-left text strip, with a 2-px dark division at `x208..209` crossing it. **does not decide**: what the header graphic `x86..138 y32..59` depicts, the annulus-with-four-strokes and the blue block beside it being measured but unread; whether the title text is the literal string `Windows Setup` or a different 7+5 shape of the same widths, since the identification is a run-count and width fit and not a letter-by-letter reading of all twelve glyphs; what the 2-px division at `x208..209` divides, or what the marquee's animation is a progress of; what the text at `y561..588 x12..327` says, whether it is one string or several, and what colour it is drawn in; and whether the dark field `(24,0,82)` is a desktop, a full-screen background, or the window's own background, the flat fill admitting all three. **Not an action**: pixel reads and a fill census over `work/win11/qemu-probe/pg224.ppm`, a file this step reads and does not write, plus `/tmp` PNGs; no file inside the repository changed except this step's own text, and the four preserved directories under `work/out/` were not written. **Working state**: the run is live and unchanged — launcher pid 954750 running `tools/qemu-boot-win11-iso.sh work/win11/stick/win11arm64-stick.img work/win11/qemu-stick2 14400` from 08:09:25, qemu pid 954767, `SECS=14400` killing it at about **12:09**; `disk.img` is 68,719,476,736 B at mtime **08:09:38** and `serial.log` **370 B** at **08:09:32**, so those frames still hold no installation begun and no reboot. The probe directory holds **158** frames in 218 MB and was read only. **device state**: unchanged — `adb devices`, `fastboot devices`, `lsusb` and both tty globs are empty, so the three physical actions remain outstanding: a reset of the phone, the reboot to the bootloader the P3 `fastboot boot` workflow needs, and the screen photograph that `先读屏，再刷下一次` requires before any payload boots. There is still **no removable USB stick attached to this host**, which the P3 gate itself needs. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.227 — the live page *is* the page `pg224.ppm` records: the two differ in 275 px at `x3..47 y534..544` and nowhere else, the window region is byte-identical across 29 frames and 56 minutes, and the green block never moves — only its sheen does, once every 1.73 s — so the previous window's "the guest left `pg224`'s state" reading was a marquee artefact and is withdrawn
+
+**What this step was opened to do, and what it found instead.** The window before this one rendered the
+live page but never looked at the render, and its own running notes read `shot-050` (09:47:45, `0d152fa8`)
+against `shot-051` (09:49:45, `d394fd5a`) as the guest *leaving* the page `pg224.ppm` records. So the open
+question was whether the page 4.225 and 4.226 have been reading for two steps is still the page the guest is
+on. It is. This step is a diff census rather than a reading, and the census answers that question and three
+smaller ones the record had left standing: how many pixels of the page actually change, what the moving
+region's geometry is, and on what period — the last of which 4.224 measured on the harness's own
+`screendump` cadence and this step measures independently on the QEMU monitor.
+
+**`pg224.ppm` is the live page, and the proof is a 275-pixel difference.** `md5sum
+work/win11/qemu-probe/pg224.ppm` is `276a42f6b19aef0d1fedf00b0af6f6ad`, and that is the digest of
+`shot-043.ppm`, `shot-044.ppm` and `shot-045.ppm` in the live run — three frames written between 09:33:44
+and 09:37:44. Diffed byte for byte against `shot-061.ppm`, the newest frame the run has written (10:09:47,
+`0d152fa8`), `pg224.ppm` differs in **275 pixels, bounding box `x3..47 y534..544`**, and in nothing else: the window at
+`x78..714 y25..501`, the white content area `x84..708 y62..493`, the heading band, the two links and the
+four paragraph bands are byte-identical between them. Every reading 4.225 and 4.226 made of `pg224.ppm` is
+therefore a reading of the page the guest is on now. The same diff settles the withdrawal below:
+
+| pair | pixels differing | bounding box |
+|---|---|---|
+| `pg224.ppm` vs live `shot-061` (10:09:47) | 275 | `x3..47 y534..544` |
+| `shot-043` (09:33:44) vs `shot-061` | 275 | `x3..47 y534..544` |
+| `shot-050` (09:47:45) vs `shot-051` (09:49:45) | 350 | `x2..47 y534..544` |
+| `shot-033` (09:13:43) vs `shot-061` | 353 | `x0..44 y534..544` |
+
+**The window region has not changed in 56 minutes, and 479,472 of the page's 480,000 pixels never change at
+all.** The run has written **29** frames inside the frozen window — `shot-033` at 09:13:43 through
+`shot-061` at 10:09:47, one every two minutes, `shot-022` and `shot-030` absent — and hashing only rows
+`y0..509` of each gives **one** value, `ce74a0b3`, for all 29. Counting per pixel across those 29 frames,
+exactly **528 pixels** take more than one value and the other **479,472** are byte-identical throughout;
+the 528 are exactly the box `x0..47 y534..544`. So the page is a still image with a 48×11 window cut in it.
+This corrects 4.224's figure: that step reported **479,787** pixels staying byte-identical, and 528 is the
+measured count, the difference being that 4.224 compared two frames whose marquee phases happened to be
+close rather than counting variability over the whole frozen set. The digest-per-frame convention this
+record has used since 4.222 was measuring the cut-out and hiding the fact that everything around it is
+frozen: 29 frames carry **9** distinct md5s, and those 9 digests correspond one-to-one with 9 distinct
+contents of the 528-pixel box, so under a frozen window the block *is* a complete frame invariant.
+
+**The green block does not move. Only its sheen does.** 4.224 timed "a green marquee bar at `x0..47`" and
+4.226 called it a marquee, which invites the reading that a green segment slides along the track. It does
+not. Taking the most common of the 9 states — `0d152fa8`, which covers **14 of the 29** frames including
+`shot-060` — its middle row `y538` is x0 `bcbcbc`, **x1..46 a single unbroken run of `(6,176,37)`**, x47..799
+`e6e6e6`; and its other rows agree: `y535` through `y543` are each x0 `bcbcbc`, x1..46 `06b025`, x47..799
+`e6e6e6`, with the track's two border rows `y534` and `y544` running `bcbcbc` **unbroken across all 800
+columns**, straight over the top and bottom of the block. In all **9** states the green extent measured along
+`y538` is `x1..46` — not one state in twenty-nine frames puts green at x47 or x0. So the block is a fixed
+46-px × 9-row rectangle `x1..46 y535..543` (414 px) sitting in the left end of a track that is itself
+`x0..799 y534..544`: `(188,188,188)` top and bottom border, `(230,230,230)` interior, the whole track 11 rows
+tall and the whole width of the screen, 32 px below the window's frame at `y502`, with the 2-px dark division
+4.226 found at `x208..209` crossing it. What changes between states is the block's **internal shading** — and
+that change is large. Averaged over the block's 46 px at `y538`, the sum of the three channels goes from
+**219** in `0d152fa8` (which is exactly `6+176+37`, i.e. perfectly flat) to **403** in `acd274c4`. In that
+brightest state the same row is a smooth travelling bump: `(42,192,63)` at x1, rising through `(111,224,117)`
+at x29..31, falling to `(88,213,100)` at x46; and the brightest single pixel in the block, `(156,233,160)` at
+`y543 x26..28`, is 2.4× the rest colour's luminance. The brightest column was found at **x1, x6, x29-30, x42
+and x46** across the 9 states, and the block's shading also spills one pixel left and right (column x0 and
+column x47 take tinted values, which is why the animated box is 48 px wide and not 46) and onto the two
+border rows (which is why it is 11 rows tall and not 9). **The bump is not a rigid translation**: in
+`e64b41c6` its brightest column is `x1` in rows `y535..y539` but `x12..x16` in rows `y540..y543`, a
+right-leaning axis, while in `acd274c4` the axis is at `x≈29` in every row. This step states both and fits
+neither to a law.
+
+**The period is 1.73 seconds, measured on a second instrument.** 4.224 timed the animation at 1.70 s from the
+harness's own two-minute frame cadence, which cannot resolve a sub-2-second cycle except by aliasing; the
+QEMU monitor can. Driving `screendump` through `work/win11/qemu-stick2/mon.sock` sixty times at ~0.26 s
+spacing and reading the block's middle row from each dump, the sweep's **onsets** fall at t = 1.855, 3.449,
+5.294, 6.867, 8.675, 10.542, 12.114 and 13.940 s — seven intervals whose mean is **1.726 s**, the interval
+the intervals alternating between 1.57-1.59 s and 1.81-1.87 s because 0.26 s does not divide the period. The block is byte-identical to
+`(6,176,37)` in **37 of the 60** samples, i.e. flat about three fifths of the time and lit for the other
+two fifths. Nine sweeps fall inside the 15.5 s of sampling and the brightest column advances strictly
+left-to-right in every one of them: **x1** in the first lit sample of all nine, then **x6** or **x18** in
+the middle sample of the four sweeps that catch three, then **x42** or **x46** in the last — so the sheen
+enters at the block's left edge and leaves past its right, dimming as it goes, the first sample's block mean
+`(54,197,73)` against the last's `(25,184,51)`. 4.224's 1.70 s and this 1.73 s agree, and the direction is
+new information.
+
+**The reading this step withdraws.** The previous window recorded the guest as having left `pg224`'s state
+between `shot-050` and `shot-051`. `shot-050` vs `shot-051` differ in **350 pixels, `x2..47 y534..544`** —
+the block, and nothing else. Neither frame differs from the other outside the 528-pixel box, both are inside
+the same frozen window (`ce74a0b3`), and both are two minutes apart in a run that has not rebooted. There
+was no page change at 09:49:45 or anywhere else in the run; 4.224's judgement that its odd digest `d31d406a`
+was a tear and not a state is corroborated rather than contradicted, and the withdrawal is recorded here so
+that a later window reading the raw digest timeline does not rederive a page change out of marquee phases.
+
+**decides**: that `work/win11/qemu-probe/pg224.ppm` (`md5 276a42f6b19aef0d1fedf00b0af6f6ad`, the digest of
+live frames `shot-043/044/045`) **is the page the live guest is on**, differing from the newest live frame
+`shot-060` in **275 px at `x3..47 y534..544`** and in nothing else, so 4.225's and 4.226's readings of it are
+readings of the current page; that the page's window is byte-identical across **29 frames spanning 09:13:43
+to 10:09:47** (hash `ce74a0b3` over rows `y0..509`) and that exactly **528** of its 480,000 pixels vary over
+that set, the other **479,472** being byte-identical — correcting 4.224's 479,787; that the animated block is
+a **fixed** 46×9 rectangle `x1..46 y535..543` of `(6,176,37)` in a screen-wide 11-row track `x0..799
+y534..544` whose border rows `y534`/`y544` run unbroken over it, so nothing slides and only the block's
+internal shading changes, from flat `(6,176,37)` up to a bump peaking at `(156,233,160)`; that the shading
+cycle has a mean onset interval of **1.726 s** measured directly on the monitor, with the sheen travelling
+**left to right** and the block flat in 37 of 60 samples; and that the previous window's "the guest left
+`pg224`'s state between `shot-050` and `shot-051`" is **withdrawn** — those two frames differ in 350 px
+confined to the marquee box, inside one frozen window, in a run that has not rebooted. **does not decide**:
+what the track is a progress of, or why a progress block would be fixed while its sheen moves; what the 2-px
+division at `x208..209` divides, or whether the track is a wizard control at all, given that it spans the
+full 800 px of the screen and lies below the window; what the bump's shape is — the brightest column's
+inconstant axis (`x≈13` in the lower rows of `e64b41c6` against a vertical `x≈29` in `acd274c4`) is reported
+and not explained; the progress band `y132..143` inside the window, the 14-row band `y304..317` whose only
+ink is one pixel at `x134`, the solid bar `y322..323 x128..369` and the filled block `y462..483 x624..694`,
+all four measured and none interpreted; and whether 4.224's `d31d406a` is reproducible, since this step
+corroborates the conclusion from the census without re-writing that frame. **Not an action**: byte reads,
+`md5sum` and diffs over `work/win11/qemu-probe/` (read only) and `work/win11/qemu-stick2/` (read only), the
+monitor driven with `screendump` only — no `sendkey`, no `mouse_move`, no `mouse_button`, no `stop`, no
+`quit` — and PNG/analysis artifacts written under `/tmp` only. No file inside the repository changed except
+this step's own text. **Working state**: the run is live and unchanged — launcher pid 954750 running
+`tools/qemu-boot-win11-iso.sh work/win11/stick/win11arm64-stick.img work/win11/qemu-stick2 14400` from
+08:09:25, qemu pid 954767 at 49.5% of a core and ELAPSED 01:59:37 at 10:09:03, `SECS=14400` killing it at
+about **12:09**; the run has now written **59** frames (147 MB), `disk.img` is 68,719,476,736 B at mtime
+**08:09:38** and `serial.log` **370 B** at **08:09:32**, so those frames still hold no installation begun and
+no reboot. The probe directory still holds **158** frames in 218 MB, read and not written. **device state**:
+unchanged — `adb devices`, `fastboot devices` and both tty globs (`/dev/ttyUSB*`, `/dev/ttyACM*`) are empty,
+and `lsusb` shows only the two root hubs and a wired Huawei mouse (12d1:10d8), no mass-storage device at all,
+so the three physical actions remain outstanding: a reset of the phone, the reboot to the bootloader the P3
+`fastboot boot` workflow needs, and the screen photograph that `先读屏，再刷下一次` requires before any payload
+boots. There is still **no removable USB stick attached to this host** — `lsblk` lists `sda` (476.9 G, RM=0)
+and `nvme0n1` (953.9 G, RM=0) and nothing removable — which the P3 gate itself needs. `userdata` (107 GB,
+unbacked), the partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is
+still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
