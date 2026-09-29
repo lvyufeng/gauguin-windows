@@ -595,9 +595,9 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             {
                 Name (RBUF, ResourceTemplate ()
                 {
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive, ,, )
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
                     {
-                        0x00000206,         // PDC pin 6, type 4: GSI 0x206
+                        0x00000206,         // PDC pin 6, type 1: GSI 0x206
                     }
                 })
                 Return (RBUF) /* \_SB_.ADSP._CRS.RBUF */
@@ -679,7 +679,16 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                         0x001FC0000,        // Address Base
                         0x00040000,         // Address Length
                         )
-                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    // Edge, because the tree and the corpus both say so and
+                    // only this file said Level. gauguin's tree attaches
+                    // 0x1EB to `qcom,cam-cpas@ac40000`, the same DT node
+                    // lisa's CAMP is built around, and it carries GIC type 1;
+                    // lisa's DSDT has CAMP Edge on all three of its GSIs
+                    // (0x1EC, 0x12F, 0x1EB). So `Level` on this one line was
+                    // a transcription slip, not a corpus default, and the
+                    // difference is worth recording: the two are
+                    // indistinguishable from one descriptor alone.
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Shared, ,, )
                     {
                         0x000001EB,
                     }

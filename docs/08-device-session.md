@@ -46084,3 +46084,109 @@ The SLIMbus/BT/audio subtree has been recorded as owed since 4.255, with the rea
 **decides**: that `ADSP\QCOM0A0F` (SLIMbus) and `ADSP\QCOM0A22` (ADCM) are published by `qcsubsys_ext_adsp7280.inf`'s `[ADSP_Children]` and `WPSS\QCOM0A28` (WLAN) by `qcsubsys_ext_wpss7280.inf`'s `[WPSS_Children]`, so the ADSP-node-only design 4.258 landed is enough for the chain and the "owed publisher" is withdrawn; that `CHLD` occurs **once** in the 112-INF set, as `NumChld = 0`, and none of the audio drivers carries a child-list API, so the corpus's `CHLD` idiom is not what this package uses; that **9 of the 47 ids this ASL presents** are `_SUBSYS`-gated and the current `MTP07225` opens zero of them, while `CRD07280` covers all nine (22 of 26 gated INFs) and `IDP07280` also covers all nine (19 of 26); that `_SUB` is the child's subsystem id and not the parent's, and that writing the reference board's token denies no board property, this file having already written lisa's `_CID` verbatim on URS0; and that only one audio device (`QCOM0A29`) hangs off the reference token's `AUDD` `CHLD`, the other three chain ids binding on their buses ungated. **does not decide**: whether the `Extension.Inf` child-list mechanism enumerates on Windows as read — the mechanism is documented but unexercised here; whether `CRD07280` or `IDP07280` matters in practice for this board's nine gated devices, since the camera and subsystem models lines are the same gated or ungated in most cases and the difference is the extension's registry entries rather than the base driver; whether the four remaining owed measurements below are worth their nodes; and whether any of it binds, no driver having bound anything on this device yet.
 
 **Not an action**: `cabextract` on the seven audio-chain cabinets into `/tmp/k260/`, `iconv -f UTF-16` over the BSP's INFs, `/usr/bin/grep -a` over the extracted `.sys` import tables and over `/tmp/lisa-dsdt/DSDT.dsl`, `python3` passes for the `_SUBSYS` token census, the gated-id/ASL-id join, the bus-access census and the `[ADSP_Children]` read, `dtc`. All read-only against `~/work/woa-ref` and the backups; **no device command was issued** — the last confirmed device state remains TWRP at `d25f844e  recovery`. **Files written: `docs/08-device-session.md` alone** — `tools/acpi/gauguin.asl` and its twin are unchanged from 4.258 and no node, id, window or `_SUB` was altered by this step. **No partition, seed, `boot` or storage was written**, no `fastboot fetch`, no QEMU process started or signalled, and none of `work/out/{p2-variants,p3-display,usb-host,p2-what}`, `work/win11/qemu-stick*`, `work/out/p3-stick/` or `work/out/.p3-stick-drivers/` was touched. `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The orphaned dry-run processes 468162 and 471324 were left alive, `bq6ik1shs` was not restarted and `br7srnvmx` was not started. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and the three physical actions — a screen photograph of the current `boot` payload, a reboot to the bootloader, and a USB 2.0 stick — remain with the user.
+
+## Step 4.262 — the trigger-mode check 4.258 called impossible is written, and it fires: the phone's own device tree makes the ADSP interrupt **edge**, not level; the "eleven PDC entries, all type 4" the last three steps rested on was a parser artefact, and the real count is nine with three distinct types, while PEP0's edge on `0x265` is not a slip because the corpus's own PEP0 asks edge for the same number
+
+**What was open.** Step 4.258 recorded two things as unmeasurable and this step closes one of them. The first was a count:
+*"the coincidence that every one of the eleven PDC entries in this tree is type 4 is recorded below as a limit rather than a confirmation"* — a limit,
+because a value that is the same everywhere confirms nothing about any single line. The second was the ADSP node's own trigger, written `Level, ActiveHigh` on that
+non-discriminating evidence, with *"whether `acpi-dt-crosscheck.py` should grow a trigger-mode check, which would require a tree that discriminates — this one does
+not"* left as the owed question. Both were measured this step. The value is not uniform, the count is not eleven, and the tree discriminates.
+
+**The count was a parser artefact and the type cell was being read as the wrong thing.** `interrupts-extended` entrances are `<phandle> <cells...>`, and the number of
+cells is the *controller's* `#interrupt-cells` — 3 for this board's GIC, 2 for its PDC — not a fixed 3. A first pass at this step walked every
+`interrupts-extended` in groups of three cells regardless of controller and got nonsense for the PPI/SPI entries, which is how the count came to look like eleven
+rather than nine and how pin 6's type came to read as `1` in one run and `4` in another depending on where the walk happened to land. Parsed by each controller's own
+cell count — which is what `tools/acpi-dt-crosscheck.py` has done since 4.256 and which this step's throwaway script did not — gauguin's tree carries **nine** PDC
+consumer entries, not eleven:
+
+| node | PDC pin | type | GSI |
+| --- | --- | --- | --- |
+| `remoteproc@3000000` (ADSP) | 6 | **1** | `0x206` |
+| `ssusb@a600000` (USB0) | 14 | 3 | `0x20E` |
+| `ssusb@a600000` (USB0) | 15 | 3 | `0x20F` |
+| `ssusb@a600000` (USB0) | 17 | 4 | `0x211` |
+| `qcom,tsens` uplow | 26 | 4 | `0x21A` |
+| `qcom,tsens` uplow | 28 | 4 | `0x21C` |
+| `qcom,tsens` crit | 27 | 4 | `0x21B` |
+| `qcom,tsens` crit | 29 | 4 | `0x21D` |
+| `spmi@…` | 1 | 4 | `0x201` |
+
+Three types, not one: `1` at pin 6, `3` at both USB edge pokes, `4` at every other line. The old reading of three steps had been an artefact of the same class this
+file keeps recording — an instrument that did not know the format, answering silently and wrongly.
+
+**And the same table is the discriminating measurement 4.258 asked for.** ADSP's pin 6 is type `1`, which is the GIC's edge type, while the eight other consumers are
+`3` and `4`. So the type cell is not uniform in this tree and does separate these lines, and the ADSP node's `Interrupt (ResourceConsumer, Level, …)` was wrong.
+**The descriptor is now `Edge, ActiveHigh, Exclusive`** at `tools/acpi/gauguin.asl:598`, and the twin in
+`uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl` was regenerated rather than hand-edited.
+
+**Two trees, one edge and one level, and the one that boots is the edge one — which took a second pass to get right and is the most useful thing to fall out of this
+step.** `work/twrp-trip/flashed.dtb` (the DTB the live payload actually passes) and `work/out/sm7225-xiaomi-gauguin.dtb` (the tree the firmware carries) both read
+`remoteproc@3000000`, PDC pin 6, type **1**. `/tmp/live-gauguin.dtb`, the vendor dump, reads the *same address, same SPI, same GSI* as `qcom,lpass@3000000` with
+type **4**. The three disagree on the type and agree on everything else — 486 either way — and that is a property of the two trees rather than of the number. The
+explanation is that they use different bindings: `flashed.dtb` and the payload's tree write the pin specifier `<&pdc 6 1>`, upstream's `qcom,pdc` binding where the
+second cell *is* the GIC type; the vendor tree writes the same cells under `qcom,lpass@3000000`, its own driver's name for the node, whose reader may or may not
+interpret that cell as a type at all. So the tree the firmware passes is the upstream one, its type cell is the one the ACPI descriptor has to match, and 4.258's
+`Level` was wrong against it. **The first reading of this step — that the vendor's `Level` was authoritative — was taken from the wrong tree and is withdrawn in this
+entry rather than carried:** the correction is what the paragraph records.
+
+**Three checks run against the three trees, and one of the lines one of them raises is a corpus default rather than a slip.** Against `/tmp/live-gauguin.dtb`:
+
+| device | GSI | ASL | the phone's tree | what it is |
+| --- | --- | --- | --- | --- |
+| `ADSP` | `0x206` | Edge | Level | **settled by the tree that boots**: the payload's tree and the flashed tree both say type 1, so the vendor dump's `Level` is its own spelling and the descriptor stays Edge |
+| `CAMP` | `0x1EB` | Level | Edge | **a ported line, and it was changed**: gauguin's `qcom,cam-cpas` — the *same DT node* lisa's `CAMP` is built around — says `interrupts = <0x00 0x1CB 0x01>`, type 1. lisa's DSDT has CAMP **Edge** on all three of its GSIs (`0x1EC`, `0x12F`, `0x1EB`), so this file's `Level` on its one GSI was a transcription slip and is corrected below |
+| `PEP0` | `0x265` | Edge | Level | **not a slip**: the tree's line is GIC type 4 on a *different* block — `system-cache-controller@9200000` / `pmu@90b6300` (LLCC/bwmon), not a PEP0 resource |
+
+The third is not a defect and the reason is stronger than the trigger cell. lisa's own `PEP0`, read out of `work/uefi/Mu-Silicium/Silicium-ACPI/Platforms/Xiaomi/lisa/Decompiled/DSDT.dsl`,
+carries the **identical eleven-interrupt `_CRS` byte for byte**, `Edge, ActiveHigh, Exclusive` on `0x265` included. The port copied that resource block whole; the
+board's device tree then attaches the number to a block PEP0 inherits. Writing the GIC SPI 0x83 back into two PEP0 lines would move the whole block from a table that
+compiles `0 Error` — they are its *only* interrupts — so the finding is recorded here and in **does not decide** rather than acted on.
+
+**CAMP was the second correction, and it is the same lesson one device over: the descriptor now follows the board's tree rather than the corpus's block.** lisa has
+`Edge` on the one GSI this board keeps, so the change is *to* the corpus's own value and not away from it. The comment at the site says so and the twin was
+regenerated. With both changes in, the check reports **one** line against the payload tree and the flashed tree — PEP0 — and **one** against the vendor dump, PEP0
+again, the ADSP disagreement having disappeared once the descriptor matches the type cell the booting tree carries.
+
+**The check is written into `tools/acpi-dt-crosscheck.py`, and its first placement was wrong in the way this tool has already named twice.** A GIC type cell decodes
+to the ACPI word the descriptor must carry (`1`/`2`/`3` edge, `4` level; `TYPE_TRIGGER`), `Tree.triggers(gsi)` returns the *set* of triggers every node declaring a
+number asks for (two nodes can share one — `system-cache-controller@9200000` and `pmu@90b6300` both sit on `0x265` — so a set and not a word), and `asl_resources`
+now returns the source's own trigger per line rather than a flag. The report is a warning and not a failure, because a mismatch is either a descriptor to change here
+or a corpus default the board overrides and only a reader can say which. **The asl loop was first written after the window-match logic**, where a device with no
+`Memory32Fixed` — `ADSP`, `CAMP`, `PEP0` and `PM01` among them, four of the nodes the check was written for — would `continue` past it and never be checked. Run
+against the payload tree the check printed nothing and the omission was silent; moved above the `continue`, the payload tree and both phone trees report the rows
+above. That is the third time in this file that a checker's own placement has made findings disappear rather than fail loud, and the fix is recorded where the tool
+prints.
+
+**The tree that will boot is the phone's, and this makes that concrete.** `flash.dtb`'s `__symbols__`/`ramoops` divergence from `work/out/sm7225-xiaomi-gauguin.dtb`
+(4.260) is the only difference between the tree inside the payload and the one ABL actually hands the kernel: ABL takes the payload's tree, applies the vendor
+overlay, and rewrites it (4.193's logfs), so the booting tree is the phone's in cell values and this board's in board-id. The practical consequence is the table
+above: **firmware that reads the trigger from the booting tree and the GSI from the table gets a level-high ADSP line on an edge pin**, and the P3 gate is the first
+place that can be seen. `Level, ActiveHigh` on type 1 is exactly the pairing an APIC/GIC line rejects at assert time, and it survived three steps because nothing
+that judged it existed.
+
+**decides**: that `interrupts-extended`'s cell count is the controller's `#interrupt-cells` and that the "eleven PDC entries, all type 4" the record has carried
+since 4.253 was a parser artefact — gauguin's tree carries **nine** PDC consumer entries at types **1, 3 and 4**; that the type cell is therefore discriminating in
+this tree after all, which is the measurement 4.258 asked for and could not find; that `Device (ADSP)`'s interrupt is **Edge**, not Level, corrected at
+`tools/acpi/gauguin.asl:598` and regenerated into the tracked twin, and that the change cites the right tree — the payload's tree and the tree ABL actually hands the
+kernel both read type `1` at that pin, while only the vendor dump's `qcom,lpass@3000000` reads `Level`, so the descriptor follows the tree that boots; that `tools/acpi-dt-crosscheck.py` now judges trigger mode, reports it as a warning per GSI against every tree at once, and that its first
+placement was wrong in the direction that hides findings rather than raising them; and that PEP0's `0x265` Edge is **not** a defect, because lisa's own PEP0 carries
+the identical eleven-interrupt `_CRS` verbatim and gauguin's tree attaches that number to an LLCC/bwmon block PEP0 inherits. **does not decide**: whether PEP0's `0x265` line should
+follow the board — the corpus's PEP0 and this one are the same resource block and they are its only interrupts, so changing it moves the whole device; whether the PDC pin 6 → GSI 486
+mapping survives the vendor tree's own loader, which the payload's tree and the phone's agree on and which the ASL therefore rests on unchanged; whether any of the
+three disagreements matters at runtime, since `acpiexec` has no GIC and no ITS and nothing here has seen a PnP manager; whether the `PEP0` block should be re-derived
+from gauguin's tree at all, that being a decision about a device this board's AML may never ask about; and whether the ADSP node compiles into an ACPI table the
+DSP's driver will actually open, which is the P3 gate and remains the P3 gate. **Not an action**: `dtc -I dtb -O dts` on both trees the phone owns; one Python pass
+re-decoding every `interrupts-extended` in each tree by the controller's own cell count; `iasl -tc tools/acpi/gauguin.asl` (`0 Errors, 26 Warnings, 109 Remarks,
+415 Optimizations`); `tools/acpi-runtime-check.py` (`PASS`, 50 top-level devices, 29 `_STA` bodies, 32 `_CRS` bodies identical and 0 mismatched); `tools/acpi-dt-crosscheck.py`
+against the payload tree, `/tmp/live-gauguin.dtb`, `work/twrp-trip/flashed.dtb` and the two at once, plus `--strict`; `tools/make_uefi_platform.py --repo . --xhci-host`;
+`diff`, `cmp`, `python3 -m py_compile`, `/usr/bin/grep`, `sed`, `wc`. **Files written**: `tools/acpi-dt-crosscheck.py` (the trigger check and its two placement
+fixes), `tools/acpi/gauguin.asl` and the regenerated `uefi/Silicium-ACPI/Platforms/Xiaomi/gauguin/gauguin.asl`, and this entry. **Two `iasl` artefacts under
+`tools/acpi/` (`DSDT.aml`, `gauguin.hex`) were written by the compile and deleted afterwards, neither being tracked.** **No file under `work/out/` was written** — the
+payloads in `work/out/p3-covered/` still carry the 4.258 table and would exercise neither the CSIPHY nodes nor the ADSP node, so a gate run on them would test a
+trigger this step just corrected. **No device command was issued** — the last confirmed device state remains TWRP at `d25f844e  recovery`; **no partition, seed,
+`boot` or storage was written**, no `fastboot` command of any kind, no `fastboot fetch`, no QEMU process started or signalled, and none of `work/out/{p2-variants,p3-display,usb-host,p2-what}`,
+`work/win11/qemu-stick*`, `work/out/p3-stick/` or `work/out/.p3-stick-drivers/` was touched. `device/dxe/UsbConfigDxe.efi` is still `sha256
+6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The orphaned dry-run processes 468162 and 471324 were left alive and untouched, `bq6ik1shs` was
+not restarted and `br7srnvmx` was not started. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and the three physical
+actions — a screen photograph of the current `boot` payload, a reboot to the bootloader, and a USB 2.0 stick — remain with the user.

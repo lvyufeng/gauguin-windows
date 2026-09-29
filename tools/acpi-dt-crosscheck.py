@@ -95,6 +95,14 @@ GIC_PPI = 1
 SPI_BASE = 32
 PPI_BASE = 16
 
+# Interrupt-specifier type -> the ACPI trigger the resource descriptor must carry.
+# GIC cells: 0 = SPI, 1 = PPI. PDC cells are <pin, type> and the type is the
+# *GIC* type the pin is routed as, so the same table decodes both. Only 1 and 4
+# are unambiguous; 2 (rising) and 3 (falling) are edge, which is also what 1
+# means but with a polarity the ACPI descriptor can express separately, so a
+# descriptor that says Edge satisfies all three. Used by `Tree.triggers`.
+TYPE_TRIGGER = {1: "Edge", 2: "Edge", 3: "Edge", 4: "Level"}
+
 
 def align4(n):
     return (n + 3) & ~3
@@ -240,24 +248,35 @@ class Tree:
         return out
 
     def _decode(self, phandle, cells_):
-        """One interrupt specifier -> (gsi, raw) or None."""
+        """One interrupt specifier -> (gsi, raw, trigger) or None."""
         if phandle == self.gic_phandle and len(cells_) >= 2:
             typ, num = cells_[0], cells_[1]
+            trig = TYPE_TRIGGER.get(cells_[2]) if len(cells_) >= 3 else None
             if typ == GIC_SPI:
-                return num + SPI_BASE, num
+                return num + SPI_BASE, num, trig
             if typ == GIC_PPI:
-                return num + PPI_BASE, num
+                return num + PPI_BASE, num, trig
             return None
         if phandle == self.pdc_phandle and len(cells_) >= 1:
             spi = self.pdc_pin_to_spi.get(cells_[0])
             if spi is None:
                 return None
-            return spi + SPI_BASE, spi
+            # <pin, type>: the second cell is the GIC type the pin is routed as.
+            trig = TYPE_TRIGGER.get(cells_[1]) if len(cells_) >= 2 else None
+            return spi + SPI_BASE, spi, trig
         return None
 
-    def interrupts(self, node):
-        """(gsi_set, raw_spi_set) from `interrupts` and `interrupts-extended`."""
-        gsis, raws = set(), set()
+    def interrupts_typed(self, node):
+        """[(gsi, raw_spi, trigger)] from `interrupts` and `interrupts-extended`.
+
+        The trigger is the ACPI word the descriptor must carry, or None when the
+        specifier's type cell says something this reader does not map. It is a
+        separate method rather than extra return slots on `interrupts` because
+        the accounting loop and the windows want the sets, while only the trigger
+        check wants the type - and the type is the one thing `qcom,pdc-ranges`
+        does *not* carry, since it is a cell of the consumer's specifier.
+        """
+        out = []
 
         parent = one(node, "interrupt-parent", self.gic_phandle)
         w = words(node, "interrupts")
@@ -266,8 +285,7 @@ class Tree:
             for i in range(0, len(w) - n + 1, n):
                 got = self._decode(parent, w[i:i + n])
                 if got:
-                    gsis.add(got[0])
-                    raws.add(got[1])
+                    out.append(got)
 
         w = words(node, "interrupts-extended")
         i = 0
@@ -279,9 +297,16 @@ class Tree:
             n = self.gic_cells if ph == self.gic_phandle else self.pdc_cells
             got = self._decode(ph, w[i + 1:i + 1 + n])
             if got:
-                gsis.add(got[0])
-                raws.add(got[1])
+                out.append(got)
             i += 1 + n
+        return out
+
+    def interrupts(self, node):
+        """(gsi_set, raw_spi_set) from `interrupts` and `interrupts-extended`."""
+        gsis, raws = set(), set()
+        for gsi, raw, _trig in self.interrupts_typed(node):
+            gsis.add(gsi)
+            raws.add(raw)
         return gsis, raws
 
     def descendants(self, node):
@@ -300,6 +325,21 @@ class Tree:
                 out.append((self.path[id(node)], False))
             elif gsi in raw_set:
                 out.append((self.path[id(node)], True))
+        return out
+
+    def triggers(self, gsi):
+        """The set of triggers every node declaring this GSI asks for.
+
+        A set, not one word: two nodes can claim the same number - the payload
+        tree has `pmu@90b6300` (bwmon) and `system-cache-controller@9200000`
+        (LLCC) on GSI `0x265` - and a reader has to see that before concluding
+        the ASL is wrong. A node with no type cell contributes nothing.
+        """
+        out = set()
+        for node in self.nodes:
+            for g, _raw, trig in self.interrupts_typed(node):
+                if g == gsi and trig:
+                    out.add(trig)
         return out
 
 
@@ -348,15 +388,27 @@ def strip_comments(text):
 
 
 def asl_resources(crs):
-    """(windows, gsis) as declared, in source order."""
+    """(windows, gsis, typed) as declared, in source order.
+
+    `gsis` is the flat list the accounting loop walks; `typed` is the same
+    interrupts as (gsi, trigger) with the trigger taken from the descriptor's own
+    second field, so the one check that *can* fail on a wrong trigger has the
+    source's word for it and not a default.
+    """
     crs = strip_comments(crs)
     windows = [(int(a, 16), int(b, 16)) for a, b in re.findall(
         r"Memory32Fixed \((?:ReadWrite|ReadOnly),\s*\n\s*0x([0-9A-Fa-f]+),"
         r"\s*\n\s*0x([0-9A-Fa-f]+),", crs)]
-    gsis = []
-    for m in re.finditer(r"Interrupt \(ResourceConsumer[^\n]*\n\s*\{([^}]*)\}", crs):
-        gsis += [int(x, 16) for x in re.findall(r"0x([0-9A-Fa-f]+)", m.group(1))]
-    return windows, gsis
+    gsis, typed = [], []
+    for m in re.finditer(
+            r"Interrupt \(ResourceConsumer, (Edge|Level),[^\n]*\n\s*\{([^}]*)\}",
+            crs):
+        trig = m.group(1)
+        for x in re.findall(r"0x([0-9A-Fa-f]+)", m.group(2)):
+            g = int(x, 16)
+            gsis.append(g)
+            typed.append((g, trig))
+    return windows, gsis, typed
 
 
 # --------------------------------------------------------------------------
@@ -480,12 +532,33 @@ def main():
             return 2
     print()
 
-    slips, unaccounted, checked, unmapped = [], [], 0, []
+    slips, unaccounted, checked, unmapped, triggers = [], [], 0, [], []
     for name, (block, body) in sorted(asl_devices(text).items()):
         crs = asl_crs(body)
-        windows, gsis = asl_resources(crs)
+        windows, gsis, typed = asl_resources(crs)
         if not gsis:
             continue
+
+        # Trigger check first, before any window can `continue` past it. A device
+        # with no matchable window is exactly the device whose trigger nobody
+        # else checks - ADSP, CAMP, PEP0 and PM01 are four of them here - and
+        # putting this loop after the window logic would keep it silent on the
+        # nodes it was written for. That is the failure this tool has recorded
+        # twice: an input it cannot parse is not a failure, it is a silence.
+        #
+        # Against every tree at once and against the union of every node that
+        # declares the number: two nodes can share a GSI with different types
+        # (`pmu@90b6300` is Level and `system-cache-controller@9200000` Level on
+        # 0x265, but the corpus's PEP0 asks Edge for the same number), so the
+        # report is a set and a reader has to see all of it.
+        for g, trig in typed:
+            want = "Level" if trig == "Level" else "Edge"
+            seen = set()
+            for tree in trees:
+                seen |= tree.triggers(g)
+            if seen and want not in seen:
+                triggers.append((name, g, trig, sorted(seen)))
+
         if not windows:
             unmapped.append((name, "no Memory32Fixed to match a node by"))
             continue
@@ -545,6 +618,18 @@ def main():
         for name, had, want, label in slips:
             print("  %-6s vs %s  had 0x%X  want 0x%X (dts SPI 0x%X + %d)"
                   % (name, label, had, want, had, SPI_BASE))
+        print()
+    if triggers:
+        print("%d interrupt trigger(s) the tree does not agree with:" % len(triggers))
+        for name, g, trig, seen in triggers:
+            print("  %-6s 0x%-5X  ASL %s  tree %s"
+                  % (name, g, trig, " & ".join(seen)))
+        print("  A warning, not a failure: this port writes several nodes from the")
+        print("  corpus's tables rather than from this board's tree, and a mismatch")
+        print("  is either a descriptor to change here or a corpus default that this")
+        print("  board overrides - two different findings, and only a reader can say")
+        print("  which. A GSI two nodes claim with different types is reported as")
+        print("  both, because the tree does not settle it.")
         print()
 
     ok = not slips and (not args.strict or not unaccounted)
