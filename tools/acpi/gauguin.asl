@@ -510,6 +510,154 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             }
         }
 
+        //
+        // The camera platform, and the first node of the camera chain. 4.246
+        // measured the chain and scoped this node; this step writes it.
+        //
+        // What makes CAMP the entry point is that everything else in the chain
+        // depends on it: lisa's JPGE is `_DEP` of CAMP and MMU0, MPCS of CAMP,
+        // VFE0 of MMU0/PEP0/CAMP. What makes it the hard one is that on lisa it
+        // has **no window at all** - its three GSIs have no _CRS to belong to
+        // and its top window lives inside VFE0 instead. gauguin is the other way
+        // round: `qcom,cam-cpas@ac40000` is a real node with three windows and
+        // one interrupt, so the node here is lisa's id and dependency shape with
+        // gauguin's resources.
+        //
+        // Three of lisa's five dependencies exist in this file already, which is
+        // why the _DEP can be written rather than trimmed. PMIC and PML0 are
+        // here with the ids lisa gives them (`QCOM0A2B` at :751, `QCOM0AD3` at
+        // :940); PEP0 is here. The other two - ARPC and NSP0 - are not, and the
+        // step 4.246 addendum recorded all three of QCOM0A5C, QCOM0A82 and
+        // QCOM0AB0 as bindable in the set. They are left out of the _DEP for the
+        // reason the JPGE node is not written yet: a _DEP naming a device that
+        // does not exist is a namespace violation, not a dangling reference.
+        // `SKUV` is a name this file has and lisa's CAMP also reads; it is not
+        // in lisa's _DEP list and is not a device.
+        //
+        // The id is a plain claim - qccamplatform7280.inf:44 is
+        // "%CameraPlatform.DeviceDesc%=CameraPlatform_Device, ACPI\QCOM0A32" -
+        // so unlike BTH0/CSW0/WLTM it binds a board with any _SUB.
+        //
+        // The three windows and the interrupt are the device tree's, in the
+        // order reg-names gives them: cam_cpas_top 0xAC40000 + 0x1000,
+        // cam_camnoc 0xAC42000 + 0x4600, core_top_csr_tcsr 0x1FC0000 + 0x40000,
+        // and one interrupt at DT SPI 459 = 0x1EB. That GSI is the positive
+        // identification: it is the third of lisa's CAMP interrupts (0x1EC,
+        // 0x12F, 0x1EB), and 0x12F is this file's own BAM1 line, which is why
+        // the other two are not written - they are other blocks' interrupts
+        // reached through the platform node on lisa's hardware split and have no
+        // counterpart here.
+        //
+        // _UID 0x1B is lisa's and is kept: nothing on this board contradicts it
+        // and it is one of the numbers a driver or a platform package can key
+        // on. _STA returns 0x0F and is inherited rather than copied - lisa
+        // writes the same.
+        //
+        Device (CAMP)
+        {
+            Name (_HID, "QCOM0A32")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x1B)  // _UID: Unique ID
+            Name (_DEP, Package (0x03)  // _DEP: Dependencies
+            {
+                \_SB.PEP0,
+                \_SB.PMIC,
+                \_SB.PML0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0AC40000,         // Address Base
+                        0x00001000,         // Address Length
+                        )
+                    Memory32Fixed (ReadWrite,
+                        0x0AC42000,         // Address Base
+                        0x00004600,         // Address Length
+                        )
+                    Memory32Fixed (ReadWrite,
+                        0x001FC0000,        // Address Base
+                        0x00040000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Level, ActiveHigh, Shared, ,, )
+                    {
+                        0x000001EB,
+                    }
+                })
+                Return (RBUF) /* \_SB_.CAMP._CRS.RBUF */
+            }
+        }
+
+        //
+        // The JPEG engine, and the one node in the chain that transfers from
+        // the corpus byte for byte. lisa's JPGE is `_HID QCOM0A33`, `_UID 0x17`,
+        // `_DEP` of CAMP and MMU0, and two windows with two interrupts:
+        //
+        //   Memory32Fixed (ReadWrite, 0x0AC4E000, 0x4000)
+        //   Memory32Fixed (ReadWrite, 0x0AC52000, 0x4000)
+        //   Interrupt { 0x1FA }   Interrupt { 0x1FB }
+        //
+        // gauguin's device tree has `qcom,jpegenc@ac4e000` and
+        // `qcom,jpegdma@0xac52000`, `reg` 0xAC4E000 + 0x4000 and
+        // 0xAC52000 + 0x4000, DT SPI 474 and 475 - which the SPI + 32 rule the
+        // two previous steps confirmed turns into 0x1FA and 0x1FB. Windows,
+        // lengths and GSIs are all identical, so nothing here is re-addressed
+        // and the only judgement is the id: qccamjpege7280.inf:70 is
+        // "%JpegE.DeviceDesc%=CameraJpegE_Device, ACPI\QCOM0A33", a plain
+        // models line. It waited one step because `_DEP` of `\_SB.CAMP` names a
+        // device this file did not have.
+        //
+        // The two interrupts are written Edge/ActiveHigh/Exclusive, lisa's form,
+        // where CAMP's is Level/Shared - the corpus is not uniform and the
+        // difference is the block's, the JPEG engine signalling on an edge and
+        // the platform node on a level.
+        //
+        Device (JPGE)
+        {
+            Name (_HID, "QCOM0A33")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x17)  // _UID: Unique ID
+            Name (_DEP, Package (0x02)  // _DEP: Dependencies
+            {
+                \_SB.CAMP,
+                \_SB.MMU0
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+
+            Method (_CRS, 0, NotSerialized)  // _CRS: Current Resource Settings
+            {
+                Name (RBUF, ResourceTemplate ()
+                {
+                    Memory32Fixed (ReadWrite,
+                        0x0AC4E000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Memory32Fixed (ReadWrite,
+                        0x0AC52000,         // Address Base
+                        0x00004000,         // Address Length
+                        )
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001FA,
+                    }
+                    Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
+                    {
+                        0x000001FB,
+                    }
+                })
+                Return (RBUF) /* \_SB_.JPGE._CRS.RBUF */
+            }
+        }
+
         Name (DPP0, Buffer (One)
         {
              0x00                                             // .
