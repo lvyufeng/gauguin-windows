@@ -45262,3 +45262,76 @@ the reboot to the bootloader, and the screen photograph `先读屏，再刷下�
 `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and
 `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.231 — where the payload's USB transport comes from: the three host controllers are staged into `QcomPkg/Drivers/` from the Bitra binaries rather than written here, the build's own census and GenFv cross-check are the account of the payload's contents because its FV carries no UI name sections at all, and the media has the TPM appraiser but no readable sentence for the refusal page
+
+**The counterpart to 4.230's zero, read off the artifact rather than the build files.** 4.230 measured that
+the stock firmware contains none of the six host-stack drivers; the payload is supposed to supply them, and
+the payload is unflashed and cannot be booted, so the only account of what is inside it is the build's own
+records. `work/out/usb-host/Mu-gauguin-xhci-host-gzip.img` is 1,173,504 B, `sha256
+43d8d7abb83656d60588efad038070c0a8b7b31ae6d5976600f0bedce4e76cbc`, an `ANDROID!` v1 boot image whose kernel
+is a single gzip member at file offset `0x800`. That member decompresses to **3,145,840 B**, which is exactly
+one firmware volume: `_FVH` occurs once, at 152, so the header base is 112, `FvLength` there reads
+`0x300000` = 3,145,728 and the header length is `0x70` = 112, and `FvLength + 112` equals the decompressed
+size to the byte. The image's remaining 90,448 B after the member is the rest of the boot image.
+
+**And that volume can tell you nothing by name.** Scanning it for all six host names returns zero, but so does
+scanning it for `DiskIoDxe`, `PartitionDxe`, `EnglishDxe`, `SdccDxe`, `UFSDxe`, `DisplayDxe`, `QcomBds` and
+`SecurityStubDxe` — drivers that are certainly in it — with only a stray ASCII `Fat` anywhere in 3.1 MB. The
+build's FFS files simply carry no UI name section, so the instrument that works on stock `.ffs` is a **null
+instrument on the payload**, and for a different reason than on stock: stock hides its names behind gzip
+inside the ELF, the payload has none to hide. A later window must not scan this FV for driver names and read
+the zeros as absence. What the payload holds is instead stated by `work/out/usb-host/build-census.log` and
+cross-checked against the linker's own map — "matches `FVMAIN.Fv.txt`: 126 offsets and GUIDs, zero
+mismatches", the same 126 the record already carries from 4.2x — together with "0048 Images Verified" and
+"all images structurally check out".
+
+**The census answers the question 4.230 leaves open, which is where the transport would come from if it were
+ever written.** It would not be written: `USB host stack: staging from Binaries/bitra` copies `UsbInitDxe`
+(with its `.depex`), `XhciDxe` and `XhciPciEmulationDxe` into `QcomPkg/Drivers/` **from the Bitra binaries**,
+the same SM7225 tree the SoC package itself is generated from, and `USB host stack: 3 INF line(s) in
+!if $(USE_XHCI_HOST_DRIVER) == 1` is that same three and no more, matching `DXE.inc:113-114` and 125. The
+other three the gate needs are upstream EDK2 and already a-priori, `APRIORI.inc:90-92` `UsbBusDxe`,
+`UsbKbDxe` and `UsbMassStorageDxe`. So the gate's USB transport is three drivers belonging to the phone's own
+silicon family plus three EDK2 bus drivers over them, and none of the six is a port of anything.
+
+**The divergence will have to be read off the screen, because the media has no sentence for it.** The Setup
+tree carries the TPM appraiser in full — `sources/appraiserres.dll` holds `FT_ALL_AssetTypesForTpmVersion`,
+`DT_ALL_TPM_TpmVersionBlockingSV=TRUE`, `FT_ALL_CompatMarker_BlockedByTpmVersion` and `TpmVersionPassed`, and
+`appraiser.dll` holds `DecisionTpmVersion`, `TpmVersionPassed`, `DEBUG: TPM Version issue`, `Failed to
+create Tpm version Asset` with the Secure-Boot counterparts beside them — but no user-visible sentence
+anywhere reachable: not in `winsetup.dll.mui` (whose only requirement-flavoured strings are about a selected
+partition and a drive for temporary files), not in `compatctrl.dll.mui`, `setupcompat.dll.mui` or
+`appraiser.dll.mui`, and not as plain text in `winsetup.dll`, `compatctrl.dll`, `setupcompat.dll` or
+`compatappraiserresources.dll` (whose only user-facing text is a Windows Media Center upgrade note). The
+refusal page is therefore not something this host can hold up against a frame; when the two `--no-tpm` runs
+pass the 56-to-64-minute mark that the TPM arm's own timeline dates the product-key page to, the frame's
+structure is the only evidence there will be.
+
+**decides**: that the payload's three host controllers are staged from the Bitra binaries into
+`QcomPkg/Drivers/` rather than written in this project, and that the remaining three are upstream EDK2 at
+`APRIORI.inc:90-92`; that the payload's FV is 3,145,728 B of body with its header at 112 and its gzip member
+at file offset `0x800`, the image being 1,173,504 B at `sha256 43d8d7ab…`; that a name search over the
+payload is a null instrument because the build's FFS carries no UI name section, so the payload's contents
+are accounted for by the build census and the 126-entry GenFv cross-check and not by strings; and that the
+media contains the TPM appraiser logic but no user-visible text for the refusal page. **does not decide**:
+what the payload does on the device, which needs the phone and an unflashed-to-flashed step that is not
+authorised; whether the three staged Bitra host binaries are themselves complete, since a name search cannot
+reach them and no step has disassembled them; and what the two `--no-tpm` runs will show at 56 minutes,
+which is a frame the runs have not yet reached. **Not an action**: `zlib` decompression of the kernel member,
+byte scans over the payload and over `work/out/usb-host/build-census.log` and `APRIORI.xhci-host.inc`, the
+extraction of four `.mui` files from `sources/boot.wim` to `/tmp` with the stick mounted read-only at
+`/mnt/wstick` and unmounted after, and reads of `uefi/Platforms/Xiaomi/gauguinPkg/Include/APRIORI.inc` — all
+read-only; `work/out/usb-host/` was read and not written, and no file inside the repository changed except
+this step's own text. **Working state**: three runs live. The TPM arm is launcher pid 954750, qemu pid
+954767, `SECS=14400` from 08:09:25, killing it at about **12:09**, and it has sat on the product-key page
+since `shot-033`. The control is launcher pid 1386271 / qemu pid 1386277 and the bypass launcher pid 1389510
+/ qemu pid 1389516, launched 10:57:20 and 10:58:18 for 10,800 s each and due to stop at about **13:57** and
+**13:58**; both were still on the `Windows Setup` window page at 11:20, the control at frame 12 and the
+bypass at frame 11, each with a 68,719,476,736-byte `disk.img` and a 370-byte `serial.log` untouched since
+its launch second. **device state**: unchanged — `adb devices`, `fastboot devices`, both tty globs, `lsusb`
+and `lsblk` are as 4.228 records them, with **no USB stick attached to this host**, which the P3 gate itself
+needs, so the three physical actions (a reset of the phone, the reboot to the bootloader, and the screen
+photograph `先读屏，再刷下一次` requires) remain outstanding. `userdata` (107 GB, unbacked), the partition
+table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
