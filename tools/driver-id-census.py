@@ -53,6 +53,26 @@ BUS_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]*)\\")
 MODELS_RE = re.compile(
     r"=\s*[A-Za-z0-9_.\-]+\s*,\s*((?:[A-Za-z][A-Za-z0-9]*\\)+[^\s,;\"\]]+)"
 )
+# `MODELS_RE` reads the FIRST target of a models line.  A line may carry more:
+# in-box `urssynopsys.inf` writes
+#     %UrsSynopsys.DeviceDesc% = UrsSynopsys.Install, ACPI\QCOM24B6, ACPI\PNP0CA1
+# and the second target is the whole reason gauguin's `URS0` binds at all - its
+# `_HID` `QCOM0A8B` is claimed by no INF in 712, and its `_CID` `PNP0CA1` is
+# what that line claims.  Only two such lines exist across 498 INFs (this one
+# and `ucmucsiacpiclient.inf`'s `ACPI\USBC000, ACPI\PNP0CA0`), but a scan that
+# reads one target per line cannot see either, so the class a node binds by is
+# invisible to it by construction.
+MODELS_ALL_RE = re.compile(
+    r"=\s*[A-Za-z0-9_.\-]+\s*,\s*((?:(?:[A-Za-z][A-Za-z0-9]*\\)[^\s,;\"\]]+\s*,?\s*)+)"
+)
+
+
+def models_targets(line: str) -> list[str]:
+    """Every target on a models line, not just the first."""
+    m = MODELS_ALL_RE.search(line)
+    if not m:
+        return []
+    return re.findall(r"(?:[A-Za-z][A-Za-z0-9]*\\)[^\s,;\"\]]+", m.group(1))
 CLASS_RE = re.compile(r"(?im)^[ \t]*Class[ \t]*=[ \t]*(\S+)")
 ASL_HID_RE = re.compile(r'"(QCOM[0-9A-Fa-f]{4}|ACPI[0-9A-Fa-f]{4})"')
 

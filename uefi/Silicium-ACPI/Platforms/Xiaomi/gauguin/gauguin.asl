@@ -7169,6 +7169,16 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
              * naming it - Method (URSI), aliased to _HID on vayu, cepheus and
              * caymanslm - the value it returns when its QUFN switch is zero is
              * always that board's own family id, which for gauguin is 0A8B too.
+             *
+             * The `_CID` is not decoration: it is the id that binds.  Step
+             * 4.278 swept 498 INFs and found `QCOM0A8B` claimed by none of
+             * them - `tools/presented-id-coverage.py` therefore reports this
+             * node CLASS rather than BOUND - and the node enumerates anyway,
+             * because in-box `urssynopsys.inf`'s models line is
+             * `... = UrsSynopsys.Install, ACPI\QCOM24B6, ACPI\PNP0CA1`.  The
+             * vendor BSP is silent on purpose: the generic class driver that
+             * also serves the SD and USB role switch is not a Qualcomm
+             * redistributable.
              */
             Name (_HID, "QCOM0A8B")  // _HID: Hardware ID
             Name (_CID, "PNP0CA1")  // _CID: Compatible ID
