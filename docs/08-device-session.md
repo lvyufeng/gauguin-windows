@@ -44242,7 +44242,7 @@ table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` i
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
 
 
-## Step 4.221 — the frozen page is a Windows Setup language dialog and not a hang with no content, the freeze is now 38 minutes wide, and the four vCPUs burn an identical 45.5% of wall each while writing almost nothing to their own RAM
+## Step 4.221 — the frozen page is a Windows Setup language dialog and not a hang with no content, and the freeze is fifty minutes wide (4.222's census: twenty-four written frames, 05:48:51 to 06:38:55), not the thirty-eight the twenty frames counted here span; the "four vCPUs burn an identical 45.5% of wall each" row in this step is withdrawn in 4.222, which also shows the page was not the run's last
 
 **What 4.220 left open.** 4.220 measured this same guest — the FAT32 stick under
 `tools/qemu-boot-win11-iso.sh`, TCG, `-smp 4` — as *idle*: half of vCPU0's instruction samples
@@ -44259,10 +44259,26 @@ two minutes and prints a colour count with each. Eighteen consecutive frames —
 are byte-identical at `sha256 8003cfa1613f3ba1c61f327c386153c3ef33cbd8cea78752fde6e7d4a754fba1`,
 and a fresh `screendump` taken through the monitor at 06:12 is that digest again. `shot-020`
 (05:46:51) is `6e1ed2f8f5892796…`, `shot-019` is `de58d9351d6859bc…`, `shot-018` is
-`baf8618a8f77d6bb…` — so the stop has an edge and it is between 05:46:51 and 05:48:51. The
+`baf8618a8f77d6bb…` — so the stop has an edge and it is between 05:46:51 and 05:48:51.
+Every digest handle in that list and in 4.222's census is an **md5** and not a sha256: `md5sum
+shot-021.ppm` is `bf75722aa21ce8a99b7ee4bc654cc868`, which is the `bf75722a` above, while
+`sha256sum` of the same file is
+`8003cfa1613f3ba1c61f327c386153c3ef33cbd8cea78752fde6e7d4a754fba1` — the digest this step's own
+prose quotes for the same frame. Two digests, one file, and 4.222 fixes which handle is which: the
+census's seven groups are md5 `bf75722a` (24 frames), `6aa9bd73` (6), `84c00372` (5), `618c0f06`
+(7), `daf6284e` (12), `df4317be` (1), `e93e07d0` (12) and sha256 `8003cfa1`, `cb19835c`,
+`7d6d6668`, `8505ceb8`, `801353dd`, `d908dabd`, `6f34a8b4` in the same order. The harness wrote
+**eighty-six** frames — `shot-001` through `shot-089` with `shot-017`, `shot-041` and `shot-045`
+absent — so the count this step works from is **eighty-six** frames, one more than the two
+`eighty-five frames` phrases below this paragraph, the extra frame being `shot-017`, absent from the
+name sequence as well as the two this paragraph explains. The
 harness did **not** stop: it kept writing frames and kept printing. The colour count is the cheap
 tell and it flips at exactly that edge — `769`, `764`, `780` for the last three moving frames,
-then `889` for every frozen one and nothing else in between.
+then `889` for every frozen one and nothing else in between. 4.222's census of all eighty-six
+frames fixes the other end of that freeze and makes it wider than the frames counted here: `shot-042`
+through `shot-046` are `bf75722a` too, so the page held from 05:48:51 to **06:38:55 — fifty minutes
+and four seconds**, twenty-four written frames and two (`shot-041`, `shot-045`) that the harness
+skipped because its `screendump` went unanswered.
 
 **The page, read glyph by glyph.** Earlier windows transcribed this page from rendered images and
 could not read it; this one segments each text band into runs of ink columns and prints each run
@@ -44274,10 +44290,25 @@ as a bitmap, which is legible where a downscaled PNG is not. At `thr 470` for bo
   x107..120 `s`, x125..127 `S`, x131..133 `e`, x139..144 `t`, x146..154 `u`, x156..160 `p`,
   x163..167 `p`), with two window-control boxes outlined at `x 648..679` and `x 716..747` and a
   box-in-box glyph at `x 692..702`;
-- a heading on one line, `y 96..126`, twenty-two runs spanning `x 93..413`, with descender
-  clusters at `x 220..232` and `x 386..398` — **read structurally only, not asserted word by
-  word**;
-- a labelled row at `y 161..182`: a label at `x 91..214` and a bordered box at `x 297..576`;
+- a heading on one line, `y 96..126`, twenty-two runs spanning `x 93..413`, reading
+  **`Select language settings`** — `S` x93..103, `e` x108..120, `l` x125, `e` x131..143, `c`
+  x147..157, `t` x160..167, `l` x181, `a` x187..197, `n` x204..215, `g` x220..232, `u` x239..249,
+  `a` x255..265, `g` x271..283, `e` x289..301, `s` x314..322, `e` x326..338, `t` x341..348, `t`
+  x351..358, `i` x363, `n` x370..381, `g` x386..398, `s` x404..412 — twenty-two runs for
+  twenty-two letters, so nothing merged and nothing is inferred from spacing. This reading is of the
+  `bf75722a` page and of nothing else: 4.222 measures `Select` (`x 88..172`) and `settings`
+  (`x 310..416`) as **byte-identical** on the run's next page, `6aa9bd73` at 06:40:56, while the
+  middle word is drawn into the same `x 181..301` with 1,399 pixels different — so the heading is a
+  property of one of the run's seven pages, not a string the run holds;
+- a labelled row at `y 161..182` whose label reads **`Language to install`** — `L` x95..96 (only
+  its stem clears the ink threshold; its foot merges with the box edge at `x 91..92`), `a`
+  x98..103, `n` x106..111, `g` x114..120, `u` x123..128, `a` x131..136, `g` x139..145, `e`
+  x148..153, `t` x159..163, `o` x165..171, `i` x178..179, `n` x182..187, `st` x190..199, `a`
+  x201..206, `l` x209..210, `l` x213..214 — and a bordered box at `x 297..576` (its lower rule at
+  `y 182`, `x 299..574`, in 4.222's band fingerprint). This row and this box are read on the
+  `bf75722a` page: on `6aa9bd73` the same row carries different text — its band ink at `y 164..179`
+  is 1,045 against 1,370 here — and the box has moved to `x 334..609`, with the second row below it
+  gone entirely;
 - a labelled row at `y 220..235` whose label reads **`Time and currency format`** (runs x90..97
   `T`, x103..113 `m`, x116..121 `e`, x128..133 `a`, x136..141 `n`, x144..150 `d`, x157..161 `c`,
   x164..169 `u`, x172..175 `r`, x177..180 `r`, x182..187 `e`, x190..195 `n`, x198..202 `c`,
@@ -44285,27 +44316,65 @@ as a bitmap, which is legible where a downscaled PNG is not. At `thr 470` for bo
   x255..259 `t`) and another bordered box at `x 297..576`;
 - a footer at `y 524..539`: the four-pane Windows flag at `x 94..108` — sampled (97,530)
   `(242,80,34)`, (105,530) `(127,186,0)`, (97,535) `(0,164,239)`, (105,535) `(255,185,0)` — then
-  **`Microsoft Support`** from `x 113..230` and **`Legal`** at `x 264..291`;
+  **`Microsoft Support`** from `x 113..230` and **`Legal`** at `x 264..291` — the two strings that
+  this window settled by letterform rather than by width, because width does not separate them:
+  the first glyph's two outer strokes are **vertical** for the full x-height (`x 113` and `x 121`
+  carry ink on every row `y 527..535`) with a V descending between them, which is an `M` and not a
+  `W`; the only ascender in the run is at `x 155..156`, which is the `f` of `Microsoft` and rules
+  out `Windows`, whose `d` would need an ascender at `x 132..142` where there is none; and
+  `x 264..291` is five letters — a left stem with a bottom bar (`L`), an oval with a mid bar (`e`),
+  an oval with a descender (`g`), a bowl with a hump (`a`), and a bare stem (`l`) — five letters,
+  re-rendered in 4.222 at `< 660` to confirm all five: the final `l` is one stem at `x 290` whose
+  pixels sum to **440** on every row, a grey the `thr 430` this step reads dark text at does not
+  reach, so at that threshold the word renders as four letters and the fifth vanishes — the same
+  threshold effect that lost the `Next` label at `thr 470`, on a different string. This footer too is
+  read on the `bf75722a` page; 4.222 records that a later page in the same window carries a
+  different bottom-left — `Repair your computer` above a six-run copyright line;
 - two bordered buttons at `y 524..547`, interiors near-white `(249,249,249)`: one at `x 510..603`
   labelled **`Back`** (thr=600, run x544..570) and one at `x 615..708` labelled **`Next`**
   (thr=600, run x650..674).
 
-**Two earlier withdrawals are reversed, and the reason is a threshold.** The prior record withdrew
-the filled indigo `Next` button and the `1 of 2` footer counter as "not reproduced by measurement".
-Both **are** reproduced; they were measured at `thr 470`, at which the button labels and the
-footer's thin strokes fall below the ink threshold and vanish. The button text needs `thr 600`, the
-title bar `thr 430`, the body text `thr 470`. That is a method error in the measurement, not a
-disagreement about the frame, and it is recorded here as such because two elements were removed
-from the record on the strength of it.
+**One earlier withdrawal is reversed and one is corrected, and the two have opposite causes.** The
+prior record withdrew the filled indigo `Next` button and a `1 of 2` footer counter, both as "not
+reproduced by measurement". The `Next` button **is** reproduced, and it was withdrawn on a method
+error: earlier passes measured it at `thr 470`, at which the button label falls below the ink
+threshold and vanishes. The button text needs `thr 600`, the title bar `thr 430`, the body text
+`thr 470`. The `1 of 2` counter, though, is not there at any threshold — the runs at `x 264..291`
+are the letters `Legal`, read letterform by letterform, so the page carries no counter at all.
+One element was lost to a threshold too dark to see something real; the other was a real element
+read as the wrong word.
 
-**Two things about that page matter more than the transcription.** `Time and currency format` is a
-verbatim Windows Setup field label, the footer carries Microsoft's own marks, and the buttons are
-a wizard's `Back`/`Next` — so **this run did put a Windows Setup page on the screen**, which is
-further than 4.217's "the stick's own boot manager draws a Windows Setup window and then holds
-still" could say and is the P3 gate's own subject. And `y 240..519` is empty: at `thr 740`, light
-enough to catch a grey border or a disabled control, those rows carry nothing but the frame's own
-edges. So the page carries **two** labelled fields and not three — no third row, no keyboard or
-input-method row.
+**How the two strings that width could not separate were settled.** Glyph widths alone do not
+identify a word in a 10-pixel font — `Windows` and `Microsoft` both fit `x 113..162`, and the
+heading's run count fits several strings. What settles it is a letterform catalog built from the
+parts of the page that are *already* known, then matched literally. `Time and currency format` is
+fixed by its own run-width profile — twenty-one runs for twenty-one letters, the `T` an 8-pixel bar
+with a stem, the `m` an 11-pixel three-stem run, the `y` the only descender other than nothing —
+and with those twenty-one bitmaps in hand the label at `y 161..182` falls out as the same
+letterforms in a different order: sixteen runs for `Language to install`, with the two `g`s of
+`language` carrying the page's only descenders in that band and the `st` of `install` the only
+merged pair. Reading the 2×-sized heading then needs only the observation that it is the same font
+scaled: `Select language settings` gives twenty-two runs for twenty-two letters, with
+`x 220..232`, `x 271..283` and `x 386..398` the same bowl-plus-descender bitmap three times — the
+two `g`s and the final `g` — and `x 341..348` / `x 351..358` the same stem-plus-crossbar bitmap
+twice, the `tt` of `settings`. Every claim in the two bullets above is a bitmap comparison, not a
+guess from word shape.
+
+**Three things about that page matter more than the transcription.** `Select language settings`,
+`Language to install` and `Time and currency format` are verbatim Windows Setup strings, the footer
+carries Microsoft's own marks, and the buttons are a wizard's `Back`/`Next` — so **this run did put
+a Windows Setup page on the screen**, a page of its language-selection wizard, which is further than
+4.217's "the stick's own boot manager draws a Windows Setup window and then holds still" could say
+and is the P3 gate's own subject. This paragraph called it the *first* page of that wizard; 4.222
+withdraws the *first* as unproven — the page carries `Back` as a normal outlined button beside the
+filled-indigo `Next`, and the same window drew six further pages after it. Second, `y 240..519` is empty: at
+`thr 740`, light enough to catch a grey border or a disabled control, those rows carry nothing but
+the frame's own edges, so **this page** carries **two** labelled fields and not three — no keyboard or
+input-method row was drawn on it, which is itself a fact about this build's configuration, and 4.222
+records that the page drawn next in the same window carries **one**. Third, the page is not a dead
+end: it is the **last** page this step can see, not the last page the run drew — 4.222's census finds
+six further pages after it, at 06:40:56, 06:52:56, 07:02:57, 07:16:58, 07:41:00 and 07:43:00, the
+last of them held for twenty-two minutes and then left for a seventh on a keystroke.
 
 **The frame furniture, so the boundaries are measured and not assumed.** A left rail `x 44..49`
 and a right rail `x 750..759`, colour `(164,190,217)`, on an indigo desktop `(24,0,82)`; rows
@@ -44313,8 +44382,9 @@ and a right rail `x 750..759`, colour `(164,190,217)`, on an indigo desktop `(24
 ten from the right. The framebuffer does not fill the ramfb: `y 573..579` is black `(0,0,0)` and
 `y 580..599` is indigo again.
 
-**All four vCPUs are running, at the same rate, to the same hundredth of a second.** `info cpus`
-gives the thread ids; `/proc/<tid>/stat` gives the accounting. Over a twenty-second window:
+**All four vCPUs are running, at the same rate, to the same hundredth of a second — and that is the
+signature of a mis-read, not of four threads.** `info cpus` gives the thread ids; `/proc/<tid>/stat`
+gives the accounting. 4.221 recorded, over a twenty-second window:
 
 ```
 vCPU0 tid=498078 user=8.68s sys=0.43s total=9.11s 45.5% of wall
@@ -44325,8 +44395,27 @@ sum 36.44s over 20.00s wall = 182.2%
 ```
 
 Four host threads agreeing to 10 ms over twenty seconds is not four threads doing four different
-jobs; it is four vCPUs running the *same* loop. This also corrects 4.220's "no vCPU exceeds 28%":
-the guest is no longer largely idle, and its load has roughly doubled since that measurement.
+jobs — but neither is it four threads doing the same job, because four *independent* counters do not
+land on the same hundredth of a second and stay there. It is one number reported four times, and two
+later samples of the same four tids on the same run say so. 4.222's probe, 126 s wide and taken
+after the last keystroke, gives vCPU0 **20.2%**, vCPU1 **11.7%**, vCPU2 **1.5%**, vCPU3 **1.6%**; a
+twenty-second sample taken at 07:53 gives **0.06 / 0.04 / 0.02 / 0.03 s** of CPU per vCPU, i.e.
+**0.3 / 0.2 / 0.1 / 0.1 %** and 0.8% together. The instrument is the same file read the same way in
+all three cases, so the disagreement is in the first reading, and the only explanation that fits is
+one accumulated per-process value attributed to four tids — and 4.222 demonstrates that explanation
+rather than inferring it. Six `/proc/<tid>/stat` readings spanning the live continuation run (pid
+954767) gave deltas of **1388, 1388, 1389, 1389, 1388, 1388** ticks across one twenty-second window
+in which `/proc/<pid>/stat` for the process itself gave **1388**: the six sum to 8,330 ticks, six
+times the process's own total, which six threads' independent counters cannot produce and one group
+accumulator read six times produces exactly. `top -H`, which takes its numbers from per-thread
+kernel state rather than from that file, gives those same six threads **27.0 / 24.0 / 18.0 / 3.0 /
+1.0 / 0.0 %** — unequal, and summing to the 69.4% of a core the process's own accounting reports. So
+the four numbers that agreed to 10 ms were one number read four times, and it was the reading that
+was uniform, not the guest. **The 182% aggregate and the "same loop
+on every core" conclusion drawn from it are withdrawn**; 4.220's per-thread sample is the one that
+stands — vCPU0 18.3%, vCPU1 27.8%, vCPU2 3.9%, vCPU3 18.8%, about 71% together, no vCPU above 28%
+— and it agrees with the two later samples in the one way that matters: the load is real, it is not
+balanced across four cores, and it decays to about 1% of a core when the screen stops changing.
 
 **Every new translation block is also an invalidation.** `info jit` twice, 45 s apart, three times
 in this window: `TB count` 1,054,520 → 1,054,944 (**+424**), then 1,055,314 → 1,055,760 (**+446**),
@@ -44353,32 +44442,148 @@ that touches a lock, a counter or a flag does. The caveat the reading carries: t
 the `0x40000000` window overlaps `virt.flash1`'s address range, so that window mixes RAM with
 firmware. A third window, `0x80000000`, is entirely zero — nothing resident.
 
-**decides**: that the frame this run produced stopped between 05:46:51 and 05:48:51 — twenty
-consecutive two-minute frames, 05:48:51 through 06:26:54, sharing one digest and one colour count,
-with the harness still writing and still printing; that all four vCPUs are simultaneously busy at
-9.11 s of CPU per 20 s of wall each, identical to 10 ms, i.e. 182% of a core and the same loop on
-every core; that `TB count` advances at 9–10/s while `TB invalidate count` advances by the same
+**decides**: that the frame this run produced stopped between 05:46:51 and 05:48:51 — twenty-four written
+frames, 05:48:51 through 06:38:55, sharing one digest and one colour count, so the freeze is fifty
+minutes and four seconds wide and the twenty frames counted above understate it by twelve minutes
+(4.222's census of all eighty-six frames), with the harness still writing and still printing; that the vCPUs were busy while it happened — one
+thread carrying the work and the rest nearly idle, per 4.220's per-thread sample of 18.3 / 27.8 /
+3.9 / 18.8 % — while 4.221's "all four vCPUs simultaneously busy at 9.11 s of CPU per 20 s of wall
+each, i.e. 182% of a core", recorded above for completeness, is withdrawn in the paragraph that
+follows the table; that `TB count` advances at 9–10/s while `TB invalidate count` advances by the same
 amount and `TB flush count` stays 0, so the guest re-translates what it invalidates; that over 45 s
 the spinning guest moves about 5 KB across 32 MiB of RAM, so the spin is not doing productive work;
-that the frozen page is a Windows Setup dialog carrying the title `Windows Setup`, the field label
-`Time and currency format`, the buttons `Back` and `Next`, and a footer with the four-pane Windows
-flag and `Microsoft Support` / `Legal` — all read glyph by glyph — with two labelled fields and
-`y 240..519` empty between them; that the earlier withdrawals of the `Next` button and the `1 of 2`
-counter were a `thr 470` artifact and both elements are present; and that `serial.log` is 370 bytes
+that the frozen page is **a
+Windows Setup language-settings page** — heading
+`Select language settings` at `y 96..126`, twenty-two runs for twenty-two letters; the two combo
+labels `Language to install` (`y 161..182`) and `Time and currency format` (`y 220..235`); the
+buttons `Back` (`x 510..603`) and `Next` (`x 615..708`) at `y 524..547`; and a footer with the
+four-pane Windows flag plus `Microsoft Support` and `Legal` — every string read glyph by glyph
+against a catalog built from the strings already fixed, so the readings are bitmap comparisons and
+not guesses from word shape, and every one of them is a reading of **this page**, which 4.222 shows
+is one of seven the same window drew; that `y 240..519` is empty on this page at `thr 740`, so
+**this page** carries two labelled fields and not three; and that the phrase "the first page of
+Windows Setup's language wizard" is withdrawn in 4.222 as unproven, the page carrying `Back` as a
+normal outlined button beside the filled-indigo `Next` while the run drew six further pages after it; that the earlier withdrawal of the `Next` button was a `thr 470`
+artifact, while the `1 of 2` counter it was withdrawn alongside never existed and the runs at
+`x 264..291` are the word `Legal` — one element lost to a threshold too dark, the other a real
+element read as the wrong word; and that `serial.log` is 370 bytes
 with mtime 05:08:43, holding only the AAVMF banner and the two `BdsDxe` lines for `Boot0001 "UEFI
-QEMU QEMU USB HARDDRIVE 1-0000:00:01.0-3"`. **does not decide**: why the guest stopped — 182% of a
-core over an unchanging screen with almost no memory traffic is equally consistent with Setup
-waiting on something that never answers, a kernel-level spin, and a fault loop, and the monitor
-cannot separate them; what the heading at `y 96..126` says, which is segmented but not read; what
-the `y 161..182` label says, likewise; and whether the run would have progressed at all, since it
-is still alive at 78 minutes of its 10,800-second budget, which falls at 08:08. **Not an action**:
+QEMU QEMU USB HARDDRIVE 1-0000:00:01.0-3"`. **does not decide**: why the screen stopped changing
+between 05:46:51 and 05:48:51 — a busy vCPU over an unchanging screen with almost no memory traffic
+is equally consistent with Setup waiting on something that never answers, a kernel-level spin, and a
+fault loop, and the monitor cannot separate them; and what the guest
+did with the twenty minutes between the last frame the page was drawn on and the first frame of the
+freeze — the page was already complete at 05:42:50 and the digest stops changing at 05:48:51, so
+either the page took six minutes to settle or something was still happening off-screen while it
+did. It is **no longer open** whether the run would have progressed: 4.222's census finds the same window
+drawing six further pages after this one, at 06:40:56, 06:52:56, 07:02:57, 07:16:58, 07:41:00 and
+07:43:00, and then a seventh, carrying a button that reads `Install now`, on a keystroke at 08:08 — a label
+4.222 did not re-read and cannot confirm. That frame (md5 `b98275db`, sha256 `17771e7f…`) is a
+`screendump` taken through the monitor and not a harness frame — its digest is in none of the
+twenty-five distinct digests above — and re-scanning it row by row for accent fill finds no row
+carrying more than 23 accent pixels and none outside `x 123..304`, so whatever control that page
+draws is not
+the filled-accent button the wizard's `Next` is; the label itself stays as the earlier window
+recorded it. **Not an action**:
 `info jit`, `info cpus`, `pmemsave` and `screendump` read from the running guest's monitor socket;
-`/proc/<tid>/stat` read from the host; `sha256sum` and frame reads on files under `work/`, which is
+`/proc/<tid>/stat` read from the host; `sha256sum`, `md5sum` and frame reads on files under `work/`, which is
 gitignored. No flash, no `fastboot` command, no partition written, no seed written, no console read
-from the device and no device file opened. **device state**: unchanged — `adb devices`, `fastboot
+from the device and no device file opened. **Working state**: a second run of the same script is
+live while this is written — launcher pid 954750, `bash tools/qemu-boot-win11-iso.sh
+work/win11/stick/win11arm64-stick.img work/win11/qemu-stick2 14400`, started 08:09:25, qemu pid
+**954767** at 77% of a core, eighteen frames written by 08:43:40, and that `SECS=14400` killing it
+at about 12:09. It is the run 4.222's `/proc` and `top -H` samples above come from, and it
+overwrote nothing: `work/win11/qemu-stick/`'s eighty-six frames are read, not written. Two earlier
+runs of the dry-run variant were never reaped and are still alive three and a half hours on — pid
+**468162** (`work/win11/qemu-dryrun/fwtest`, started 04:56:52) and pid **471324**
+(`work/win11/qemu-dryrun/out2`, 04:58:08) — each at about 3% of a core. **device state**: unchanged — `adb devices`, `fastboot
 devices`, `lsusb` and both tty globs are empty, so the three physical actions remain outstanding: a
 reset of the phone, the reboot to the bootloader the P3 `fastboot boot` workflow needs, and the
 screen photograph that `先读屏，再刷下一次` requires before any payload boots. There is still **no
 removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the partition table and
 the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still `sha256
 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.222 — the census the frozen page sits in: eighty-six frames in twenty-six groups, and the digest handles this record has been quoting are md5s and not sha256s
+
+**What 4.221 left open.** 4.221 read the `bf75722a` page glyph by glyph and transcribed it, and it
+recorded four vCPUs at an identical 45.5% of wall each as *one number read four times* — but it
+could only argue that from the **disagreement** of later samples with the first. It also had no
+census of the run's frames, only the observation that the freeze did not end where the twenty frames
+it had read did. This step counts the frames, says which digest is which, demonstrates the
+instrument's failure instead of inferring it, and records the run that replaced nothing.
+
+**The run wrote eighty-six frames in twenty-six groups over twenty-five digests.** `shot-001`
+through `shot-089` with `shot-017`, `shot-041` and `shot-045` absent, one frame every two minutes
+from 05:08:48 to 08:05:02: nineteen single-frame groups up to 05:46:51, and then seven pages —
+**24, 6, 5, 7, 12, 1, 12** frames — from 05:48:51 to 08:05:02. Twenty-five distinct digests for
+twenty-six groups, because `6aacefdf` is written twice, at `shot-008` and `shot-015`. The frozen
+page is the first of the seven and by far the longest-lived: **fifty minutes and four seconds**,
+`shot-021` through `shot-046`, twenty-four written frames, two of which the harness never wrote
+because its `screendump` went unanswered. Every reading 4.221 reports of that page is a reading of
+one of those twenty-four files.
+
+**The census's handles are md5s.** Every digest handle this record has quoted for a frame —
+`bf75722a`, `6aa9bd73`, `84c00372`, `618c0f06`, `daf6284e`, `df4317be`, `e93e07d0` — is an **md5**,
+while 4.221's own prose quotes a full **sha256** for the same file: `md5sum shot-021.ppm` is
+`bf75722aa21ce8a99b7ee4bc654cc868`, and `sha256sum` of it is
+`8003cfa1613f3ba1c61f327c386153c3ef33cbd8cea78752fde6e7d4a754fba1`. Two digests, one frame, and no
+contradiction anywhere in the record — only a convention nobody had written down. In the same order
+the seven pages are md5 `bf75722a` / `6aa9bd73` / `84c00372` / `618c0f06` / `daf6284e` / `df4317be`
+/ `e93e07d0` and sha256 `8003cfa1` / `cb19835c` / `7d6d6668` / `8505ceb8` / `801353dd` /
+`d908dabd` / `6f34a8b4`. The seventh page 4.221 mentions — the one a keystroke drew at 08:08, and
+the one whose `Install now` label this step can neither re-read nor confirm — is **not** one of the
+86: md5 `b98275db`, sha256 `17771e7f…`, a `screendump` taken through the monitor and not a harness
+frame, which is why its digest is in none of the twenty-five.
+
+**The instrument's failure is now demonstrated, not inferred.** `/proc/<tid>/stat` was read for
+every thread of the live continuation run and for that process as a whole, over one twenty-second
+window. The six thread readings gave deltas of **1388, 1388, 1389, 1389, 1388, 1388** ticks while
+`/proc/<pid>/stat` gave **1388** — a sum of 8,330 for six threads whose total can only be the
+process's own 1,388. One group accumulator read six times explains that; six independent per-thread
+counters cannot produce it. `top -H`, which takes its numbers from per-thread kernel state rather
+than from that file, gives those same six threads **27.0 / 24.0 / 18.0 / 3.0 / 1.0 / 0.0 %**,
+summing to the 69.4% of a core the process's own accounting reports. So 4.221's withdrawal of its
+182% row stands, and it now stands on a measurement of the instrument rather than on a hunch about
+uniformity — and the load that is real is 4.220's per-thread sample, the one that never agreed with
+itself.
+
+**A threshold, a grey stem, and a word that was right.** `Legal` at `x 264..291` in the `bf75722a`
+page's footer was re-rendered at `< 660` and is five letters: `L` `x 264..268` with its foot at
+`y 535`, `e` `x 270..274`, `g` `x 277..281` carrying the band's only descender at `y 537`, `a`
+`x 283..287`, and `l` a single stem at `x 290`. That last stem's pixels sum to **440** on every
+row, which the `thr 430` this record reads dark text at does not reach — at that threshold the word
+renders as four letters and the fifth is gone. It is the `thr 470` / `Next` failure again, on a
+different string, and it is why one page has now been both read and half-lost by different windows.
+
+**decides**: that the run's frames are **eighty-six** files in **twenty-six** consecutive groups
+over **twenty-five** distinct digests, the freeze being the first of the last seven pages and fifty
+minutes and four seconds wide; that the digest handles quoted throughout this record are md5s while
+4.221's quoted `8003cfa1613f3ba1…` is the sha256 of the same frame, so no reading in the record
+depends on which of the two a sentence used; that the equal-vCPU artefact belongs to reading
+`/proc/<tid>/stat` for a thread that is not the group leader — demonstrated at 8,330 against 1,388
+and corroborated by `top -H`'s 27.0 / 24.0 / 18.0 / 3.0 / 1.0 / 0.0 %, so 4.221's withdrawal of the
+182% row and its "same loop on every core" conclusion both stand; that the footer word this step can
+re-derive is `Legal`, five letters, the fifth a 440-sum stem that only a threshold looser than 660
+reaches; and that the seventh page — the one a keystroke drew at 08:08 — is a monitor `screendump`
+and not one of the 86 frames, carries no row with more than 23 accent pixels anywhere in 800×600,
+and therefore draws no filled-accent control such as the wizard's `Next`, its `Install now` label
+remaining as the earlier window recorded it and unverified here. **does not decide**: whether the
+guest was waiting or spinning through the fifty-minute freeze, the census bounding the freeze and
+saying nothing about its cause; whether the six further pages are steps of one wizard or several
+screens, since only the frozen page was transcribed; and what the run did between 05:46:51 and
+05:48:51, the last moving frame and the first frozen one. **Not an action**: `md5sum`, `sha256sum`
+and pixel reads on files under `work/`, which is gitignored; `/proc/<tid>/stat`, `/proc/<pid>/stat`
+and `top -H` on the host. **Working state**: the run these samples come from is live — launcher pid
+954750 running `tools/qemu-boot-win11-iso.sh work/win11/stick/win11arm64-stick.img
+work/win11/qemu-stick2 14400` from 08:09:25, qemu pid 954767 at 77% of a core, eighteen frames
+written by 08:43:40, that `SECS=14400` killing it at about 12:09 — and it wrote none of the frames
+above: `work/win11/qemu-stick/` is read and not written, as are the preserved frames under
+`work/out/`. Two dry-run processes started at 04:56:52 and 04:58:08, pids 468162 and 471324, are
+still alive at about 3% of a core each and were not reaped. **device state**: unchanged — `adb
+devices`, `fastboot devices`, `lsusb` and both tty globs are empty, so the three physical actions
+remain outstanding: a reset of the phone, the reboot to the bootloader the P3 `fastboot boot`
+workflow needs, and the screen photograph that `先读屏，再刷下一次` requires before any payload boots.
+There is still **no removable USB stick attached to this host**. `userdata` (107 GB, unbacked), the
+partition table and the firmware LUN remain untouched, and `device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
