@@ -104,6 +104,22 @@ boot_name=$(wimlib-imagex info "$WPE/SOURCES/BOOT.WIM" 2>/dev/null |
 install_images=$(wimlib-imagex info "$INSTALL" 2>/dev/null |
                  sed -n 's/^Image Count: *//p')
 
+# The check whose absence is why this script built an x86_64 stick while its own
+# docstring promised an ARM64 one: it read `Image Count` and never once read
+# `Architecture`. `$INSTALL` defaulted to `win11-25h2/install.wim`, which is
+# x86_64 for all eleven editions, and `wimlib-imagex split` carried that through
+# to `install.swm` unchanged. Every image has to report ARM64.
+install_archs=$(wimlib-imagex info "$INSTALL" 2>/dev/null |
+                sed -n 's/^Architecture: *//p')
+n_arch=$(printf '%s\n' "$install_archs" | grep -c . || true)
+if [ "$n_arch" -ne "$install_images" ]; then
+    die "$INSTALL reports $n_arch architectures for $install_images images"
+fi
+if [ "$(printf '%s\n' "$install_archs" | sort -u)" != "ARM64" ]; then
+    printf '%s\n' "$install_archs" | sed 's/^/     Architecture: /' >&2
+    die "$INSTALL is not ARM64 - use tools/make-p3-medium.sh with an ARM64 ISO"
+fi
+
 echo "   boot half      $WPE  (BOOT.WIM: $boot_images image(s), \"$boot_name\")"
 echo "   setup half     $MEDIA  (setup.exe present, no install image of its own)"
 echo "   install image  $INSTALL  ($install_images edition(s), $(du -h "$INSTALL" | cut -f1))"
