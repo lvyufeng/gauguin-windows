@@ -103,7 +103,8 @@
  * tree either, it is read off the family, and qci2c7280.inf claims it.
  *
  * The PM01 census is what changed the picture, and it is worth stating in full.
- * Across the 21 tables in Silicium-ACPI that carry a PMIC-GPIO node at all - one
+ * Across the 21 platforms in Silicium-ACPI that carry a PMIC-GPIO node at all -
+ * 22 files, Kailua being the one platform with two, DSDT_MTP and DSDT_QRD - one
  * block, one function, every one of them with the same interrupt at 0x201 and
  * the same `_UID One` - the `_HID` takes nine different values, and the middle
  * byte is the SoC family and nothing else:
@@ -705,8 +706,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 
                     // The pair is the PON's two key indices - power first, resin
                     // second - and that is measured rather than assumed: in all
-                    // 20 tables that carry both a PM01 and a BTNS this package
-                    // equals that node's pins[0] and pins[2], and the device
+                    // 21 tables that carry both a PM01 and a BTNS this package
+                    // equals that node's pins[0] and pins[2] - 21, and not the
+                    // 20 this line read until Step 4.215 counted them. The
+                    // paired set is the 23 BTNS tables minus the two Samsung
+                    // SSDTs whose PM01 sits in a DSDT the corpus does not hold -
+                    // and the device
                     // trees confirm the same two numbers from the other side.
                     // gauguin's own are 0 and 1; see the note above SPMI, and
                     // the BTNS node at the end of this file.
@@ -6364,7 +6369,11 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // numbers are the PON's own interrupt indices rather than anything this
         // file picks: in all 20 tables that carry both a BTNS and a PM01, those
         // two cells equal PM01._DSM function 1's package, field for field. That is
-        // what settled the pair's meaning above. gauguin's are 0 and 1 - its
+        // what settled the pair's meaning above, and the count is 21 rather than
+        // the 20 this line carried until Step 4.215 measured it: the paired set is
+        // the 23 tables with a BTNS minus gts8p and r0q, the two Samsung SSDTs
+        // whose PM01 is declared in a DSDT the corpus does not hold, and
+        // tools/acpi-gpio-census.py is what counts it. gauguin's are 0 and 1 - its
         // pm6350 pon@800 gives kpdpwr interrupt index 0 and resin index 1, both
         // enabled, and the pmk8350's pon@1300 pair of 7 and 6 is disabled on both
         // keys - so 0x0000 and 0x0001 here, the same two numbers the corrected
@@ -6388,6 +6397,25 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // block is pm6350 at slot 0, so the pin list says 0x7F + 2, which is
         // 0x0081.
         //
+        // Step 4.215 bounds that number from the other side, and this is what it
+        // added. Across the 21 paired tables the middle descriptor's pin is one the
+        // PON also names in none of them: it is a third pin, outside the pair _DSM
+        // function 1 states, everywhere in the corpus and not only here. It takes
+        // six values - 0x00C6 in eight, 0x0085 in seven, 0x0209 in two, 0x00D5 in
+        // two, 0x020F in one, and 0x0081 in one, the last of those being this file.
+        // So the corpus cannot corroborate this number or refute it, because no
+        // other table in it carries one; the reasoned part is the base (0x7F,
+        // tracked to the SPMI slot rather than to the model) and not the
+        // observation.
+        //
+        // The PMIC-GPIO node itself declares no pin range, and that is the shape
+        // rather than a gap in this file: of the 22 corpus files that declare a
+        // PM01, all 22 give it a _CRS and none declares a GpioIo or a GpioInt in it
+        // - what they carry is one shared interrupt on 0x201, two of them in
+        // Kailua's case. So the pin numbers the BTNS node indexes name a space no
+        // ACPI table in this corpus describes in ACPI at all, which is why the base
+        // above had to come from the device trees.
+        //
         // That is a reasoned number, not a measured one, and the difference is
         // worth keeping visible. pm6350 appears in no corpus table and in no
         // device tree in this checkout but gauguin's; no INF in the 7280 set names
@@ -6403,7 +6431,9 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // The _DSD is copied rather than derived, and the measurement is what says
         // so. Its outer package is two elements - the Generic Buttons Device UUID
         // and one inner package of five-element entries - and the first four
-        // entries are byte-identical in all 20 tables that carry three descriptors:
+        // entries are byte-identical in all 21 tables that carry three descriptors
+        // - 20 until Step 4.215 counted them, the three-descriptor set being the 23
+        // BTNS tables minus cepheus's four and caymanslm's five:
         // Zero One Zero One 0x0D; One Zero One One 0x81; One One One 0x0C 0xE9;
         // One 0x02 One 0x0C 0xEA. The pins those same tables list are not
         // identical at all - 0x0007/0x00C6/0x0006 in one, 0x0000/0x0085/0x0001 in

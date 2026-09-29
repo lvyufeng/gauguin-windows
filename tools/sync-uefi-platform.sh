@@ -56,6 +56,44 @@ for f in "${need[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
+# The host stack is the one part of the driver list that comes from a *flag*
+# rather than from the device, and a regeneration that forgets the flag looks
+# like a healthy tree to every check above. `--xhci-host` sets
+# `USE_XHCI_HOST_DRIVER = 1` and the three INF lines behind it, and it is what
+# stages three blobs this phone's XBL does not carry at all - XhciPciEmulationDxe,
+# XhciDxe and UsbInitDxe, taken from the SM7225 sibling (SIBLING_BLOBS in
+# tools/make_xbl_binaries.py). Staging is additive and idempotent: it overwrites
+# the three directories it owns and touches nothing else, so a later run
+# *without* the flag does not take them away again. That is the state worth
+# guarding, and it is the one this script used to install without a word - a
+# tree carrying the three blob directories and no INF line for any of them,
+# whose DSC variable has gone back to 0. The payload that costs is the one built
+# without the thing the host stack exists to test, and nothing else here would
+# have noticed, because the missing INFs leave no hole: the volume simply has
+# three fewer drivers. So the two halves are checked against each other rather
+# than against the flag. A staged blob with no INF line is a driver packaged
+# nowhere; an INF line with no blob is a build failure minutes later with the
+# table list as the only clue. A tree that never had the flag has neither half
+# and passes, which is correct - it is a coherent tree, just not this one.
+HOST_STACK=(XhciPciEmulationDxe XhciDxe UsbInitDxe)
+host_in_volume=0
+for d in "${HOST_STACK[@]}"; do
+    inf="Binaries/gauguin/QcomPkg/Drivers/$d/$d.inf"
+    listed=no
+    grep -q "^  INF $inf\$" "$GEN/Platforms/Xiaomi/gauguinPkg/Include/DXE.inc" && listed=yes
+    staged=no
+    [ -d "$GEN/Binaries/gauguin/QcomPkg/Drivers/$d" ] && staged=yes
+    if [ "$staged$listed" = yesyes ]; then
+        host_in_volume=$((host_in_volume + 1))
+    elif [ "$staged$listed" = yesno ]; then
+        die "$d is staged under Binaries/gauguin but DXE.inc carries no INF line for it - this tree was generated without --xhci-host over one that had it, so the blob would ship in no volume"
+    elif [ "$staged$listed" = noyes ]; then
+        die "DXE.inc names $inf but no such blob is staged under Binaries/gauguin - the build would fail on a missing file"
+    fi
+done
+echo "   host stack  ($host_in_volume of 3 drivers, USE_XHCI_HOST_DRIVER = $(sed -n 's/^ *USE_XHCI_HOST_DRIVER *= *//p' "$GEN/Platforms/Xiaomi/gauguinPkg/gauguin.dsc"))"
+
+# ---------------------------------------------------------------------------
 say "installing platform package"
 # ---------------------------------------------------------------------------
 install -d "$MU/Platforms/Xiaomi/gauguinPkg"
@@ -81,12 +119,13 @@ say "installing device binaries"
 # GUID_NAMESPACE note in that file says why even the INF's own GUID is generated
 # rather than reproduced from Qualcomm's.
 #
-# Plus, only when tools/make_uefi_platform.py ran with --xhci-host, three more
-# that this phone's XBL does not carry at all: XhciPciEmulationDxe, XhciDxe and
-# UsbInitDxe, staged from the SM7225 sibling's Binaries/bitra/ because there is
-# no host-controller driver in this device to extract. They sit behind
-# USE_XHCI_HOST_DRIVER in the generated driver lists, so copying them in does
-# nothing on its own. See SIBLING_BLOBS in tools/make_xbl_binaries.py.
+# Three more directories sit beside them that this phone's XBL does not carry
+# at all: XhciPciEmulationDxe, XhciDxe and UsbInitDxe, staged from the SM7225
+# sibling's Binaries/bitra/ because there is no host-controller driver in this
+# device to extract. Only the generator's `--xhci-host` stages them, and nothing
+# removes them again - so their presence here says a flag was used once, not
+# that the tree being installed is the one that used it. The check above is what
+# tells those two apart. See SIBLING_BLOBS in tools/make_xbl_binaries.py.
 install -d "$MU/Binaries/gauguin"
 cp -a "$GEN/Binaries/gauguin/." "$MU/Binaries/gauguin/"
 echo "   Binaries/gauguin  ($(find "$GEN/Binaries/gauguin" -type f | wc -l) files)"
