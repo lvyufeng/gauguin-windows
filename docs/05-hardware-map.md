@@ -140,6 +140,18 @@ is `touch_xsfer` (a transport shim) and the panel's driver is the vendor
   footprint and not two chips. This unit's overlay is the one that names Novatek,
   and it is the only one of the nineteen that does; see docs/08 step 4.54.
 
+  Which of the two is *fitted* is decided, and not by the node's presence — both
+  nodes are live in the merged tree, and `i2c@988000` carries
+  `qcom,i2c-touch-active = "focaltech,fts_ts"` in overlay 13 as it does in the
+  FocalTech-only overlays. It is decided by the OTP bytes the display driver
+  publishes on the kernel command line: `msm_drm.panel_otp=0x46,0x36,0x32,...`
+  and `novatek,cfg_0`'s `novatek,tp-vendor = <0x46>` /
+  `novatek,display-maker = <0x36>` are the same two numbers, while `cfg_1` (the
+  other display supplier) is `0x53`/`0x42`. So the part is **Novatek
+  NT36672C** — `novatek,cfg_0`'s firmware is `novatek_nt36672c_j17_fw01.bin`,
+  `clicknum-file-name = "nvt+tianma"` — and the `focaltech@38` node is the
+  unpopulated alternative. docs/08 step 4.242 has the measurements.
+
 Mainline `sm6350.dtsi` declares **`i2c0` at the very same address `0x880000`**,
 because the GENI serial engine can be strapped as I2C, SPI or UART and upstream
 only ever described the I2C configuration. On gauguin, SE0 is a **SPI**.

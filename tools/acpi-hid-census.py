@@ -951,8 +951,25 @@ def bind_asl(args, hids, notes):
         psub = args.sub or read_psub(lines)
         gated = {h: t for h, t in subsys.items() if h not in notes["plain"]}
         print(f"  {len(gated)} of this set's {len(subsys)} subsystem-qualified ids "
-              f"have no unqualified models line, so they bind only a board whose")
-        print(f"  _SUB is one of their tokens; this board's _SUB is {psub!r}")
+              f"have no unqualified models line.")
+        # One token covers most of them, and that is the fact that decides
+        # whether the gate is reachable in one move: a board whose `_SUB`
+        # matches *some* gated id is not necessarily a board that reaches the
+        # one it needs. Measured 2026-09-29: CRD07280 alone is in all five, so
+        # a single `_SUB` change opens the whole gated set - a fact that reads
+        # very differently from "five ids are out of reach", and one worth
+        # printing rather than leaving to be counted by hand.
+        common = set.intersection(*gated.values()) if gated else set()
+        if common:
+            n_common = sum(1 for t in gated.values() if common <= t)
+            print(f"  The token{'s' if len(common) > 1 else ''} "
+                  f"{', '.join(sorted(common))} "
+                  f"{'are' if len(common) > 1 else 'is'} in "
+                  f"{n_common} of them, so a board whose `_SUB` is"
+                  f"{' one of those' if len(common) > 1 else ' that one'}"
+                  f" opens {n_common} and leaves {len(gated) - n_common} closed.")
+        print(f"  Each binds only a board whose _SUB is one of its tokens; this "
+              f"board's _SUB is {psub!r}")
         here = sorted(h for h in used if h in gated)
         if here:
             for hid in here:
@@ -961,9 +978,11 @@ def bind_asl(args, hids, notes):
                 print(f"    {hid:<12} needs _SUB in {', '.join(toks)}  "
                       f"({ok} this board)")
         else:
-            print("  None of them is in this file, so no id here is gated on the")
-            print("  subsystem id - it is the constraint on the nodes this file")
+            print("  None of them is named in this file, so no id here is gated on")
+            print("  the subsystem id - it is the constraint on the nodes this file")
             print("  does not have yet, not on the ones it has.")
+            for hid in sorted(gated):
+                print(f"    {hid:<12} would need _SUB in {', '.join(sorted(gated[hid]))}")
         print()
         if psub is None:
             print("  (No `_SUB` found in the file and none passed with `--sub`.)")
