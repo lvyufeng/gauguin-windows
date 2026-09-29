@@ -552,25 +552,40 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // (`%ADSP.DeviceDesc%=SUBSYS_Device, ACPI\QCOM0A1B`, Class SYSTEM), so
         // it binds whatever _SUB this board has; the `_ext` sibling's five
         // `&SUBSYS_KODIAK` lines are the other half of that pair and are not
-        // what binds here. Lisa gives this node no `_UID` and no `_STA` and this
-        // file follows neither - every other device here carries both, and an
-        // absent `_STA` on a Windows-enumerated device is the thing 4.251
-        // checked for. The `_UID` is Zero because nothing in the corpus gives
-        // this node one and it is the only ADSP.
+        // what binds here. *Corrected in 4.263:* this used to say Lisa gives
+        // this node no `_UID` **and no `_STA`**. The first half is right; the
+        // second is not. Lisa's `ADSP` at `DSDT.dsl:14911` carries
+        // `Method (_STA)` at `:14926` returning `0x0F`, and it carries `_UID`
+        // nowhere - so the two clauses had been swapped, and *this* file is the
+        // one that adds the `_UID`. It stays, because a Windows-enumerated
+        // device with no `_UID` is the thing 4.251 checked for, and Zero is the
+        // only value available: the node is the only ADSP on this board.
         //
-        // The interrupt is the tree's: `qcom,lpass@3000000`'s
-        // `interrupts-extended` first entry is `<&pdc 6 4>`, and the PDC's
-        // `qcom,pdc-ranges` maps pin 6 to SPI 486, so the GSI is `0x206` and it
-        // is **level-high** - the tree's own cell, not a guess, and also lisa's
-        // exact value. `qcom,lpass@3000000` carries `reg = <0x3000000 0x100>`,
+        // The interrupt is the tree's, and the **mode was corrected in 4.262**:
+        // `qcom,lpass@3000000`'s `interrupts-extended` first entry decodes
+        // `<&pdc 6 1>` once the PDC's own `#interrupt-cells` is used, and the
+        // PDC's `qcom,pdc-ranges` maps pin 6 to SPI 486, so the GSI is `0x206`
+        // and it is **edge**, not level. A later 4.258 paragraph claimed this
+        // was *"also lisa's exact value"*; that is **false for the mode and
+        // true only for the number**. Lisa's `ADSP` `_CRS` is `0x206` too, but
+        // lisa's `0x206` belongs to a different pin type in a different tree,
+        // and the two agreeing on the number is not the two agreeing.
+        // `qcom,lpass@3000000` carries `reg = <0x3000000 0x100>`,
         // which is the firmware-loading register block and not a resource this
         // driver claims, so the node is interrupt-only, as `IPCC` and `PM01`
         // already are.
         //
-        // The `_DEP` is lisa's list minus the three names this file does not
-        // have (`SSDD`, `ARPC`, `PDSR`), which is the same trimming CAMP got: a
-        // `_DEP` naming a device that does not exist is a namespace violation.
-        // `PILC`, `GLNK`, `IPC0`, `RPEN` and `TFTP` are all here; `PEP0` is.
+        // The `_DEP` is lisa's nine minus three (`:14913`): `PEP0`, `PILC`,
+        // `GLNK`, `IPC0`, `RPEN` and `TFTP` are all here, and `SSDD`, `ARPC`
+        // and `PDSR` are the three names this file does not have - the same
+        // trimming CAMP got, for the same reason: a `_DEP` naming a device that
+        // does not exist is a namespace violation, not a dangling reference.
+        // 4.263 checked whether the trim is still owed as a pair and it is:
+        // `qcsubsys7280.inf:49` claims `ACPI\QCOM0A20` (SSDD) plainly and
+        // `:45`-`:52` is one models block, so all four of `ADSP`, `QSM`, `SSDD`
+        // and `AMSS` bind *together* on any `_SUB` or not at all. Writing one
+        // of them alone buys nothing and is not a half-step, and writing all
+        // four is the step that follows.
         //
         Device (ADSP)
         {
@@ -2691,6 +2706,34 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                             }
                             ElseIf ((_T_1 == One))
                             {
+                                // The PSP's own peripheral table, and the clearest
+                                // single statement this board makes about which DSPs
+                                // it has: the second field is presence, and it is
+                                // **One** exactly for `adsp`, `cdsp`, `modem` and
+                                // `wpss` - the four this file has written - and
+                                // **Zero** for `slpi` and `spss`, the two it has
+                                // not. The mapping is fixed and is what the phone
+                                // says: `slpi` -> `SCSS`, `spss` -> `SPSS`. 4.263
+                                // measured the same table on the six corpus boards
+                                // that carry it, and where a board's table and its
+                                // own device list disagree the disagreement is real
+                                // rather than a decoding error (venus and alioth
+                                // list `SCSS`/`SPSS` devices with `Zero` in the
+                                // table; lemonade the reverse for `AMSS`), so the
+                                // table is a *bound* on the answer and not the
+                                // answer. Here it agrees in all six slots, which is
+                                // why this file's `SCSS` and `SPSS` stay unwritten.
+                                //
+                                // The consequence is the part worth recording: the
+                                // `_STA` branches below dispatch on this table, so
+                                // branches 3 (`SCSS`) and 6 (`SPSS`) can only ever
+                                // return Zero - not because the devices are
+                                // disabled but because the `External` declarations
+                                // at the top of this file name objects that are
+                                // never declared, and a `CondRefOf` on a
+                                // nonexistent object is False by construction. The
+                                // two branches are therefore correct *and* inert,
+                                // which is a different thing from being wrong.
                                 Name (SUBI, Package (0x06)
                                 {
                                     Package (0x03)
