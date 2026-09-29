@@ -72,6 +72,27 @@
  *
  * See the "USB PHY wake interrupts" note in docs/07-uefi-platform.md.
  *
+ * That slip has now happened a third time, and Step 4.253 caught it by measuring
+ * the file against the device tree instead of against itself. The three CSI
+ * bridges were written in Step 4.250 with the *SPI* number where the GSI belongs:
+ *
+ *   CSID   dts qcom,csid0@acb3000 interrupts <0x00 0x1D0 0x01>   wrote 0x1D0
+ *   CSI1   dts qcom,csid1@acba000 interrupts <0x00 0x1D2 0x01>   wrote 0x1D2
+ *   CSI2   dts qcom,csid2@acc1000 interrupts <0x00 0x2CD 0x01>   wrote 0x2CD
+ *
+ * and the correct values are 0x1F0, 0x1F2 and 0x2ED. The fourth camera node in
+ * the same step, VFE0, took dts SPI 0x1D1 and wrote 0x1F1 - correctly - which is
+ * what makes this a slip and not a deliberate encoding: three siblings out of
+ * four obeyed the rule stated at the top of this comment block, and the raw SPI
+ * is therefore not an alternative reading of the same hardware. It is also the
+ * one class of error none of the existing gates can see: `iasl` compiles it, the
+ * generated twin is `cmp`-identical to it, `acpiexec` loads and runs it, and
+ * tools/acpi-runtime-check.py passes it, because every one of those reads this
+ * file for its expectation. A bridge handed a GSI 32 below its real interrupt
+ * never fires, and nothing in the pipeline would have said so. The check that
+ * did catch it - every `Interrupt ()` in this file against the live device
+ * tree's own `interrupts` cell - is now tools/acpi-dt-crosscheck.py.
+ *
  * The CPU devices are Moorea's Silicon/Qualcomm/Moorea/DSDT_Minimal.asl: eight
  * ACPI0007 processors with _UID 0-7, matching the Processor UID and MPIDR that
  * Moorea's APIC GICC entries carry (0x0, 0x100 ... 0x700), which is what
@@ -777,7 +798,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     )
                 Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
                 {
-                    0x000001D0,
+                    0x000001F0,         // GSI: dts SPI 464 (0x1D0) + 32
                 }
             })
         }
@@ -799,7 +820,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     )
                 Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
                 {
-                    0x000001D2,
+                    0x000001F2,         // GSI: dts SPI 466 (0x1D2) + 32
                 }
             })
         }
@@ -821,7 +842,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
                     )
                 Interrupt (ResourceConsumer, Edge, ActiveHigh, Exclusive, ,, )
                 {
-                    0x000002CD,
+                    0x000002ED,         // GSI: dts SPI 717 (0x2CD) + 32
                 }
             })
         }

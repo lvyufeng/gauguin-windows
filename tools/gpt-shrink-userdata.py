@@ -35,7 +35,8 @@ Usage:
     gpt-shrink-userdata.py --apply --out DIR            # writes, never in place
 
 Exit codes: 0 planned or applied, 2 no secondary GPT in --images, 3 the two entry
-arrays already disagree, 4 the rewrite did not verify, 5 --apply without --out.
+arrays already disagree, 4 the rewrite did not verify, 5 --apply without --out,
+6 the written tail does not read back.
 """
 import argparse
 import json
@@ -161,21 +162,38 @@ def find_tail(images_dir, sector, alt_lba, num, esz):
     secondary at `AltLBA`. Looking for the tail is what stops that from being
     silently mistaken for a complete table.
 
-    Either a whole-LUN dump or a dedicated tail dump is accepted, and both are
-    recognised by size: a whole-LUN image reaches `(alt_lba + 1) * sector`, and a
-    tail dump is exactly the sectors the secondary occupies.
+    Three shapes are accepted: a whole-LUN image, which reaches `(alt_lba + 1) *
+    sector`; a "head+tail" image, which is the head dump with the tail's sectors
+    appended at their own LBA offset, so it reaches `alt_lba * sector` while
+    ending early enough to be told from a whole LUN; and a dedicated tail dump of
+    exactly the sectors the secondary occupies, which is what this tool's own
+    refusal message asks the operator to read off the phone.
+
+    Those three are told apart by size, and size is a blunt instrument: an image
+    that ends between the last tail sector and the second-to-last one matches
+    nothing here and is reported as absent. An earlier version of this function
+    had `(alt_lba - ent_sectors) * sector + need` where the middle case is, which
+    is `(alt_lba + 1) * sector` written the long way round - so "head+tail" could
+    never be selected, the `whole-LUN` branch always won, and the tail-only shape
+    was recognized here and then mis-read by `read_tail`, which seeks to
+    `alt_lba * sector` and finds nothing in a file that has no such offset. Both
+    mistakes are the same mistake, and it is the one this file's `read_tail`
+    docstring is about: a tail that is present being reported as missing is a
+    refusal, which is safe; the reverse is not.
     """
     ent_sectors = (num * esz + sector - 1) // sector
     need = (ent_sectors + 1) * sector
+    tail_at = alt_lba * sector  # an image that carries the tail at its own offset
+    whole = (alt_lba + 1) * sector
     for name in sorted(os.listdir(images_dir)):
         low = name.lower()
         if "sda" not in low and not low.startswith("gpt-"):
             continue
         p = os.path.join(images_dir, name)
         size = os.path.getsize(p)
-        if size >= (alt_lba + 1) * sector:
+        if size >= whole:
             return p, size, "whole-LUN"
-        if size >= (alt_lba - ent_sectors) * sector + need:
+        if size >= tail_at:
             return p, size, "head+tail"
     for name in sorted(os.listdir(images_dir)):
         if not name.lower().endswith(("-tail.bin", "-tail.img")):
@@ -186,14 +204,55 @@ def find_tail(images_dir, sector, alt_lba, num, esz):
     return None, None, None
 
 
-def read_tail(path, sector, alt_lba, num, esz):
-    """Read and validate the secondary GPT, by its own header and its own CRC."""
+def first_lba(path, sector, alt_lba):
+    """The LBA the image's *first byte* sits at: 0 for a whole-LUN dump, and the
+    first sector of the tail for a tail-only dump.
+
+    Derived from the size rather than from the shape's name, because the size is
+    what the file actually is: a valid image ends exactly at the sector after the
+    secondary header, so `last_lba = size // sector - 1` and `first_lba = alt_lba
+    - last_lba`. That one line covers both kinds - a whole LUN of 30,944,256
+    sectors gives 0, and the 20,480-byte tail gives 30,944,251 - and it cannot be
+    fooled by a file whose name lies about what it holds.
+
+    This replaces a `tail_base` that returned a *byte offset* and was then added
+    to `alt_lba * sector` by `read_tail`; that was the shape of the bug, not the
+    constant in it, and two attempts at the constant could not fix it. An LBA is
+    the right unit for both halves of the arithmetic, and the file's own size is
+    the right source for it.
+    """
+    return alt_lba - (os.path.getsize(path) // sector - 1)
+
+
+def read_tail(path, sector, alt_lba, num, esz, first=0):
+    """Read and validate the secondary GPT, by its own header and its own CRC.
+
+    Everything positional is taken from the device rather than recomputed,
+    because on this device the formulas differ - and each difference is silent
+    if assumed:
+
+      - **where the backup array is.** The secondary header says
+        `PartitionEntryLBA = AlternateLBA - 4`, where the UEFI formula for a
+        64x128 table gives `AlternateLBA - 2`. Two of the five sectors between
+        the array and the end of the LUN are zeros. A writer that recomputed the
+        position would drop the new array into zeros and leave the old, complete,
+        perfectly parseable array exactly where the old secondary header pointed
+        at it: two tables that both parse and that disagree.
+      - **where the file's LBAs start.** `first`, from `first_lba`.
+
+    Every seek below is therefore `(absolute LBA - first) * sector`.
+    """
     ent_sectors = (num * esz + sector - 1) // sector
+    size = os.path.getsize(path)
+    if size % sector:
+        raise ValueError("%s: %d bytes is not a whole number of %d-byte sectors"
+                         % (path, size, sector))
+    if (alt_lba - first) * sector + sector > size:
+        raise ValueError("%s: says it starts at LBA %d, which puts the secondary header "
+                         "past the end of the file" % (path, first))
     with open(path, "rb") as f:
-        f.seek(alt_lba * sector)
+        f.seek((alt_lba - first) * sector)
         hdr = f.read(92)
-        f.seek((alt_lba - ent_sectors) * sector)
-        blob = f.read(num * esz)
     if hdr[:8] != GPT_SIG:
         raise ValueError("%s: no GPT header at LBA %d" % (path, alt_lba))
     h = parse_header(hdr)
@@ -205,6 +264,15 @@ def read_tail(path, sector, alt_lba, num, esz):
     struct.pack_into("<I", probe, 16, 0)
     if crc32(bytes(probe)) != h["hdr_crc"]:
         raise ValueError("%s: secondary header CRC does not verify" % path)
+    # The array's own location, from the header that owns it, is authoritative.
+    arr_lba = h["ent_lba"]
+    if arr_lba < first:
+        raise ValueError("%s: the secondary header points at LBA %d for its entry array, "
+                         "before the image's own first sector %d"
+                         % (path, arr_lba, first))
+    with open(path, "rb") as f:
+        f.seek((arr_lba - first) * sector)
+        blob = f.read(num * esz)
     if crc32(blob) != h["ent_crc"]:
         raise ValueError("%s: secondary entry array CRC does not verify" % path)
     return h, blob
@@ -302,7 +370,8 @@ def plan_layout(ents, sector, usable_last, esp_mib, msr_mib, win_gib, keep_gib):
     return new, changes, (ud_new, esp, msr, win)
 
 
-def build(sector, alt_lba, usable_first, usable_last, disk_guid, new_entries, old_hdr):
+def build(sector, alt_lba, usable_first, usable_last, disk_guid, new_entries, old_hdr,
+          sec_ent_lba=None):
     """Serialise both GPTs for `new_entries`, CRCs stamped.
 
     `AlternateLBA` is **taken from the device's own header** and not recomputed as
@@ -311,6 +380,10 @@ def build(sector, alt_lba, usable_first, usable_last, disk_guid, new_entries, ol
     lying past the last usable one. Recomputing would move the secondary GPT
     inwards and leave the real one stale, which is exactly the inconsistency this
     tool exists to prevent.
+
+    `sec_ent_lba` is the same idea for the backup array: the LBA the *secondary*
+    header records for it, passed in from the device's table. See the comment
+    below for what recomputing it would cost.
     """
     num, esz = old_hdr["num"], old_hdr["esz"]
     ent_len = num * esz
@@ -326,7 +399,16 @@ def build(sector, alt_lba, usable_first, usable_last, disk_guid, new_entries, ol
         arr[o + 56:o + 56 + len(nm)] = nm
     ent_crc = crc32(bytes(arr))
     ent_sectors = (ent_len + sector - 1) // sector
-    sec_ent_lba = alt_lba - ent_sectors
+    # Where the *backup* array goes is read off the device's own secondary header,
+    # not recomputed. This device puts it at `AlternateLBA - 4`, two sectors
+    # further in than the UEFI formula's `AlternateLBA - 2`; rewriting the table
+    # with the formula would drop the new array into two sectors that are
+    # currently zeros and leave the old, complete, perfectly parseable array
+    # sitting exactly where the old secondary header pointed at it. That is the
+    # inconsistency this whole tool exists to prevent, and it is silent - both
+    # tables parse; they just disagree. `sec_ent_lba` therefore falls back to the
+    # formula only when the caller has no device header to read (the tests).
+    sec_ent_lba = sec_ent_lba if sec_ent_lba is not None else alt_lba - ent_sectors
     hdr_size = old_hdr["hdr_size"]
 
     def header(my_lba, alt, ent_lba):
@@ -365,6 +447,17 @@ def reparse(primary, entries, secondary, sector):
         problems.append("the two headers disagree about the entry array CRC")
     if ph["my_lba"] != 1 or ph["alt_lba"] != sh["my_lba"] or sh["alt_lba"] != 1:
         problems.append("MyLBA/AlternateLBA are not each other's mirror")
+    # The backup array's own LBA is checked, not assumed. Both headers point at
+    # one array; if they point at different sectors then each table parses and
+    # they still disagree - which is the exact state a shrink must not leave, and
+    # this device is not the first that would reach it: it puts the backup array
+    # at AlternateLBA - 4 rather than the UEFI formula's AlternateLBA - 2.
+    if ph["ent_lba"] != 2:
+        problems.append("the primary's PartitionEntryLBA is %d, not the UEFI 2"
+                        % ph["ent_lba"])
+    if sh["ent_lba"] >= sh["my_lba"]:
+        problems.append("the secondary's PartitionEntryLBA %d is not before its own header at %d"
+                        % (sh["ent_lba"], sh["my_lba"]))
     if ph["usable_first"] != sh["usable_first"] or ph["usable_last"] != sh["usable_last"]:
         problems.append("the two headers disagree about the usable range")
     if ph["disk_guid"] != sh["disk_guid"]:
@@ -411,8 +504,8 @@ def main():
     print("   secondary GPT is at LBA %d, per this header" % h["alt_lba"])
 
     tail, tail_size, kind = find_tail(a.images, a.sector, h["alt_lba"], h["num"], h["esz"])
+    ent_sectors = (h["num"] * h["esz"] + a.sector - 1) // a.sector
     if tail is None:
-        ent_sectors = (h["num"] * h["esz"] + a.sector - 1) // a.sector
         print()
         print("!! STOP - the secondary GPT is not in this directory.")
         print("   A shrink rewrites both copies, and the secondary is the one a failed")
@@ -429,7 +522,8 @@ def main():
               % (os.path.getsize(gpt) % a.sector, os.path.getsize(gpt) // a.sector))
         return 2
 
-    th, tblob = read_tail(tail, a.sector, h["alt_lba"], h["num"], h["esz"])
+    th, tblob = read_tail(tail, a.sector, h["alt_lba"], h["num"], h["esz"],
+                          first_lba(tail, a.sector, h["alt_lba"]))
     if tblob != blob:
         print("!! the two entry arrays differ; refusing to edit a table that is already"
               " inconsistent")
@@ -472,7 +566,7 @@ def main():
     print("   Windows   %6.2f GiB" % (win * a.sector / GIB))
 
     pri, arr, sec = build(a.sector, h["alt_lba"], h["usable_first"], h["usable_last"],
-                          h["disk_guid"], new, h)
+                          h["disk_guid"], new, h, sec_ent_lba=th["ent_lba"])
     problems, _ = reparse(pri, arr, sec, a.sector)
     print()
     if problems:
@@ -506,11 +600,33 @@ def main():
         f.write(b"\x00" * (a.sector - len(pri)))
         f.write(arr)
         f.write(b"\x00" * (ent_sectors * a.sector - len(arr)))
+    # The tail: the mirror of the head, at the device's own LBAs. Its first sector
+    # is where the *device's* secondary header says the backup array lives, and the
+    # span is whatever that leaves: on this device `AlternateLBA - 4`, four sectors
+    # of which the last is the header, so four. A file laid out on the UEFI
+    # formula's `AlternateLBA - 2` would be a sector count that matches nothing on
+    # the disk it is written to, and writing it would put the array where the
+    # header does not point.
+    sec_ent_sectors = h["alt_lba"] - th["ent_lba"] + 1
+    tail = bytearray(sec_ent_sectors * a.sector)
+    tail[:len(arr)] = arr
+    tail[(sec_ent_sectors - 1) * a.sector:(sec_ent_sectors - 1) * a.sector + len(sec)] = sec
     with open(os.path.join(a.out, "GPT-sda-tail.bin"), "wb") as f:
-        f.write(arr)
-        f.write(b"\x00" * (ent_sectors * a.sector - len(arr)))
-        f.write(sec)
-        f.write(b"\x00" * (a.sector - len(sec)))
+        f.write(tail)
+    # Read the artifact back the same way the device's own table was read. A file
+    # this tool writes and cannot parse with its own reader is not a table to put
+    # on a phone, and the check is cheap enough to be unconditional.
+    try:
+        back_first = first_lba(os.path.join(a.out, "GPT-sda-tail.bin"), a.sector, h["alt_lba"])
+        bh, bblob = read_tail(os.path.join(a.out, "GPT-sda-tail.bin"), a.sector, h["alt_lba"],
+                              h["num"], h["esz"], back_first)
+    except ValueError as e:
+        print("!! the written tail does not read back: %s" % e)
+        print("   the artifact in %s is NOT to be installed" % a.out)
+        return 6
+    if bblob != arr or bh["ent_lba"] != th["ent_lba"]:
+        print("!! the written tail does not read back: the artifact is not installed")
+        return 6
     with open(os.path.join(a.out, "GPT-sda-plan.json"), "w") as f:
         json.dump(dict(sector=a.sector, alt_lba=h["alt_lba"], usable_last=h["usable_last"],
                        userdata_sectors=ud, esp_sectors=esp, msr_sectors=msr,
@@ -524,8 +640,8 @@ def main():
     for n in ("GPT-sda-head.bin", "GPT-sda-tail.bin", "GPT-sda-plan.json"):
         print("   %s  %d bytes" % (os.path.join(a.out, n), os.path.getsize(os.path.join(a.out, n))))
     print()
-    print("   To install: write the head to LBA 0 and the tail to LBA %d..%d. Nothing"
-          % (h["alt_lba"] - ent_sectors, h["alt_lba"]))
+    print("   To install: write the head to LBA 0..%d and the tail to LBA %d..%d. Nothing"
+          % (len(mbr) // a.sector + ent_sectors - 1, th["ent_lba"], h["alt_lba"]))
     print("   here does that, and nothing here resizes the filesystem - the GPT edit and")
     print("   the `userdata` resize are two steps, and an interruption between them is")
     print("   what makes this irreversible.")

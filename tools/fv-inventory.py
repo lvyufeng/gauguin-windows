@@ -102,9 +102,21 @@ def fv_files(fv):
     which is not a GUID, so the walk returns nothing and the volume looks
     empty. That is a bug in the reader, not a hole in the firmware.
 
-    For FVMAIN of the gauguin build: HeaderLength 0x48, ExtHeaderOffset 0x60,
-    ExtHeaderSize 0x14, so files start at align8(0x60 + 0x14) = 0x78 — which is
-    exactly where the build's own `FVMAIN.Fv.txt` map puts the first file.
+    For FVMAIN of the gauguin build the answer is `0x78`, but *not* for the
+    reason this function's earlier comment gave. It read a UINT32 at `ext_off
+    + 16` and called it `ExtHeaderSize`, 0x14; the extension header's real
+    size is the UINT16 at `ext_off + 0`, which reads 0x4C84 here, and a start
+    derived from that is `0x4CE4` — from which the walk collects four files and
+    then hits an impossible size field at 0xD550. So the candidates are not
+    both plausible: only `0x78` partitions the volume into a contiguous chain
+    that ends exactly on the all-0xFF terminator at 0x730960, **126 files**,
+    and the build's own `FVMAIN.Fv.txt` lists those same 126 GUIDs in that same
+    order. The 0x14 read is load-bearing and its interpretation is not; a
+    candidate that walks to the terminator is the evidence, and Step 4.253
+    measured that no frame rule can substitute for it (the map's offset minus
+    the file's offset is 0x200 for 114 lines, 0x4D8 for 10 and 0 for 2, so
+    "map minus 504" is a shift fitted to the lines it already worked for and
+    it excluded the volume's first two files on that basis).
     """
     base = fv.find(b"_FVH") - FV_SIG
     if base < 0:
@@ -117,8 +129,14 @@ def fv_files(fv):
     starts = [base + hlen]
     if ext_off:
         e = base + ext_off
-        ext_size, = struct.unpack("<I", fv[e + 16:e + 20])
-        starts.insert(0, (e + ext_size + 7) & ~7)
+        # The candidates are ranked by how far they **walk**, not by whether
+        # they look like a header. The extension header's own size is the
+        # UINT16 at +0, which for FVMAIN is 0x4C84, and the earlier UINT32 at
+        # +16 is 0x14 - reading the wrong one makes the wrong candidate look
+        # authoritative. Both are tried and the longer chain wins.
+        ext_size16, = struct.unpack("<H", fv[e:e + 2])
+        for size in (ext_size16, struct.unpack("<I", fv[e + 16:e + 20])[0]):
+            starts.insert(0, (e + size + 7) & ~7)
 
     best = []
     for s in starts:
