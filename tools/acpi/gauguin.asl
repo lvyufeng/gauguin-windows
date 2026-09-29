@@ -705,9 +705,14 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // a KMDF *bus* driver (Class System, `KmdfService = CCIDBridge`), so a
         // node carrying this id enumerates children that this file does not
         // describe. `_STA` returning 0x0F would report a functioning bridge with
-        // an empty bus; omitting `_STA` makes the device present and functional,
-        // which is what the OS defaults to in the absence of the method, and
-        // that is honest to what the node actually is.
+        // an empty bus; omitting `_STA` lets the device fall to the OS default,
+        // which is how such a node is meant to look. **(Step 4.251 measured
+        // what that default is and it is not what the sentence above first
+        // claimed. `acpiexec` reports `AE_NOT_FOUND` for `\_SB.CSID._STA`,
+        // `\_SB.CSI1._STA` and `\_SB.CSI2._STA`: the *namespace* carries no
+        // statement about the three. The OS's rule in the absence of `_STA` is
+        // present/enabled/functioning, but "the OS will assume it" and "this
+        // table says so" are different claims and only the first is true.)**
         //
         // The two lite blocks are deliberately **not** written. `qcom,vfe-lite170`
         // at 0x0ACC4000 and `qcom,csid-lite170` at 0x0ACC8000 are live `ok`
