@@ -45034,3 +45034,103 @@ bootloader the P3 `fastboot boot` workflow needs, and the screen photograph that
 before any payload boots. `userdata` (107 GB, unbacked), the partition table and the firmware LUN remain
 untouched, and `device/dxe/UsbConfigDxe.efi` is still
 `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
+
+## Step 4.229 — the P3 gate's software prerequisites are enumerated and the UDF question is settled in the negative: the stick the guest boots from is MBR + one FAT32 partition holding an unsplit 3.28 GiB `install.wim` and no UDF at all, the build already carries the `DiskIoDxe`/`PartitionDxe`/`Fat` chain that volume needs, and the stock `xbl.img`'s 118-file FFS carries five USB drivers that are all device-mode — so the six host-stack drivers the gate needs are absent from stock and are exactly what P3 item 3's payload supplies
+
+**Why this step exists.** The standing item "decide whether to add
+`MdeModulePkg/Universal/Disk/UdfDxe/UdfDxe.inf` to the gauguin package" has been open for several steps and
+is cheaper to close by evidence than by argument — and closing it required laying out, in one place, what
+the P3 gate needs on each side. That layout turns out to yield a second finding, about the USB stack, which
+is not a decision but a measurement of the stock firmware.
+
+**The stick the guest boots from is FAT32 and there is no UDF on it.** `work/win11/stick/win11arm64-stick.img`
+is 6,442,450,944 B and `file` reads it as `DOS/MBR boot sector; partition 1 : ID=0xc, active, startsector
+2048, 12580864 sectors` — an MBR with a single FAT32 (LBA) partition beginning at byte 1,048,576. `7z` names
+that partition `0.fat` with `File System = FAT32`, cluster 4096 B, `Label = WIN11ARM64`. Sectors 16, 256 and
+257 — where an ISO9660 primary volume descriptor and a UDF anchor volume descriptor pointer would live —
+carry no descriptor of either kind, and `isoinfo -d` answers `CD-ROM is NOT in ISO 9660 format`. So the
+volume the QEMU guest has been booting from, and the volume the phone will have to boot from, is plain
+FAT32: **`UdfDxe` is not on the boot path, and the UDF item is decided in the negative** at no cost and with
+no build change.
+
+**What the stick holds.** `efi/boot/bootaa64.efi` 2,622,784 B — the removable-media path, which is the file
+the firmware's boot manager will pick up — plus `efi/microsoft/boot/cdboot.efi` 968,096 B,
+`efi/microsoft/boot/bcd` 16,384 B, `bootmgr.efi` 2,608,560 B, `boot/boot.sdi` 3,170,304 B, and
+`sources/boot.wim` 465,806,736 B beside `sources/install.wim` at **3,520,950,655 B = 3.279 GiB**. That last
+figure is why the volume is unsplit: FAT32's per-file limit is 4 GiB and this image is under it, so no
+`install.swm`/`install2.swm` pair was needed and no second filesystem is involved anywhere in the chain.
+
+**The build already carries the filesystem chain the stick needs, and so does the stock firmware.**
+`uefi/Platforms/Xiaomi/gauguinPkg/Include/DXE.inc` lines 76–78 list `DiskIoDxe`, `PartitionDxe` and
+`FatPkg/EnhancedFatDxe/Fat.inf`; `APRIORI.inc` lines 52–53 and 59 carry the same three, with `EnglishDxe`
+at 54 and `SdccDxe` and `UFSDxe` at 56–57. Both halves of the gate's storage need — read FAT32 off USB,
+and see the internal UFS — are therefore already in the build *and* already in the phone's stock image
+(`device/dxe-inventory.txt` lists `DiskIoDxe` 45,056 B, `PartitionDxe` 49,152 B, `Fat` 65,536 B, `SdccDxe`
+106,496 B and `UFSDxe` 114,688 B among its 118 nested FFS files). Nothing has to be added for either.
+
+**The stock `xbl.img` carries five USB drivers and every one of them is device-mode.** The inventory's
+**84 DRIVERs** contain exactly five USB entries — **`UsbConfigDxe`, `UsbDeviceDxe`, `UsbfnDwc3Dxe`,
+`UsbMsdDxe` and `UsbPwrCtrlDxe`** — and the build's six host-stack names (`XhciPciEmulationDxe`,
+`XhciDxe`, `UsbInitDxe`, `UsbBusDxe`, `UsbKbDxe`, `UsbMassStorageDxe`) appear **nowhere** in it. That
+absence is real and not a naming difference: comparing the inventory's 84 names against the build's 80 turns
+up about nineteen pairs that are one driver under two names — `DALSys`/`DALSYSDxe`, `PmicDxe`/`PmicDxeLa`,
+`QcomBds`/`BdsDxe`, `ArmCpuDxe`/`CpuDxe`, `ArmTimerDxe`/`TimerDxe`,
+`ResetRuntimeDxe`/`ResetSystemRuntimeDxe`, `VariableDxe`/`VariableRuntimeDxe`,
+`ShmBridgeDxe`/`ShmBridgeDxeLA`, `ScmDxe`/`ScmDxeLA`, `TzDxe`/`TzDxeLA`, `DALTLMM`/`TLMMDxe`,
+`HALIOMMU`/`HALIOMMUDxe`, `HWIODxeDriver`/`HWIODxe`, `I2C`/`I2CDxe`, `SPMI`/`SPMIDxe`,
+`HiiDatabase`/`HiiDatabaseDxe`, `ChipInfo`/`ChipInfoDxe`, `PlatformInfoDxeDriver`/`PlatformInfoDxe`,
+`RealTimeClock`/`RealTimeClockRuntimeDxe` — while the two USB name sets are **disjoint**, and they are
+disjoint along a boundary that makes sense: the stock five are the *function* side, the drivers that let the
+phone be a fastboot and ADB peripheral, and the missing six are the *host* side. **Those six are what P3
+item 3's payload exists to supply**, so the gate's first half cannot pass without it, and this is the first
+time that has been said as an inventory rather than as an intention.
+
+**The gate, written as inventory.** For *a Windows 11 ARM64 installer boots off a USB stick*: the volume is
+FAT32 (`PartitionDxe` + `Fat`, in the build and in stock), the boot chain is `efi/boot/bootaa64.efi`
+(`Fat` + `DiskIoDxe`, in both), and the transport is USB host (**in neither — it is the payload's job**).
+For *and sees the internal UFS*: `UFSDxe` and `SdccDxe` are in both. For the other two P3 items:
+`DisplayDxe` (270,336 B) and `ButtonsDxe` (40,960 B) are **already in the stock FFS**, so items 2 and 4 are
+replacements or augmentations of drivers the phone already dispatches rather than additions from nothing —
+while `SimpleFbDxe` and `DisplayReEnablerDxe`, which the build asks for, are absent from the inventory under
+any name.
+
+**The host stack is dispatched, not a-priori, and the switch is on.** `gauguin.dsc:64` sets
+`USE_XHCI_HOST_DRIVER = 1`, and in `DXE.inc` the host INFs sit inside `!if $(USE_XHCI_HOST_DRIVER) == 1`
+blocks — `XhciPciEmulationDxe` and `XhciDxe` at lines 113–114, `UsbInitDxe` at 125 — so the build that
+carries them is the build with the switch on. None of those three is in `APRIORI.inc`, while `UsbBusDxe`,
+`UsbKbDxe` and `UsbMassStorageDxe` are there at lines 90–92 and so dispatch early. Whether the host
+controller, which is not a-priori, still binds once `XhciPciEmulationDxe` has produced the PCI I/O protocol
+it needs is a question about real dispatch order and is recorded here as open rather than answered from the
+build files.
+
+**decides**: that the UDF item is closed in the negative — the stick is MBR + a single FAT32 (LBA) partition
+at sector 2048 labelled `WIN11ARM64`, carrying an unsplit `install.wim` of 3,520,950,655 B = 3.279 GiB, and
+no ISO9660 or UDF descriptor exists at sector 16, 256 or 257 of it, so `UdfDxe` is not on the P3 boot path
+and no driver needs to be added for it; that the boot chain is `efi/boot/bootaa64.efi` (2,622,784 B) →
+`efi/microsoft/boot/cdboot.efi` (968,096 B) with `bcd` and `boot.sdi` beside them and `sources/boot.wim`
+(465,806,736 B), all on FAT32; that the filesystem half of the gate is already in both the build
+(`DXE.inc` 76–78, `APRIORI.inc` 52–53, 59) and the stock image (`DiskIoDxe`, `PartitionDxe`, `Fat`,
+`EnglishDxe`, `SdccDxe`, `UFSDxe`); that the phone's stock `xbl.img` dispatches exactly five USB drivers,
+all device-mode, so all six host-stack drivers the gate needs are absent from stock and are supplied only by
+P3 item 3's payload; that `DisplayDxe` and `ButtonsDxe` are already in the stock FFS while `SimpleFbDxe` and
+`DisplayReEnablerDxe` are not; and that `USE_XHCI_HOST_DRIVER = 1` is set in `gauguin.dsc` and gates exactly
+the three host INFs in `DXE.inc`, none of which is a-priori. **does not decide**: whether the ~19 stock/build
+name pairs are the same binaries built twice or different builds of the same driver, this step having
+compared names and sizes and not bytes; whether the host controller binds at the right point in the dispatch
+order, the payload being unflashed and the phone absent; whether the stock `DisplayDxe` can be replaced
+outright or has to be left in place and re-enabled alongside, which only the phone can show; and whether the
+six absent host drivers are absent from the whole boot chain or only from `xbl.img`, the inventory covering
+that one image and no other partition. **Not an action**: `file`, `7z l`, `isoinfo -d` and byte reads over
+`work/win11/stick/win11arm64-stick.img` (read only), `grep` and `sed -n` over the platform's `DXE.inc`,
+`APRIORI.inc`, `gauguin.dsc` and `device/dxe-inventory.txt` (read only) — no build was run, no `.inf` was
+added or removed, no file in `device/dxe/` was rewritten, and no file inside the repository changed except
+this step's own text. **Working state**: the run is live and unchanged — launcher pid 954750, qemu pid
+954767, `SECS=14400` from 08:09:25 killing it at about **12:09**, 79 frames written (172 MB) through
+`shot-079` at 10:45, `disk.img` and `serial.log` untouched since 08:09. The probe directory still holds
+158 frames in 218 MB. **device state**: unchanged — `adb devices`, `fastboot devices`, both tty globs,
+`lsusb` and `lsblk` as 4.228 records them, with **no USB stick attached to this host** and no removable
+device at all, so the P3 gate cannot be run here; the three physical actions (a reset of the phone, the
+reboot to the bootloader, and the screen photograph `先读屏，再刷下一次` requires) remain outstanding.
+`userdata` (107 GB, unbacked), the partition table and the firmware LUN remain untouched, and
+`device/dxe/UsbConfigDxe.efi` is still
+`sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`.
