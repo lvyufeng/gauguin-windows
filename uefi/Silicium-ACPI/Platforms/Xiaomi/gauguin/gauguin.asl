@@ -1193,6 +1193,60 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         }
 
         //
+        // The auxiliary camera sensor - CAMI, QCOM0A99, and the last camera id
+        // the 112-set claims that this file did not present. It waited because
+        // lisa gates it on \_SB.SKUV: `SKUV == One` returns `_STA Zero` and
+        // `SKUV` is a soft-SKU nothing writes (4.272), so on lisa the node is
+        // the one camera id that can be disabled. Three things say it belongs
+        // here.
+        //
+        // First, the gate is a presence switch and the hardware answers it.
+        // `SKUV == One` is the variant with no auxiliary sensor, and gauguin's
+        // live device tree enumerates five `qcom,cam-sensor` nodes - @0/@1/@4 on
+        // `qcom,cci0`, @2/@3 on `qcom,cci1` - every one `status = "ok"`, beside
+        // five eeproms, an actuator and three `qcom,camera-flash` nodes. A board
+        // whose gate said "no aux sensor" would not declare the five. This is
+        // the same test 4.274 applied to the thermal family: read the thing the
+        // gate is about off the running device.
+        //
+        // Second, the corpus does not gate the id the way lisa does. a52sxq -
+        // the other corpus board that carries `QCOM0A99`, and one that uses
+        // `SKUV` 31 times - writes its CAMI ungated, `_STA Return (0x0F)`, and
+        // renoir, cedros and lemonade do not carry the id at all. So the
+        // corpus's own answer for a board that has an aux sensor is the ungated
+        // form.
+        //
+        // Third, `CAMT` (QCOM0ACE) and `CAMU` (QCOM0ACF), the other two gated
+        // camera ids, are left out and that is not a compromise: neither appears
+        // in any of the 112 INFs, so neither binds anything whether written or
+        // not, and writing them would add namespace that drives nothing. The aux
+        // sensor is the one that has a driver (`qccamauxsensor7280.inf:63`).
+        //
+        // `_DEP` is lisa's `\_SB.MPCS`, which in this corpus is the node this
+        // file calls `CPHY` (`QCOM0A98`, 4.271's finding), so the dependency is
+        // written as `\_SB.CPHY` - the same referent the front sensor's `_DEP`
+        // uses. `_UID` is lisa's `0x1C`, distinct from every other camera node
+        // here (CAMP 0x1B, JPGE 0x17, VFE0 0x16, CPHY 0x18, CAMF 0x1A,
+        // FLSH 0x19). No `_CRS`: lisa's CAMI has none, and the sensor is
+        // enumerated over the CCI bus the eeproms share rather than over a
+        // memory window - the RFS0 reasoning again.
+        //
+        Device (CAMI)
+        {
+            Name (_HID, "QCOM0A99")  // _HID: Hardware ID
+            Alias (^PSUB, _SUB)
+            Name (_UID, 0x1C)  // _UID: Unique ID
+            Name (_DEP, Package (One)  // _DEP: Dependencies
+            {
+                \_SB.CPHY
+            })
+            Method (_STA, 0, NotSerialized)  // _STA: Status
+            {
+                Return (0x0F)
+            }
+        }
+
+        //
         // The JPEG engine, and the one node in the chain that transfers from
         // the corpus byte for byte. lisa's JPGE is `_HID QCOM0A33`, `_UID 0x17`,
         // `_DEP` of CAMP and MMU0, and two windows with two interrupts:
