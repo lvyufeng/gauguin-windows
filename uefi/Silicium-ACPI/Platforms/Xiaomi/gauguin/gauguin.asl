@@ -225,18 +225,57 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // **base** binds under `IDP07280` via `qcbtfmuart_hsp7280`, so what is
         // lost there is a registry extension and not the device.
         //
-        // And `QCOM0A17` (PEP0) turns out to be unreachable either way, which is
-        // a separate measurement and belongs here because it is the id that
-        // motivates the token question in the first place. Every models line
-        // that names it carries a **`&REV_` field as well as the token** -
-        // `&SUBSYS_IDP07280&REV_0193`, `&REV_01EB`, `&REV_01E3`, `&REV_020A`,
-        // `&REV_0215` in `qcpep.wd7280.inf:92`-`:103`. `_REV` is the DSDT's own
-        // revision, this table's `DefinitionBlock (..., 2, ...)`, and `2` is
-        // below every one of them. So PEP0's extension INF binds no board whose
-        // DSDT is revision 2, `_SUB` or no `_SUB` - the lever is the token for
-        // six of the nine gated ids and the DSDT revision for the seventh, and
-        // raising the revision to satisfy a driver would be a much larger
-        // statement than the token is.
+        // And `QCOM0A17` (PEP0) was recorded here as unreachable either way,
+        // which is **wrong, and wrong in three separable ways** - corrected in
+        // 4.268, and kept in place rather than deleted because the id is what
+        // motivates the token question in the first place.
+        //
+        // First, it is reachable, and trivially: `qcpep.wd7280.inf:33` is
+        // `%PepDevice.DeviceDesc%=Pep_Device, ACPI\QCOM0A17` in the **same**
+        // `[QC.NTARM64]` models section the gated lines at `:92`-`:103` sit in,
+        // with no `SUBSYS` and no `REV_`. That is a plain claim, and
+        // `tools/acpi-hid-census.py --bind` lists `QCOM0A17` as neither gated
+        // nor unclaimed because of it. So the nine-id count this comment was
+        // built around has PEP0 on the binding side of it, not off the table.
+        //
+        // Second, `_REV` is **not** the DSDT's revision. It is the ACPI spec's
+        // "Supported Integer Width" object, and the value in those models lines
+        // is the SoC's product revision, read on the reference boards out of
+        // the SoC ID register: lisa's `GPU0._HRV` computes
+        // `PROD = ((\_SB.SJTG >> 0x0C) & 0xFFFF)` and compares it against
+        // `0x0193`, `0x0194`, `0x01E3`, `0x01EB`, `0x020A` and `0x0215` -
+        // **the six `REV_` tokens in the INF, one for one.** The DSDT revision
+        // is a different object entirely and every one of the 28 corpus tables
+        // is revision 2, lisa and a52sxq included, so "revision 2 is below
+        // every one of them" compared the wrong number: `0x0193` is 403, not a
+        // table revision, and a `DefinitionBlock` revision of 2 is not below it
+        // because the two are not the same quantity. The "much larger statement
+        // than the token" paragraph rested on that confusion; raising the
+        // `DefinitionBlock` revision would not have reached any of these lines.
+        //
+        // Third - and this is what the corrected reading means for the port -
+        // **the `&REV_` lines are not the bind either.** For the IDP07280
+        // family, which is the one this board is in, the five `SUBSYS_IDP07280`
+        // lines (`REV_0193`, `REV_01EB`, `REV_01E3`, `REV_020A`, `REV_0215`)
+        // point at **three different descriptors** - `PEP_Device_IDP07280`
+        // twice, `PEP_Device_IDP07270` once and `PEP_Device_IDP08270` twice -
+        // and the plain `Pep_Device` at `:33` is what installs when none of
+        // them matches. The revisioned lines do not open a section the plain line
+        // leaves shut; they name a more specific descriptor for a board that
+        // reports one of the six. What is genuinely open is the **reverse**
+        // risk: if a `_SUB`/`_REV` pair matched a line pointing at
+        // `PEP_Device_CRD07280` or `PEP_Device_IDP08270`, the pended device
+        // description would name a CRD or an 08270, and the `SUBSYS_IDP07280`
+        // lines themselves already do both (`REV_01E3` and `REV_020A` name
+        // `PEP_Device_IDP08270` while the subsystem says 07280). A wrong
+        // descriptor is worse than the generic one, and two of the five lines
+        // in this family carry exactly that mismatch. So the
+        // correct default is the one this file has: `PSUB` returns `IDP07280`,
+        // PEP0 has no `_HRV` and no `_REV`, and the plain line is what binds.
+        // Adding a `_REV` that lisa does not expose on PEP0 would be inventing
+        // a claim about this board's silicon revision in order to match a
+        // driver's string, which is the same failure the `RFS0` windows were
+        // left empty to avoid.
         //
         // It is also not a claim about the silicon. The token is an interface
         // value, and this file already writes a reference board's value where
