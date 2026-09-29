@@ -45715,7 +45715,7 @@ all plain. What *is* gated is the sensors — `qccamfrontsensor7280.inf:61-62` a
 
 **The nodes are siblings, not a parent chain.** lisa's `JPGE` is `_HID QCOM0A33`, `_UID 0x17`, with `_DEP` of CAMP and MMU0 and two interrupts; `CAMP` is `QCOM0A32`, `_UID 0x1B`, `_DEP` of PEP0/PMIC/PML0/ARPC/NSP0; `VFE0` is `QCOM0A25`, `_UID 0x16`, `_DEP` of MMU0/PEP0/CAMP; `MPCS` is `QCOM0A98`, `_UID 0x18`, `_DEP` of CAMP; `FLSH` is `QCOM0A27`, `_UID 0x19`; and `CCID` is `QCOM0AA2` with neither `_UID` nor `_STA` and a `_DEP` of PSUB alone. The dependency is on the platform node, not on each other. lisa's `CAMP` carries **no window and no interrupt** — its three GSIs (0x1EC, 0x12F, 0x1EB) are its children's CSPR/CAMNOC lines, and `0x12F` is this file's BAM1 interrupt. The corpus's top camera nodes are deliberately thin.
 
-**The VFE0 template is measurable on gauguin, and half of it matches.** lisa's `VFE0` carries eleven `Memory32Fixed` windows; seven are camera-shaped and four are not. The four are `0x0AC6B000+0x1000`, `0x0AC6F000+0x8000`, `0x0AC87000+0xA000` and `0x84300000+0x500000` — a camnoc/hfi/smmu/ipl group whose addresses are not on this board at all (gauguin's `qcom,cam_smmu` is a phandle-only node with no `reg`). The seven camera windows are:
+**The VFE0 template is measurable on gauguin, and half of it matches.** lisa's `VFE0` carries eleven `Memory32Fixed` windows; seven are camera-shaped and four are not. The four are `0x0AC6B000+0x1000`, `0x0AC6F000+0x8000`, `0x0AC87000+0xA000` and `0x84300000+0x500000`. **(Corrected by 4.249: three of those four *are* on this board and were only mislabelled here — `0xAC6B000`/`0xAC6F000`/`0xAC87000` are gauguin's `qcom,lrme@ac6b000`, `qcom,bps` and `qcom,ipe0`, the last two at their exact lengths. Only `0x84300000+0x500000` has no node here, and gauguin's `qcom,cam_smmu` is a phandle-only node with no `reg`. lisa's `VFE0` is therefore not an IFE node at all but the whole CAMSS/IFE *cluster* node, and gauguin splits what lisa merges.)** The seven camera windows are:
 
 | lisa `VFE0` window | gauguin node | gauguin `reg` |
 |---|---|---|
@@ -45781,3 +45781,49 @@ So the chain from `tools/acpi/gauguin.asl` to the flashed volume is now **verifi
 **One thing the build output deliberately is not, and it is written down here so the next step does not repeat the mistake.** `build_uefi.py` ends with `Traceback ... mkbootimg.py: raise ValueError('DTB image must not be empty.')` **after** printing Success, and the exit code is still 0. That is not a regression: `Resources/Configs/gauguin.toml:17-24` says `append_dtb = false` and its own comment at `:48-50` says the builder "has no way to declare a DTB region at all (it only ever appends one)". The payload of record is built by `tools/build-p2-payloads.sh` with `tools/make_boot_image.py --profile stock`, not by this path. The `-bootshim` pair the build does emit (`SILICIUM_UEFI.fd-bootshim` 3,145,840 and its `.gz` 1,081,313 bytes, sha256 `a503b35eb4493f11e344ccb91a9b21f24a63164a302d832fb18738623a39c2d5`) is a newer artefact than anything this project has flashed, and it is **not** proposed as a payload here — it has never been on the device, and the standing rule is that the payload of record is the one `build-p2-payloads.sh` makes.
 
 **decides**: that `tools/sync-uefi-platform.sh`'s install stages run clean against a tree carrying all five new nodes, the host-stack pair-check reporting 3 of 3, all 6 ACPI tables resolving, and the `Mu_Basecore` patch already applied; that `build_uefi.py -d gauguin -r DEBUG` succeeds and produces a 3,145,728-byte `SILICIUM_UEFI.fd`; and that the DSDT within it is the one this file's ASL compiles to — `SEC2.2.raw` byte-identical to `DSDT.aml` behind a 4-byte length prefix, with `QCOM0AE2`, `QCOM0A32`, `QCOM0A33`, `QCOM2466` and `QCOM24BF` each present. The five nodes written this session are **in the firmware**, which is the first time any of this session's ASL work has been shown to reach a build output. **does not decide**: whether the firmware boots, sees a device, or binds any of these ids — that is still the P3 gate's question and it still needs a stick and a phone; whether the `-bootshim` artefact is fit to flash, which it has never been tried at and is not proposed; and whether the three `_DEP` names added this session (`\_SB.PMIC`, `\_SB.PML0`, `\_SB.CAMP`) resolve at namespace load, which iasl's `0 Errors` says they should and which only a boot can confirm. **Not an action**: `tools/sync-uefi-platform.sh` (no `--build`), `source setup_env.sh -p apt`, `python3 build_uefi.py -d gauguin -r DEBUG`, `find`, `stat`, `/usr/bin/grep -a` over the FFS and the FV, a Python byte-compare of `SEC2.2.raw` against `DSDT.aml`, `iasl -tc`. **No device command was issued**, no partition, seed, `boot` or storage written, no `fastboot fetch`, no QEMU process started or signalled, and none of `work/out/{p2-variants,p3-display,usb-host,p2-what}`, `work/win11/qemu-stick*`, `work/out/p3-stick/` or `work/out/.p3-stick-drivers/` was touched — the build wrote only inside the gitignored `work/uefi/Mu-Silicium/Build/`. `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The orphaned dry-run processes 468162 and 471324 were left alive, `bq6ik1shs` was not restarted and `br7srnvmx` was not started. **device state**: unchanged — no `adb` or `fastboot` device, both tty globs absent, `lsblk` shows no removable medium, and the P3 gate has still never been run.
+
+## Step 4.249 — lisa's VFE0 is the whole camera cluster, and gauguin's camera region is now mapped
+
+Three things fall out of mapping every node in `0x0AC00000..0x0AD80000`, and the first is a correction to 4.246.
+
+**4.246 mislabelled three of lisa's `VFE0` windows.** It called `0x0AC6B000+0x1000`, `0x0AC6F000+0x8000` and `0x0AC87000+0xA000` "not on this board at all". They are gauguin's `qcom,lrme@ac6b000` (`0xAC6B000+0xA00`), `qcom,bps` (`0xAC6F000+0x8000`, **exact**) and `qcom,ipe0` (`0xAC87000+0xA000`, **exact**) — three live `ok` blocks of the image-processing pipeline, two of them at their exact lengths. Only `0x84300000+0x500000` has no counterpart, and that is the camera SMMU, which gauguin describes as a phandle-only node with no `reg`. So the corrected count of lisa's eleven windows is **eight** matching gauguin bases, not four.
+
+**And that changes what lisa's `VFE0` is.** A node carrying an IFE, the CPAS/CDM, both CCIs, LRME, BPS, IPE, a `csid-lite`, a `csiphy` and the camera SMMU is not the IFE — it is the **whole CAMSS/IFE cluster node**, the same role lisa's `CAMP` plays for the platform, one layer up. gauguin splits what lisa merges: its `qcom,vfe0@acaf000`/`vfe1`/`vfe2`/`vfe-lite` are four separate `ok` blocks at `0xACAF000`, `0xACB6000`, `0xACBD000`, `0xACC4000`, each `+0x4000`, and its three CSIDs and four CSIPHYs are separate too. So the mapping from corpus to board is:
+
+| lisa's merged structure | gauguin |
+|---|---|
+| `VFE0` cluster node `QCOM0A25`, eleven windows | four `vfe@*` blocks — one node, or four re-addressed ones |
+| `MPCS` `QCOM0A98`, five 8 KB windows at `0x0ACE0000…0x0ACE8000` | four `csiphy0..3` at `0xAC65000/66000/67000/68000`, `+0x1000` — **different block and different addresses** |
+| `CAMP` `QCOM0A32`, no window | `cam-cpas@ac40000`, three windows |
+| `JPGE` `QCOM0A33`, two windows | **identical** (`jpegenc@ac4e000`, `jpegdma@0xac52000`) |
+| `CCID` `QCOM0AA2`, no window | `csid0..2` and `csid-lite`, four `+0x1000` blocks |
+| `FLSH` `QCOM0A27`, `_CRS` of one byte `0x79` | `qcom,camera-flash@0/@5/@6`, no `reg` |
+
+**Gauguin's camera region, measured — 22 live `ok` blocks between `0xAC00000` and `0xAD00000`:**
+
+| Base | Size | Node |
+|---|---|---|
+| `0x0AC00000` | `+0x6000` | `qcom,a5@ac00000` (the AOP/sensor core — 4.243's "not writable" list) |
+| `0x0AC40000` | `+0x1000` | `cam-cpas@ac40000` (top) |
+| `0x0AC48000` | `+0x1000` | `cpas-cdm0@ac48000` |
+| `0x0AC4A000` | `+0x1000` | `cci0` — **not** `0xAC48200` |
+| `0x0AC4B000` | `+0x1000` | `cci1` — **not** `0xAC48600` |
+| `0x0AC4E000` | `+0x4000` | `jpegenc` |
+| `0x0AC52000` | `+0x4000` | `jpegdma` |
+| `0x0AC65000`–`0x0AC68000` | `+0x1000` ×4 | `csiphy0..3` |
+| `0x0AC6B000` | `+0xA00` | `lrme` |
+| `0x0AC6F000` | `+0x8000` | `bps` |
+| `0x0AC87000` | `+0xA000` | `ipe0` |
+| `0x0ACAF000` | `+0x4000` | `vfe0` |
+| `0x0ACB3000` | `+0x1000` | `csid0` |
+| `0x0ACB6000` | `+0x4000` | `vfe1` |
+| `0x0ACBA000` | `+0x1000` | `csid1` |
+| `0x0ACBD000` | `+0x4000` | `vfe2` |
+| `0x0ACC1000` | `+0x1000` | `csid2` |
+| `0x0ACC4000` | `+0x4000` | `vfe-lite` |
+| `0x0ACC8000` | `+0x1000` | `csid-lite` |
+| `0x0AD00000` | `+0x16000` | `camcc` (the camera GCC) |
+
+and six `gdsc` power-collapse nodes at `0x0AD06004`–`0x0AD0B004`.
+
+**decides**: that lisa's `VFE0` is the whole CAMSS/IFE cluster rather than the IFE block, carrying an IFE alongside the CPAS/CDM, both CCIs, LRME, BPS, IPE, a `csid-lite`, a `csiphy` and the camera SMMU — which is why 4.247's question ("should `MPCS`/`VFE0` carry lisa's six camera windows or be split across gauguin's eight blocks") had no clean answer, the premise being wrong; that 4.246's "four of lisa's windows have no counterpart" is corrected to **three**, `0xAC6B000`/`0xAC6F000`/`0xAC87000` being gauguin's `lrme`, `bps` and `ipe0` at their own lengths, two of them exact; that gauguin's `cci0`/`cci1` are at `0xAC4A000`/`0xAC4B000` and **not** at the `0xAC48200`/`0xAC48600` 4.246 guessed from lisa's window list; and that gauguin's camera region is 22 live blocks whose bases are now recorded, of which the corpus supplies a matching id for `cam-cpas`, `cpas-cdm0`, `jpegenc`, `jpegdma`, `vfe`, `csid`, `csiphy`, `jpeg` and `cci` but none for `lrme`, `bps`, `ipe0`, `camcc` or the GDSCs. **does not decide**: whether the next camera node should be one `VFE0` cluster node re-addressed or four separate IFE nodes, since gauguin has four `vfe` blocks and the corpus only ever writes one; what `_UID`s the extra VFEs and CSIDs should take; whether `lrme`/`bps`/`ipe0` are reachable at all, no id in the set naming them; and whether `MPCS`'s id is really the CSIPHY group on this board, its corpus windows being 8 KB each at `0xACE0000`+ and gauguin's `csiphy`s being 4 KB each at `0xAC65000`+. **Not an action**: a Python walk of `~/backup/gauguin/dt` decoding every `reg` and `status` under `soc/` and filtering the `0xAC00000..0xAD80000` range, a second walk matching lisa's eleven `VFE0` windows against the whole tree by base and length, `python3` hex conversions, `sed`. Read-only against the device's backups; no device contacted. **Files written: `docs/08-device-session.md` alone** — `tools/acpi/gauguin.asl` is unchanged at 44 devices. **No device command was issued**, no partition, seed, `boot` or storage written, no `fastboot fetch`, no QEMU process started or signalled, and none of `work/out/{p2-variants,p3-display,usb-host,p2-what}`, `work/win11/qemu-stick*`, `work/out/p3-stick/` or `work/out/.p3-stick-drivers/` was touched. `device/dxe/UsbConfigDxe.efi` is still `sha256 6943cc615f7d4ba502c87bcf14a76e6e1398975a4101ed2711ba9e1c6e2566f5`. The orphaned dry-run processes 468162 and 471324 were left alive, `bq6ik1shs` was not restarted and `br7srnvmx` was not started. **device state**: unchanged — no `adb` or `fastboot` device, both tty globs absent, `lsblk` shows no removable medium, and the P3 gate has still never been run.
