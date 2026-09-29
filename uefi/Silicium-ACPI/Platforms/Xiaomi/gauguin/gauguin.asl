@@ -176,7 +176,80 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
 
     Scope (_SB)
     {
-        Name (PSUB, "MTP07225")
+        // ------------------------------------------------------------------
+        // PSUB - the board's subsystem id, and the one string that decides
+        // whether the extension half of the driver package installs.
+        //
+        // This was "MTP07225" from Step 4.66 until 4.264, chosen because it is
+        // this port's own reading of what the board is: an MTP of SM7225. That
+        // reasoning is backwards, and the measurement is why. **A `_SUB` is not
+        // a description of the board; it is a matching key.** `_SUB` is read by
+        // the PnP manager and compared against the `&SUBSYS_<token>` field of
+        // the driver package's models lines, and only a board whose `_SUB` is
+        // one of a driver's listed tokens binds that driver's *extension*. A
+        // value no INF lists matches nothing, so the base driver installs and
+        // the extension does not.
+        //
+        // Measured over this set's 26 gated INFs - the ones whose models lines
+        // carry a token at all - one token opens 22 of them and another opens
+        // 19, and this board's own nine gated ids are covered completely by
+        // both: `QCOM06E0` (PILC), `QCOM0A17` (PEP0), `QCOM0A1B` (ADSP),
+        // `QCOM0A25` (VFE0), `QCOM0A32` (CAMP), `QCOM0A33` (JPGE), `QCOM0A98`
+        // (CSID), `QCOM0AD3` (PML0) and `QCOM0AE2` (WPSS). "MTP07225" opens
+        // none of them, so every one of those nine has been installing its base
+        // driver and silently skipping its extension.
+        //
+        // **`IDP07280` is the choice, and it is a measurement rather than a
+        // coin-flip.** Both boards in the corpus that carry PEP0's family - the
+        // two `QCOM0A17` tables, lisa and a52sxq - are `IDP07280` boards, and
+        // they are the only two boards in the 27-table corpus whose `PSUB` is
+        // any `07280` token at all; every other table is a `08250`/`08350`
+        // generation. So the token is what the reference hardware for this
+        // PEP0's own `_DSM` table reports, and writing it makes this file
+        // answer the way its own reference does rather than falling off the end
+        // of a branch.
+        //
+        // What it costs is stated where it is real, and it is smaller than the
+        // 22-against-19 counts suggest. `CRD07280` is the only token on **four**
+        // files - `qcSensorsConfigCrd7280` (`QCOM0693`/`QCOM0694`),
+        // `qccamauxsensor_extension7280` (`QCOM0A99`), `qcdxext_crd7280`
+        // (`QCOM0A36`, the display) and `qsarconfig7280` (`QCOM06E2`) - and this
+        // file presents none of those ids. One real exception, recorded rather
+        // than argued away: `QCOM0A1C` (AMSS, lisa's modem node, not written
+        // here yet) is the mirror image, present under `IDP07280` and
+        // `IDPS7280` in `qcsubsys_ext_mpss7280` and `mcfg_subsys_ext7280` and
+        // under **neither** `CRD07280` - so the token that keeps the DSP
+        // package whole is this one, and the token that keeps the four
+        // unwritten camera/sensor ids is the other. `qcbtfmuart_ext7280`
+        // (`QCOM0A6B`, the BT NVM registry file) is `CRD07280`-only, but the BT
+        // **base** binds under `IDP07280` via `qcbtfmuart_hsp7280`, so what is
+        // lost there is a registry extension and not the device.
+        //
+        // And `QCOM0A17` (PEP0) turns out to be unreachable either way, which is
+        // a separate measurement and belongs here because it is the id that
+        // motivates the token question in the first place. Every models line
+        // that names it carries a **`&REV_` field as well as the token** -
+        // `&SUBSYS_IDP07280&REV_0193`, `&REV_01EB`, `&REV_01E3`, `&REV_020A`,
+        // `&REV_0215` in `qcpep.wd7280.inf:92`-`:103`. `_REV` is the DSDT's own
+        // revision, this table's `DefinitionBlock (..., 2, ...)`, and `2` is
+        // below every one of them. So PEP0's extension INF binds no board whose
+        // DSDT is revision 2, `_SUB` or no `_SUB` - the lever is the token for
+        // six of the nine gated ids and the DSDT revision for the seventh, and
+        // raising the revision to satisfy a driver would be a much larger
+        // statement than the token is.
+        //
+        // It is also not a claim about the silicon. The token is an interface
+        // value, and this file already writes a reference board's value where
+        // it is the one that binds: `URS0`'s `_CID` is lisa's `PNP0CA1`. What
+        // is *not* copied is the fall-through - lisa's `_SUB` branches on
+        // `IDP07280` and `CRD07280` and returns whichever matched, so a third
+        // board falls through and answers nothing. Here the branch is on this
+        // board's own value and returns it.
+        //
+        // References below that said "MTP07225" are corrected in place; the
+        // sites that only quote the corpus are not touched.
+        //
+        Name (PSUB, "IDP07280")
         Name (EMUL, 0xFFFFFFFF)
         Device (UFS0)
         {
@@ -1709,8 +1782,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         //
         // _SUB is the corpus's \_SB.PSUB, spelled ^PSUB as everywhere else in
         // this file. PMAP does not branch on it - only PEP0 does that, and only
-        // for IDP07280 and CRD07280 - so gauguin's "MTP07225" passes through
-        // unread here, as it does on all 20 tables.
+        // for IDP07280 and CRD07280 - so the value passes through unread here,
+        // as it does on all 20 tables. (Since 4.264 that value is `IDP07280`,
+        // which is one of the two PEP0 does branch on; the sentence above is
+        // about this node and is unaffected by it.)
         Device (PMAP)
         {
             Name (_HID, "QCOM0A2C")  // _HID: Hardware ID
@@ -1939,13 +2014,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // table that aliases \_SB.PSUB instead and caymanslm the one that
         // carries none. Every table that branches does so on \_SB.PSUB and
         // returns the string it matched, over that platform's own SKU set -
-        // lisa's IDP07280 and CRD07280, Kailua's five, lemonade's seven. The
-        // string "MTP07225" occurs once in the corpus, and that once is this
-        // file's own \_SB.PSUB, so the branch here is written on our own SKU
-        // rather than on a set invented to fill it out: gauguin is an MTP board
-        // and the id `_SUB` returns should be the one the board sets. The absent
-        // fall-through is the corpus's own shape - no table returns anything
-        // when no branch matches.
+        // lisa's IDP07280 and CRD07280, Kailua's five, lemonade's seven. Step
+        // 4.66 first wrote the branch on "MTP07225", this port's own invented
+        // SKU, with the argument that gauguin is an MTP board and the id _SUB
+        // returns should be the one the board sets. **4.264 withdrew that
+        // argument**: `_SUB` is not a description, it is a matching key, and a
+        // value no INF lists matches nothing - so the branch is now on
+        // `IDP07280`, the token both of the corpus's `QCOM0A17` boards use, and
+        // it returns that. The absent fall-through is still the corpus's own
+        // shape - no table returns anything when no branch matches.
         //
         // `_DSM` is written, and it is the member whose shape needed a decision.
         // The UUID is not in doubt: 8d5ca34c-ae83-4a2a-9dd1-a74ffead548b is
@@ -2667,9 +2744,9 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
             })
             Method (_SUB, 0, NotSerialized)  // _SUB: Subsystem ID
             {
-                If ((\_SB.PSUB == "MTP07225"))
+                If ((\_SB.PSUB == "IDP07280"))
                 {
-                    Return ("MTP07225")
+                    Return ("IDP07280")
                 }
             }
 
@@ -4158,10 +4235,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // The reason is the node's role rather than a preference: the loader does
         // not sit inside a subsystem, it brings subsystems up, and the corpus's
         // own phone tables say so by carrying the alias on RPEN, TFTP, PDSR and
-        // SSVC beside this node. There is also no _SUB value here that would be
-        // right - this board's PSUB is "MTP07225" where the drivers' own reference
-        // tables compare against IDP07280 and CRD07280, the mismatch the IPCC node
-        // records - so the omission is the safer half of the choice as well.
+        // SSVC beside this node. There is also no reason here for one: the
+        // mismatch this comment used to record between this board's PSUB and
+        // the tokens the drivers compare against was closed by 4.264, which
+        // moved `\_SB.PSUB` to `IDP07280` - so the omission now rests on the
+        // corpus shape alone, which is what the sentence before this one is
+        // about and is the reason it stays.
         //
         // No _UID, no _CRS and no _DEP. The first two hold for all nineteen
         // tables: no PILC anywhere carries either. So does the third, and the
@@ -5479,9 +5558,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
         // Not written, and noted for PEP0's own step rather than here: PEP0's
         // _SUB compares \_SB.PSUB against "IDP07280" and "CRD07280" and returns
         // whichever matched, falling off the end otherwise. This board's PSUB
-        // is "MTP07225" - it is the MTP of SM7225 - so on this table that
-        // method has no branch to take, which is a defect in the method and not
-        // in the value.
+        // was "MTP07225" - the MTP of SM7225 - so on this table that method
+        // would have had no branch to take. **4.264 changed the value** rather
+        // than the method, to `IDP07280`; the note is kept because it is the
+        // weakest of the several reasons that change was made, and because a
+        // reader of this node should know the method's shape was once a
+        // candidate fix.
         Device (IPCC)
         {
             Name (_HID, "QCOM06C2")  // _HID: Hardware ID
@@ -7057,9 +7139,12 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "QCOMM ", "SM7225 ", 0x00000003)
          * `_SUB`, which returns `"CRD07280"` on lisa and `"QRD07280"` on
          * a52sxq from a branch keyed on `\_SB.PSUB`. That is generator output
          * with a reference-platform string in it and not board data, and it is
-         * the sort of thing a port has to notice: this table's own PSUB is
+         * the sort of thing a port has to notice: this table's own PSUB was
          * `"MTP07225"`, so lisa's `_SUB` verbatim would have fallen off the end
-         * of both branches and answered zero. PEP0 is dominated by one method of
+         * of both branches and answered zero. (4.264 moved the PSUB value to
+         * `IDP07280`; the method here is still this file's own single-branch
+         * form, and this paragraph is the record of why it was written that
+         * way.) PEP0 is dominated by one method of
          * its own, and the domination is measurable rather than rhetorical:
          * `THTZ` is a dispatch on (zone, trip point) and is 1,826 of lisa's
          * 2,501 lines, and the node's total is a linear function of the number
